@@ -74,6 +74,9 @@ public sealed class Plugin : IDalamudPlugin
     private readonly TtsHandler _ttsHandler;
     private readonly ActionDispatcher _actionDispatcher;
 
+    // ── F3: ライブHUD ────────────────────────────────────
+    private readonly LiveTimelineWindow _liveTimelineWindow;
+
     // ── M9: オーディオデバイス ────────────────────────────
     private readonly AudioDeviceEnumerator _audioDevices;
 
@@ -131,6 +134,10 @@ public sealed class Plugin : IDalamudPlugin
         _conditionEvaluator = new ConditionEvaluator(_targetResolver);
         _triggerEngine = new TriggerEngine(_eventBus, _triggerStore, _eventMatcher, _conditionEvaluator, Log);
 
+        // F3: ライブタイムライン HUD
+        _liveTimelineWindow = new LiveTimelineWindow(_eventBus, _combatClock, _triggerStore);
+        WindowSystem.AddWindow(_liveTimelineWindow);
+
         // M7: アクションディスパッチャ
         _ttsHandler = new TtsHandler(Configuration, Log);
         var handlers = new IActionHandler[]
@@ -185,6 +192,7 @@ public sealed class Plugin : IDalamudPlugin
         WindowSystem.RemoveAllWindows();
         _mainWindow.Dispose();
         _overlayWindow.Dispose();
+        _liveTimelineWindow.Dispose();
 
         CommandManager.RemoveHandler(CommandRouter.RootCommand);
     }
@@ -212,12 +220,7 @@ public sealed class Plugin : IDalamudPlugin
         router.Register(new DebugCommand(Configuration, ChatGui));
         router.Register(new RecordCommand(_recordingController, _battleRecorder, ChatGui));
         router.Register(new ReloadCommand(_triggerStore, ChatGui));
-        router.Register(new PendingCommand(
-            verb: "timeline",
-            usage: "timeline <all|configured|toggle|hide>",
-            description: "ライブHUDタイムラインの表示制御",
-            plannedFor: "F3",
-            chatGui: ChatGui));
+        router.Register(new TimelineCommand(_liveTimelineWindow, ChatGui));
         router.Register(new PendingCommand(
             verb: "profile",
             usage: "profile <name>",
