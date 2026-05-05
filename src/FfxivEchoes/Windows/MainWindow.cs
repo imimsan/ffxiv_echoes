@@ -14,7 +14,7 @@ public sealed class MainWindow : Window, IDisposable
     private readonly IReadOnlyList<ITab> _tabs;
     private string? _focusTabId;
 
-    public MainWindow(IReadOnlyList<ITab> tabs)
+    public MainWindow(IReadOnlyList<ITab> tabs, Tabs.TabContext? tabContext = null)
         : base("FFXIV Echoes 設定###ffxiv-echoes-main",
             ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
     {
@@ -25,7 +25,10 @@ public sealed class MainWindow : Window, IDisposable
         };
 
         _tabs = tabs;
+        _tabContext = tabContext;
     }
+
+    private readonly Tabs.TabContext? _tabContext;
 
     public void Dispose() { }
 
@@ -40,6 +43,13 @@ public sealed class MainWindow : Window, IDisposable
 
     public override void Draw()
     {
+        // タブ間からのフォーカス要求を吸収
+        if (_tabContext?.PendingFocusTab is { } pending)
+        {
+            _focusTabId = pending;
+            _tabContext.PendingFocusTab = null;
+        }
+
         if (ImGui.BeginTabBar("##ffxiv-echoes-tabs", ImGuiTabBarFlags.Reorderable))
         {
             foreach (var tab in _tabs)

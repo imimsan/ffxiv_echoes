@@ -162,4 +162,33 @@ public sealed class TriggerStore
             return _zoneToFilePath.TryGetValue(zone, out var path) ? path : null;
         }
     }
+
+    /// <summary>
+    /// 指定ゾーンの TriggerFile を JSON ファイルに書き出す。新規ゾーンの場合は
+    /// <c>{TriggersDir}/{zone}.json</c> を生成。書き出し後に <see cref="Reload"/> を呼ぶ。
+    /// </summary>
+    public string SaveZone(string zone, TriggerFile file)
+    {
+        var existingPath = GetFilePathForZone(zone);
+        var path = existingPath ?? Path.Combine(_loader.TriggersDirectory, $"{Sanitize(zone)}.json");
+        TriggerSerializer.WriteToFile(file, path);
+        _log.Information("[FfxivEchoes] トリガー定義を保存：{Path}", path);
+        Reload();
+        return path;
+    }
+
+    private static string Sanitize(string s)
+    {
+        if (string.IsNullOrEmpty(s))
+        {
+            return "Unknown";
+        }
+        var invalid = Path.GetInvalidFileNameChars();
+        var sb = new System.Text.StringBuilder(s.Length);
+        foreach (var c in s)
+        {
+            sb.Append(Array.IndexOf(invalid, c) >= 0 ? '_' : c);
+        }
+        return sb.ToString();
+    }
 }
