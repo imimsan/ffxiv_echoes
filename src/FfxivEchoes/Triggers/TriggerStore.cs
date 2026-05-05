@@ -198,6 +198,48 @@ public sealed class TriggerStore
         return path;
     }
 
+    /// <summary>
+    /// 指定ゾーンの TriggerFile（JSON）を物理削除する。録画ファイルや backup は触らない。
+    /// バックアップは事前に取得する。リロードまで実行。
+    /// </summary>
+    public bool DeleteZone(string zone)
+    {
+        var path = GetFilePathForZone(zone);
+        if (path is null)
+        {
+            return false;
+        }
+        // 削除前に最終バックアップを残しておく
+        if (_backupManager is not null)
+        {
+            var existing = GetByZone(zone);
+            if (existing is not null)
+            {
+                try
+                {
+                    _backupManager.CreateBackup(zone, existing);
+                }
+                catch (Exception ex)
+                {
+                    _log.Warning(ex, "[FfxivEchoes] 削除前バックアップに失敗（削除は続行）：{Zone}", zone);
+                }
+            }
+        }
+
+        try
+        {
+            File.Delete(path);
+            _log.Information("[FfxivEchoes] トリガー定義を削除：{Path}", path);
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "[FfxivEchoes] トリガー定義の削除に失敗：{Path}", path);
+            throw;
+        }
+        Reload();
+        return true;
+    }
+
     /// <summary>バックアップファイルから現在の定義を復元する（バックアップ取得 → 上書き → リロード）。</summary>
     public bool RestoreFromBackup(string zone, string backupPath)
     {

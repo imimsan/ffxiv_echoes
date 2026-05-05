@@ -29,6 +29,17 @@ public sealed class DebugChatEcho : IDisposable
 
     private void OnEvent(IGameEvent ev)
     {
+        // EchoTriggerFires が ON なら DebugMode に関わらず TriggerFired のみ常時表示
+        // （音声 / オーバーレイが鳴らない時の動作確認用フォールバック）
+        if (ev is TriggerFiredEvent tfe && _configuration.EchoTriggerFires && !_configuration.DebugMode)
+        {
+            var rel2 = _combatClock.RelativeSecondsAt(ev.Timestamp);
+            var prefix2 = rel2 is { } r2 ? $"[t={r2:0.00}s]" : "[非戦闘]";
+            _chatGui.Print($"[Echoes] {prefix2} ⚡ Trigger: {tfe.TriggerId}" +
+                (tfe.TriggerName is { } n2 ? $" ({n2})" : string.Empty));
+            return;
+        }
+
         if (!_configuration.DebugMode)
         {
             return;

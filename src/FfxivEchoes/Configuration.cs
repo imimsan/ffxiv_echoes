@@ -16,6 +16,11 @@ public class Configuration : IPluginConfiguration
     public string Language { get; set; } = "ja";
     public bool DebugMode { get; set; } = false;
 
+    /// <summary>true: トリガー発火時にチャットへ「[FFXIV Echoes] Trigger 発火: ...」を出す。
+    /// 音声 / オーバーレイの動作確認や、設定が機能しているか目視で確認するためのフォールバック。
+    /// デフォルト ON。</summary>
+    public bool EchoTriggerFires { get; set; } = true;
+
     // プロファイル
     public string ActiveProfile { get; set; } = "default";
 
