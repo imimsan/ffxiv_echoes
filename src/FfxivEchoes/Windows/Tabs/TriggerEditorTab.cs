@@ -26,6 +26,8 @@ public sealed class TriggerEditorTab : ITab
     private TriggerFile? _workingCopy;
     private string _workingZone = string.Empty;
     private bool _dirty;
+    private readonly TimelineRenderer _timelineRenderer = new();
+    private bool _aggregateAsTimeline = true;
 
     public TriggerEditorTab(TriggerStore triggerStore, RecordingScanner scanner, TabContext context)
     {
@@ -453,11 +455,30 @@ public sealed class TriggerEditorTab : ITab
     {
         var agg = _recordingScanner.Aggregate(zone);
         ImGui.TextDisabled($"録画ファイル {agg.RecordingFileCount} / 戦闘 {agg.BattleCount} / 総イベント {agg.TotalEventCount}");
+        ImGui.SameLine(0, 24f);
+        ImGui.Checkbox("タイムライン表示", ref _aggregateAsTimeline);
         ImGui.Spacing();
 
         if (agg.Events.Count == 0)
         {
             ImGui.TextWrapped("録画データから集計できるイベントがありません。/echoes record on で録画してください。");
+            return;
+        }
+
+        if (_aggregateAsTimeline)
+        {
+            _timelineRenderer.Draw(agg);
+            if (_timelineRenderer.SelectedEvent is { } selected)
+            {
+                ImGui.Spacing();
+                ImGui.Separator();
+                ImGui.TextUnformatted($"選択: {selected.Type} / {selected.Id ?? selected.Name ?? "—"}");
+                ImGui.SameLine();
+                if (ImGui.Button("このイベントからトリガー作成"))
+                {
+                    CreateTriggerFromKey(selected);
+                }
+            }
             return;
         }
 
@@ -486,6 +507,79 @@ public sealed class TriggerEditorTab : ITab
 
             ImGui.EndTable();
         }
+    }
+
+    private void CreateTriggerFromKey(EventKey key)
+    {
+        if (_workingCopy is null)
+        {
+            return;
+        }
+        // 既存トリガーが同じキーを持っているかは厳密には判定しないが、
+        // 重複 ID 防止のためサフィックスを付ける
+        var baseId = SuggestId(key);
+        var id = baseId;
+        var n = 1;
+        while (_workingCopy.Triggers.Any(t => string.Equals(t.Id, id, StringComparison.OrdinalIgnoreCase)))
+        {
+            n++;
+            id = $"{baseId}_{n}";
+        }
+
+        var trigger = new TriggerDefinition
+        {
+            Id = id,
+            Type = key.Type,
+            Match = BuildMatchFromKey(key),
+            Actions = new List<ActionDefinition>
+            {
+                new() { Type = "tts", Text = key.Name ?? key.Id ?? key.Type },
+            },
+        };
+        _workingCopy.Triggers.Add(trigger);
+        _editingTriggerId = trigger.Id;
+        _dirty = true;
+        _tabContext.PendingFocusTab = null; // 集計タブに留まる
+    }
+
+    private static string SuggestId(EventKey key) => key.Type switch
+    {
+        "cast_start" or "cast_complete" or "cast_cancel" => $"cast_{key.Id ?? key.Name ?? "x"}".ToLowerInvariant().Replace(" ", "_"),
+        "status_gain" or "status_lose" or "status_update" => $"status_{key.Id ?? key.Name ?? "x"}".ToLowerInvariant().Replace(" ", "_"),
+        "hp_change" => $"hp_{key.Source ?? "actor"}",
+        _ => key.Type,
+    };
+
+    private static MatchCondition BuildMatchFromKey(EventKey key)
+    {
+        var m = new MatchCondition();
+        switch (key.Type)
+        {
+            case "cast_start":
+            case "cast_complete":
+            case "cast_cancel":
+                m.CastId = key.Id;
+                m.CastName = key.Name;
+                m.Source = key.Source;
+                break;
+            case "status_gain":
+            case "status_lose":
+            case "status_update":
+                if (key.Id is not null && uint.TryParse(key.Id, out var statusId))
+                {
+                    m.StatusId = statusId;
+                }
+                m.StatusName = key.Name;
+                if (key.Target is not null)
+                {
+                    m.Target = new TargetSpec(new List<string> { key.Target });
+                }
+                break;
+            case "hp_change":
+                m.Actor = key.Source;
+                break;
+        }
+        return m;
     }
 
     private void DrawFileSettingsPanel()
