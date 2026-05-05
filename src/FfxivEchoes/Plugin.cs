@@ -88,6 +88,9 @@ public sealed class Plugin : IDalamudPlugin
     // ── 同期オフセットトラッカー ──────────────────────────
     private SyncOffsetTracker? _syncOffset;
 
+    // ── トリガー自動生成 ──────────────────────────────────
+    private TriggerAutoGenerator? _autoGenerator;
+
     // ── P1+P2: 状態変数 ──────────────────────────────────
     private readonly VariableStore _variableStore;
 
@@ -188,6 +191,9 @@ public sealed class Plugin : IDalamudPlugin
 
         // 同期オフセットトラッカー（録画予測 vs 実戦のズレを追跡）
         _syncOffset = new SyncOffsetTracker(_eventBus, _triggerStore, _combatClock, _recordingScanner, Log);
+
+        // トリガー自動生成（録画 + Lumina から作る）
+        _autoGenerator = new TriggerAutoGenerator(DataManager, Log);
 
         // タイムラインノート：advance_warning_sec で先行通知
         _noteReminder = new NoteReminderService(
@@ -362,7 +368,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         new HelpTab(),
         new ContentListTab(_triggerStore, _recordingScanner, _tabContext),
-        new TriggerEditorTab(_triggerStore, _recordingScanner, _tabContext, _eventBus),
+        new TriggerEditorTab(_triggerStore, _recordingScanner, _tabContext, _eventBus, _autoGenerator),
         new LiveHudTab(_eventBus, _combatClock),
         new AudioTab(Configuration, _audioDevices),
         new ProfileTab(_profileStore, _triggerStore, Configuration),

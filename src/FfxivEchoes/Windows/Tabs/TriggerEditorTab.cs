@@ -23,6 +23,7 @@ public sealed class TriggerEditorTab : ITab
     private readonly RecordingScanner _recordingScanner;
     private readonly TabContext _tabContext;
     private readonly Events.IEventBus? _eventBus;
+    private readonly TriggerAutoGenerator? _autoGenerator;
 
     private string? _editingTriggerId;
     private TriggerFile? _workingCopy;
@@ -33,14 +34,16 @@ public sealed class TriggerEditorTab : ITab
     private bool _hideSelfEvents = true;
     private bool _hideStatusEvents = false;
     private int _attachNoteIndex = -1;
+    private TriggerAutoGenerator.GenerationResult? _pendingAutoGen;
 
     public TriggerEditorTab(TriggerStore triggerStore, RecordingScanner scanner, TabContext context,
-        Events.IEventBus? eventBus = null)
+        Events.IEventBus? eventBus = null, TriggerAutoGenerator? autoGenerator = null)
     {
         _triggerStore = triggerStore;
         _recordingScanner = scanner;
         _tabContext = context;
         _eventBus = eventBus;
+        _autoGenerator = autoGenerator;
     }
 
     public void Draw()
@@ -179,6 +182,22 @@ public sealed class TriggerEditorTab : ITab
             _editingTriggerId = newTrigger.Id;
             _dirty = true;
         }
+        ImGui.SameLine(0, 24f * ImGuiHelpers.GlobalScale);
+        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.2f, 0.55f, 0.3f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.25f, 0.7f, 0.4f, 1f));
+        if (ImGui.Button("✨ 録画から自動生成"))
+        {
+            BeginAutoGeneration();
+        }
+        ImGui.PopStyleColor(2);
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip("録画されたボスのキャストから、Lumina の AoE データを参照して\n" +
+                             "「TTS + 視覚通知」を含むトリガーを一括自動生成します。\n" +
+                             "既に存在する cast_id はスキップ。生成後に個別編集も可能。");
+        }
+
+        DrawAutoGenPreviewPopup();
         ImGui.Spacing();
 
         if (_workingCopy.Triggers.Count == 0)
@@ -697,6 +716,89 @@ public sealed class TriggerEditorTab : ITab
         ImGui.TextDisabled("クイック追加：");
         ImGui.SameLine();
         DrawQuickAddButtons(trigger);
+    }
+
+    private void BeginAutoGeneration()
+    {
+        if (_workingCopy is null || _autoGenerator is null)
+        {
+            return;
+        }
+        var agg = _recordingScanner.Aggregate(_workingZone);
+        var party = _recordingScanner.ListPartyMembers(_workingZone);
+        _pendingAutoGen = _autoGenerator.Generate(agg, _workingCopy.Triggers, party);
+        ImGui.OpenPopup("auto-gen-preview");
+    }
+
+    private void DrawAutoGenPreviewPopup()
+    {
+        ImGui.SetNextWindowSize(new Vector2(640f * ImGuiHelpers.GlobalScale, 540f * ImGuiHelpers.GlobalScale));
+        if (!ImGui.BeginPopupModal("auto-gen-preview", ImGuiWindowFlags.NoCollapse))
+        {
+            return;
+        }
+        if (_workingCopy is null || _pendingAutoGen is null)
+        {
+            ImGui.EndPopup();
+            return;
+        }
+
+        var result = _pendingAutoGen;
+        ImGui.TextWrapped(
+            "録画にあったボスのキャストごとに、Lumina の AoE データを参照して" +
+            "「TTS + 視覚通知（円形 AoE / 外周回避 / コーン等）」を含むトリガーを生成します。" +
+            "「適用」を押すと作業コピーに追加されます（保存はあなたが「保存」ボタンを押すまで反映されません）。");
+        ImGui.Spacing();
+        ImGui.TextColored(new Vector4(0.5f, 0.95f, 0.55f, 1f),
+            $"生成予定: {result.Generated.Count} 件 / スキップ: {result.Skipped.Count} 件");
+        ImGui.Spacing();
+
+        if (ImGui.BeginChild("##auto-gen-list", new Vector2(-1, 380f * ImGuiHelpers.GlobalScale), true))
+        {
+            if (result.Generated.Count > 0)
+            {
+                ImGui.TextColored(new Vector4(0.6f, 0.85f, 1f, 1f), "新規トリガー（生成予定）：");
+                foreach (var t in result.Generated)
+                {
+                    var actionTypes = string.Join(" + ", t.Actions.ConvertAll(a => a.Type));
+                    ImGui.Bullet();
+                    ImGui.SameLine(0, 0);
+                    ImGui.TextWrapped($"{t.Name}  ({t.Match?.CastId})  → [{actionTypes}]");
+                }
+                ImGui.Spacing();
+            }
+            if (result.Skipped.Count > 0)
+            {
+                ImGui.TextColored(new Vector4(0.7f, 0.7f, 0.7f, 1f), "スキップ（既存と重複など）：");
+                foreach (var s in result.Skipped)
+                {
+                    ImGui.Bullet();
+                    ImGui.SameLine(0, 0);
+                    ImGui.TextWrapped(s);
+                }
+            }
+        }
+        ImGui.EndChild();
+
+        ImGui.Spacing();
+        if (ImGui.Button($"{result.Generated.Count} 件を作業コピーに追加",
+            new Vector2(280f * ImGuiHelpers.GlobalScale, 0)))
+        {
+            foreach (var t in result.Generated)
+            {
+                _workingCopy.Triggers.Add(t);
+            }
+            _dirty = true;
+            _pendingAutoGen = null;
+            ImGui.CloseCurrentPopup();
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("キャンセル##auto-gen-cancel"))
+        {
+            _pendingAutoGen = null;
+            ImGui.CloseCurrentPopup();
+        }
+        ImGui.EndPopup();
     }
 
     /// <summary>
