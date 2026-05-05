@@ -108,6 +108,7 @@ public sealed class Plugin : IDalamudPlugin
 
     // ── F3: ライブHUD ────────────────────────────────────
     private readonly LiveTimelineWindow _liveTimelineWindow;
+    private UpcomingEventsWindow? _upcomingWindow;
 
     // ── F4-F7: 安置計算プリセット ─────────────────────────
     private readonly SafeZoneEngine _safeZoneEngine;
@@ -201,6 +202,10 @@ public sealed class Plugin : IDalamudPlugin
         // F3: ライブタイムライン HUD（録画ベースの予定キャストを未来側に描く）
         _liveTimelineWindow = new LiveTimelineWindow(_eventBus, _combatClock, _triggerStore, _recordingScanner, _syncOffset);
         WindowSystem.AddWindow(_liveTimelineWindow);
+
+        // 「次に来るイベント」HUD（録画予測 + ノートを縦並び表示）
+        _upcomingWindow = new UpcomingEventsWindow(_eventBus, _combatClock, _triggerStore, _recordingScanner, _syncOffset);
+        WindowSystem.AddWindow(_upcomingWindow);
 
         // F4-F7: 安置計算プリセット（合計 15 種）
         SafeZoneEngine? engineRef = null;
@@ -342,6 +347,7 @@ public sealed class Plugin : IDalamudPlugin
         _overlayWindow.Dispose();
         _minimapWindow.Dispose();
         _liveTimelineWindow.Dispose();
+        _upcomingWindow?.Dispose();
         _worldOverlayWindow.Dispose();
 
         CommandManager.RemoveHandler(CommandRouter.RootCommand);
