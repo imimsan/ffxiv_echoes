@@ -33,6 +33,7 @@ public sealed class ArenaViewHandler : IActionHandler
             callout: action.Callout,
             durationSec: action.Duration ?? 5.0,
             direction: action.Direction,
-            fanDeg: action.FanDeg);
+            fanDeg: action.FanDeg,
+            arenaRadius: action.ArenaRadius);
     }
 }

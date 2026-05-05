@@ -120,6 +120,10 @@ public sealed class ActionDefinition
     [JsonPropertyName("fan_deg")]
     public double? FanDeg { get; set; }
 
+    // arena_view: アリーナ半径（メートル）。プレイヤー位置プロット用。デフォルト 20m。
+    [JsonPropertyName("arena_radius")]
+    public double? ArenaRadius { get; set; }
+
     // 想定外フィールドを失わないための受け皿（フォーマットバージョン跨ぎの後方互換用）
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? Extras { get; set; }
