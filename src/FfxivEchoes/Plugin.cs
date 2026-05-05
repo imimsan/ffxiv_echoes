@@ -4,6 +4,8 @@ using Dalamud.Interface.Windowing;
 using Dalamud.IoC;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
+using FfxivEchoes.Actions;
+using FfxivEchoes.Actions.Handlers;
 using FfxivEchoes.Capture;
 using FfxivEchoes.Commands;
 using FfxivEchoes.Commands.Handlers;
@@ -61,6 +63,11 @@ public sealed class Plugin : IDalamudPlugin
     private readonly EventMatcher _eventMatcher;
     private readonly TriggerEngine _triggerEngine;
 
+    // ── M7: アクションディスパッチャ ──────────────────────
+    private readonly OverlayWindow _overlayWindow;
+    private readonly TtsHandler _ttsHandler;
+    private readonly ActionDispatcher _actionDispatcher;
+
     public Plugin()
     {
         Configuration = Configuration.LoadAndMigrate(PluginInterface, Log);
@@ -68,6 +75,9 @@ public sealed class Plugin : IDalamudPlugin
         // タブ／ウィンドウ
         _mainWindow = new MainWindow(BuildTabs());
         WindowSystem.AddWindow(_mainWindow);
+
+        _overlayWindow = new OverlayWindow();
+        WindowSystem.AddWindow(_overlayWindow);
 
         // コマンドルータ
         _commandRouter = BuildCommandRouter();
@@ -104,6 +114,18 @@ public sealed class Plugin : IDalamudPlugin
         _eventMatcher = new EventMatcher(_targetResolver);
         _triggerEngine = new TriggerEngine(_eventBus, _triggerStore, _eventMatcher, Log);
 
+        // M7: アクションディスパッチャ
+        _ttsHandler = new TtsHandler(Configuration, Log);
+        var handlers = new IActionHandler[]
+        {
+            _ttsHandler,
+            new WavHandler(Configuration, PluginInterface, Log),
+            new ChatEchoHandler(ChatGui),
+            new OverlayTextHandler(_overlayWindow),
+            new TimerBarHandler(_overlayWindow),
+        };
+        _actionDispatcher = new ActionDispatcher(_eventBus, handlers, Log);
+
         // UI ビルダーへのフック
         PluginInterface.UiBuilder.Draw += WindowSystem.Draw;
         PluginInterface.UiBuilder.OpenConfigUi += OpenSettings;
@@ -121,7 +143,11 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenConfigUi -= OpenSettings;
         PluginInterface.UiBuilder.OpenMainUi -= OpenSettings;
 
-        // トリガーエンジンを先に止めて新規 TriggerFired を発生させない
+        // アクションディスパッチャを先に止めて新規アクション実行を遮断
+        _actionDispatcher.Dispose();
+        _ttsHandler.Dispose();
+
+        // トリガーエンジンを止めて新規 TriggerFired を発生させない
         _triggerEngine.Dispose();
 
         // ロガーを閉じて録画ファイルを確実にフラッシュ
@@ -141,6 +167,7 @@ public sealed class Plugin : IDalamudPlugin
 
         WindowSystem.RemoveAllWindows();
         _mainWindow.Dispose();
+        _overlayWindow.Dispose();
 
         CommandManager.RemoveHandler(CommandRouter.RootCommand);
     }
