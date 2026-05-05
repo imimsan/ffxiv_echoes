@@ -73,13 +73,18 @@ public sealed class MinimapWindow : Window, IDisposable
     /// </summary>
     /// <param name="arenaRadius">アリーナ半径（メートル）。プレイヤー位置プロット用。
     /// 0 や指定なしなら 20m を仮定。</param>
+    /// <param name="safeZoneWorld">F4-F7 で計算済みの安置の世界座標（任意）。
+    /// 指定すると緑の点線円としてミニマップに重畳描画する。</param>
+    /// <param name="safeZoneRadius">安置マーカーの半径（メートル、デフォルト 3m）。</param>
     public void AddArenaView(
         string gimmick,
         string? callout,
         double durationSec,
         string? direction,
         double? fanDeg,
-        double? arenaRadius)
+        double? arenaRadius,
+        Vector3? safeZoneWorld = null,
+        float? safeZoneRadius = null)
     {
         if (string.IsNullOrEmpty(gimmick))
         {
@@ -93,6 +98,8 @@ public sealed class MinimapWindow : Window, IDisposable
             Direction: direction,
             FanDeg: fanDeg ?? 90.0,
             ArenaRadius: radius,
+            SafeZoneWorld: safeZoneWorld,
+            SafeZoneRadius: safeZoneRadius ?? 3f,
             ExpiresAt: DateTimeOffset.UtcNow.AddSeconds(ttl));
         lock (_gate)
         {
@@ -144,6 +151,7 @@ public sealed class MinimapWindow : Window, IDisposable
 
         DrawArena(draw, center, r);
         DrawGimmickBody(draw, center, r, item);
+        DrawSafeZoneOverlay(draw, center, r, scale, item);
         DrawBoss(draw, center, scale, item);
         DrawPlayerPositions(draw, center, r, scale, item);
 
@@ -251,6 +259,54 @@ public sealed class MinimapWindow : Window, IDisposable
         var color = item.Gimmick == "scatter" ? ColBossDanger : ColBoss;
         draw.AddCircleFilled(center, bossR, color, 16);
         draw.AddCircle(center, bossR, ColText, 16, 1.5f);
+    }
+
+    /// <summary>
+    /// F4-F7 で計算済みの安置位置を、明緑の点線円としてミニマップに重畳描画する。
+    /// </summary>
+    private void DrawSafeZoneOverlay(ImDrawListPtr draw, Vector2 mapCenter, float mapR, float scale, ArenaItem item)
+    {
+        if (item.SafeZoneWorld is not { } safeWorld) return;
+
+        SafeZoneContext snapshot;
+        try
+        {
+            snapshot = _contextBuilder.Build();
+        }
+        catch
+        {
+            return;
+        }
+
+        var arenaCenter = snapshot.ArenaCenter;
+        var arenaR = item.ArenaRadius;
+        if (arenaR <= 0) return;
+
+        var dx = (safeWorld.X - arenaCenter.X) / arenaR;
+        var dz = (safeWorld.Z - arenaCenter.Z) / arenaR;
+        var dist = MathF.Sqrt(dx * dx + dz * dz);
+        if (dist > 1.0f)
+        {
+            // 安置がアリーナ外に計算された場合（直線/扇形系プリセット）は外周ぎりぎりに丸める
+            var clamp = 0.97f / dist;
+            dx *= clamp;
+            dz *= clamp;
+        }
+        var px = mapCenter.X + dx * mapR;
+        var py = mapCenter.Y + dz * mapR;
+
+        var safePixR = item.SafeZoneRadius / arenaR * mapR;
+        if (safePixR < 6f * scale) safePixR = 6f * scale;
+
+        // 半透明の塗りつぶし + 点線外周
+        var fillColor = (ColSafe & 0x00FFFFFF) | 0x40000000;
+        draw.AddCircleFilled(new Vector2(px, py), safePixR, fillColor, 32);
+        DrawDashedCircle(draw, new Vector2(px, py), safePixR, ColSafeLine, 2f, 24);
+
+        // 中心マーカー（小さい十字）
+        var crossR = 4f * scale;
+        draw.AddLine(new Vector2(px - crossR, py), new Vector2(px + crossR, py), ColSafeLine, 1.5f);
+        draw.AddLine(new Vector2(px, py - crossR), new Vector2(px, py + crossR), ColSafeLine, 1.5f);
     }
 
     /// <summary>
@@ -411,5 +467,7 @@ public sealed class MinimapWindow : Window, IDisposable
         string? Direction,
         double FanDeg,
         float ArenaRadius,
+        Vector3? SafeZoneWorld,
+        float SafeZoneRadius,
         DateTimeOffset ExpiresAt);
 }

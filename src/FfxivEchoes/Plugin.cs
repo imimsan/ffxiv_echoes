@@ -242,7 +242,7 @@ public sealed class Plugin : IDalamudPlugin
             new ChatEchoHandler(ChatGui),
             new OverlayTextHandler(_overlayWindow),
             new TimerBarHandler(_overlayWindow),
-            new ArenaViewHandler(_minimapWindow),
+            new ArenaViewHandler(_minimapWindow, _safeZoneEngine, _safeZoneContextBuilder, Log),
             // F8: 位置情報出力
             new DirectionCallHandler(_safeZoneEngine, _safeZoneContextBuilder,
                 Configuration, _overlayWindow, _ttsHandler, ChatGui, Log),
