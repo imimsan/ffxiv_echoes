@@ -1,0 +1,104 @@
+{
+  "version": "1.0",
+  "zone": "極エヌオー討滅戦（Demo）",
+  "auto_settings": {
+    "enable_triggers": true,
+    "show_timeline": true
+  },
+  "sync_points": [
+    { "id": "phase2_start", "type": "cast_start", "expected_time": 180.0 },
+    { "id": "enrage", "type": "cast_start", "expected_time": 360.0 }
+  ],
+  "triggers": [
+    {
+      "id": "muno_higai_warning",
+      "name": "無の肥大（外周回避）",
+      "type": "cast_start",
+      "match": { "cast_id": "0x9D32", "cast_name": "無の肥大" },
+      "actions": [
+        { "type": "tts", "text": "外周回避" },
+        { "type": "overlay_text", "text": "外周回避", "duration": 5, "color": "#FF4444", "size": "large" }
+      ]
+    },
+    {
+      "id": "muno_track_call",
+      "name": "無の追跡（散開）",
+      "type": "cast_start",
+      "match": { "cast_id": "0x9D40", "cast_name": "無の追跡" },
+      "actions": [
+        { "type": "tts", "text": "散開" },
+        { "type": "overlay_text", "text": "散開", "duration": 4, "color": "#FBBF24", "size": "medium" },
+        { "type": "timer_bar", "label": "デバフ", "duration": 18, "warn_at": 5, "color": "#FBBF24" }
+      ]
+    },
+    {
+      "id": "phase2_marker",
+      "name": "P2 移行",
+      "type": "cast_start",
+      "match": { "cast_id": "0xPHASE2" },
+      "actions": [
+        { "type": "tts", "text": "フェーズ 2" },
+        { "type": "overlay_text", "text": "PHASE 2", "duration": 6, "color": "#60A5FA", "size": "large" }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "id": "first_mit",
+      "time": 30,
+      "label": "迅速 + 堅実",
+      "role": "tank",
+      "advance_warning_sec": 3,
+      "color": "#FBBF24"
+    },
+    {
+      "id": "raid_buff_2m",
+      "time": 120,
+      "label": "全体バフ",
+      "duration": 20,
+      "advance_warning_sec": 5,
+      "color": "#34D399"
+    },
+    {
+      "id": "p2_lb",
+      "time": 180,
+      "label": "LB 準備",
+      "advance_warning_sec": 5,
+      "color": "#FCD34D"
+    },
+    {
+      "id": "tank_swap",
+      "time": 200,
+      "label": "TANK SWAP",
+      "role": "tank",
+      "advance_warning_sec": 3,
+      "color": "#FF8888"
+    },
+    {
+      "id": "heal_check",
+      "time": 240,
+      "label": "ヒール確認",
+      "role": "healer",
+      "advance_warning_sec": 4,
+      "color": "#34D399"
+    },
+    {
+      "id": "burst",
+      "time": 300,
+      "label": "全力バースト",
+      "duration": 15,
+      "advance_warning_sec": 5,
+      "color": "#F87171"
+    }
+  ],
+  "_demo_boss_casts": [
+    { "time": 8,   "cast_id": "0x9D32", "cast_name": "無の肥大",   "cast_time": 4.7 },
+    { "time": 25,  "cast_id": "0x9D40", "cast_name": "無の追跡",   "cast_time": 4.0 },
+    { "time": 60,  "cast_id": "0x9D32", "cast_name": "無の肥大",   "cast_time": 4.7 },
+    { "time": 90,  "cast_id": "0x9D40", "cast_name": "無の追跡",   "cast_time": 4.0 },
+    { "time": 150, "cast_id": "0x9D32", "cast_name": "無の肥大",   "cast_time": 4.7 },
+    { "time": 178, "cast_id": "0xPHASE2", "cast_name": "後半移行", "cast_time": 6.0 },
+    { "time": 220, "cast_id": "0x9D40", "cast_name": "無の追跡",   "cast_time": 4.0 },
+    { "time": 280, "cast_id": "0x9D32", "cast_name": "無の肥大",   "cast_time": 4.7 }
+  ]
+}
