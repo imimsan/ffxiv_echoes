@@ -1,0 +1,443 @@
+/* === FFXIV Echoes Web Demo - 暗色テーマ（in-game ImGui を意識） === */
+
+:root {
+    --bg: #0f1218;
+    --bg-2: #181c25;
+    --bg-3: #20242e;
+    --border: #2c313d;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --accent: #60a5fa;
+    --accent-2: #fbbf24;
+    --note: #fcd34d;
+    --sync: #4ade80;
+    --cast: #60a5fa;
+    --trigger: #fbbf24;
+    --warn: #f87171;
+    --tank: #3b82f6;
+    --healer: #34d399;
+    --dps: #f87171;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Kaku Gothic ProN",
+        "Yu Gothic", Meiryo, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    min-height: 100vh;
+}
+
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+
+.topbar {
+    padding: 12px 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-2);
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.topbar h1 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.bottombar {
+    padding: 8px 24px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-2);
+    text-align: center;
+}
+
+.layout {
+    display: grid;
+    grid-template-columns: minmax(560px, 1fr) 420px;
+    gap: 16px;
+    padding: 16px;
+    max-width: 1500px;
+    margin: 0 auto;
+}
+
+@media (max-width: 1100px) {
+    .layout {
+        grid-template-columns: 1fr;
+    }
+}
+
+.left, .right {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+}
+
+.panel {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+}
+
+.panel-title {
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: var(--accent);
+    font-size: 13px;
+    letter-spacing: 0.5px;
+}
+
+.row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+button, select {
+    background: var(--bg-3);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    font-family: inherit;
+}
+
+button:hover {
+    background: #2a2f3b;
+}
+
+button.primary {
+    background: var(--accent);
+    color: #001020;
+    border-color: var(--accent);
+    font-weight: 600;
+}
+
+button.primary:hover {
+    background: #7eb6f8;
+}
+
+.clock {
+    margin-left: auto;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 18px;
+    color: var(--accent-2);
+    font-variant-numeric: tabular-nums;
+}
+
+/* === ゲーム画面モック === */
+.game-area {
+    position: relative;
+    aspect-ratio: 16 / 9;
+    background:
+        radial-gradient(ellipse at center, rgba(96,165,250,0.06), transparent 65%),
+        linear-gradient(135deg, #0a0d12, #1a1d28);
+    overflow: hidden;
+    padding: 0;
+}
+
+.game-area-bg {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(255,255,255,0.08);
+    font-size: 28px;
+    letter-spacing: 4px;
+    user-select: none;
+}
+
+.overlay-center {
+    position: absolute;
+    top: 30%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    pointer-events: none;
+    width: 80%;
+}
+
+.overlay-center .text-item {
+    font-weight: bold;
+    text-shadow: 0 0 8px rgba(0,0,0,0.9), 0 0 2px rgba(0,0,0,1);
+    margin: 4px 0;
+    animation: fade-in 0.15s ease-out;
+}
+
+.overlay-center .text-item.fading {
+    animation: fade-out 0.4s ease-in forwards;
+}
+
+.text-item.size-large { font-size: 48px; }
+.text-item.size-medium { font-size: 32px; }
+.text-item.size-small { font-size: 22px; }
+
+@keyframes fade-in {
+    from { opacity: 0; transform: translateY(-6px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fade-out {
+    to { opacity: 0; transform: translateY(-4px); }
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+/* タイマーバー（オーバーレイ右下） */
+.timer-bars {
+    position: absolute;
+    bottom: 12px;
+    right: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 240px;
+    pointer-events: none;
+}
+
+.timer-bar {
+    background: rgba(0,0,0,0.6);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 3px;
+    padding: 3px 6px;
+    font-size: 12px;
+    text-shadow: 0 0 3px black;
+}
+
+.timer-bar .label {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 2px;
+}
+
+.timer-bar .bar-bg {
+    background: rgba(255,255,255,0.08);
+    height: 6px;
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.timer-bar .bar-fill {
+    height: 100%;
+    transition: width 0.1s linear;
+}
+
+.timer-bar.warn .bar-fill {
+    animation: pulse 0.6s ease-in-out infinite;
+}
+
+/* === ライブタイムライン === */
+.timeline-panel {
+    padding-bottom: 8px;
+}
+
+#live-timeline {
+    position: relative;
+    height: 130px;
+    background: linear-gradient(to bottom, #14171f, #181c25);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.timeline-axis {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 16px;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 10px;
+}
+
+.timeline-tick {
+    position: absolute;
+    top: 0;
+    width: 1px;
+    height: 6px;
+    background: var(--border);
+}
+
+.timeline-tick-label {
+    position: absolute;
+    top: 4px;
+    transform: translateX(-50%);
+    font-variant-numeric: tabular-nums;
+}
+
+.timeline-now {
+    position: absolute;
+    top: 0;
+    bottom: 16px;
+    width: 2px;
+    background: var(--text);
+    box-shadow: 0 0 6px rgba(255,255,255,0.6);
+}
+
+.timeline-event {
+    position: absolute;
+    transform: translateX(-50%);
+    font-size: 11px;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+.timeline-event-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin: 0 auto 2px;
+    box-shadow: 0 0 6px currentColor;
+}
+
+.timeline-event.cast { color: var(--cast); }
+.timeline-event.trigger { color: var(--trigger); }
+.timeline-event.sync {
+    color: var(--sync);
+    bottom: 16px;
+    height: 96px;
+}
+.timeline-event.sync .timeline-event-line {
+    width: 2px;
+    height: 96px;
+    background: currentColor;
+    margin: 0 auto;
+}
+.timeline-event.note {
+    color: var(--note);
+    bottom: 16px;
+    height: 56px;
+}
+.timeline-event.note .timeline-event-line {
+    width: 2px;
+    height: 36px;
+    background: currentColor;
+    margin: 0 auto;
+}
+.timeline-event.note .timeline-event-bar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 6px;
+    background: currentColor;
+    opacity: 0.35;
+    border-radius: 2px;
+}
+.timeline-event.note.muted { opacity: 0.35; }
+
+/* === チャット出力 === */
+.chat-log {
+    height: 150px;
+    overflow-y: auto;
+    background: #0a0d12;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 10px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+.chat-line {
+    color: var(--text);
+}
+
+.chat-line.tts::before {
+    content: "🔊 ";
+}
+.chat-line.tts {
+    color: #a5b4fc;
+}
+
+.chat-line.note-fire::before {
+    content: "📌 ";
+}
+.chat-line.note-fire {
+    color: var(--note);
+}
+
+.chat-line.cast::before {
+    content: "⚡ ";
+}
+.chat-line.cast {
+    color: var(--cast);
+}
+
+.chat-line.combat {
+    color: var(--accent-2);
+    font-weight: bold;
+}
+
+.chat-line .ts {
+    color: var(--muted);
+    margin-right: 6px;
+}
+
+/* === JSON エディタ === */
+textarea#config-json {
+    width: 100%;
+    height: 380px;
+    background: #0a0d12;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 10px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.4;
+    resize: vertical;
+}
+
+#apply-status.ok { color: var(--sync); }
+#apply-status.err { color: var(--warn); }
+
+/* 凡例 */
+.legend {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+}
+
+.legend-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-right: 6px;
+    vertical-align: middle;
+}
+
+ol.muted {
+    padding-left: 18px;
+    margin: 0;
+}
+ol.muted li { margin-bottom: 4px; }
+
+code {
+    background: var(--bg-3);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 11px;
+}

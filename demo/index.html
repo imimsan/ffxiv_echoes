@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>FFXIV Echoes — Web Demo</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header class="topbar">
+        <h1>FFXIV Echoes <span class="muted">— Web Demo</span></h1>
+        <div class="muted small">ゲームを起動せずにライブタイムラインとオーバーレイの動きを確認するためのモック</div>
+    </header>
+
+    <main class="layout">
+        <!-- ===== 左側：戦闘シミュレーション ===== -->
+        <section class="left">
+            <div class="panel controls">
+                <div class="row">
+                    <button id="btn-toggle" class="primary">▶ 戦闘開始</button>
+                    <button id="btn-reset">リセット</button>
+                    <span class="muted">speed:</span>
+                    <select id="speed">
+                        <option value="0.5">0.5×</option>
+                        <option value="1" selected>1.0×</option>
+                        <option value="2">2.0×</option>
+                        <option value="4">4.0×</option>
+                    </select>
+                    <span class="muted">role:</span>
+                    <select id="role">
+                        <option value="tank">tank</option>
+                        <option value="healer">healer</option>
+                        <option value="dps">dps</option>
+                    </select>
+                    <span class="clock" id="clock">0:00.0</span>
+                </div>
+                <div class="muted small">role を変えると role 指定のあるノートが自分宛てかどうか変わります。</div>
+            </div>
+
+            <div class="panel game-area">
+                <div class="game-area-bg">in-game view（モック）</div>
+                <!-- センターオーバーレイ：overlay_text を描画 -->
+                <div class="overlay-center" id="overlay-center"></div>
+                <!-- タイマーバー一覧 -->
+                <div class="timer-bars" id="timer-bars"></div>
+            </div>
+
+            <div class="panel timeline-panel">
+                <div class="panel-title">ライブタイムライン</div>
+                <div id="live-timeline"></div>
+            </div>
+
+            <div class="panel chat-panel">
+                <div class="panel-title">チャット出力（chat_echo + デバッグ）</div>
+                <div id="chat-log" class="chat-log"></div>
+            </div>
+        </section>
+
+        <!-- ===== 右側：設定 / JSON 編集 ===== -->
+        <section class="right">
+            <div class="panel">
+                <div class="panel-title">トリガー定義 (JSON)</div>
+                <textarea id="config-json" spellcheck="false"></textarea>
+                <div class="row" style="margin-top: 8px;">
+                    <button id="btn-apply" class="primary">適用</button>
+                    <button id="btn-load-sample">サンプルを再読込</button>
+                    <span id="apply-status" class="muted small"></span>
+                </div>
+                <div class="muted small" style="margin-top: 6px;">
+                    編集して「適用」を押すとシミュレーションに反映されます。
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-title">凡例</div>
+                <ul class="legend">
+                    <li><span class="legend-dot" style="background:#60A5FA"></span> ボスキャスト</li>
+                    <li><span class="legend-dot" style="background:#FBBF24"></span> Trigger 発火</li>
+                    <li><span class="legend-dot" style="background:#4ADE80"></span> SyncPoint</li>
+                    <li><span class="legend-dot" style="background:#FCD34D"></span> Note（軽減/LB 等）</li>
+                </ul>
+                <div class="muted small">
+                    現在ラインは中央。左に過去 10 秒、右に未来 30 秒。
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-title">使い方</div>
+                <ol class="muted small">
+                    <li><b>戦闘開始</b> でクロックがスタート</li>
+                    <li>シミュレートされたボスキャストが時刻通りに走る</li>
+                    <li>マッチするトリガーが発火 → TTS（コンソール風表示）+ overlay_text + timer_bar</li>
+                    <li>Note は <code>advance_warning_sec</code> 秒前にも通知</li>
+                    <li>Role を変えると、role 指定のあるノートのフィルタ結果が変わる</li>
+                </ol>
+            </div>
+        </section>
+    </main>
+
+    <footer class="bottombar muted small">
+        実機の Dalamud プラグインと同等の挙動を CSS / JS で簡略再現したモックです。実装本体は <code>src/FfxivEchoes/</code> 参照。
+    </footer>
+
+    <script src="demo.js"></script>
+</body>
+</html>
