@@ -17,6 +17,7 @@ using FfxivEchoes.SafeZone;
 using FfxivEchoes.SafeZone.Presets;
 using FfxivEchoes.Triggers;
 using FfxivEchoes.Triggers.Matching;
+using FfxivEchoes.Variables;
 using FfxivEchoes.Windows;
 using FfxivEchoes.Windows.Tabs;
 
@@ -74,6 +75,9 @@ public sealed class Plugin : IDalamudPlugin
     // ── F11: インポート/エクスポート ──────────────────────
     private readonly TriggerExportImport _triggerExportImport;
 
+    // ── P1+P2: 状態変数 ──────────────────────────────────
+    private readonly VariableStore _variableStore;
+
     // ── M6 + F2: トリガーエンジン ────────────────────────
     private readonly TargetResolver _targetResolver;
     private readonly EventMatcher _eventMatcher;
@@ -125,6 +129,9 @@ public sealed class Plugin : IDalamudPlugin
         // M3: イベントバスを早期構築（タブのプレビュー機能が参照するため）
         _eventBus = new InMemoryEventBus(Log);
 
+        // P1: 状態変数（CombatEnded で自動リセット）
+        _variableStore = new VariableStore(_eventBus, Log);
+
         // タブ／ウィンドウ
         _mainWindow = new MainWindow(BuildTabs(), _tabContext);
         WindowSystem.AddWindow(_mainWindow);
@@ -159,9 +166,10 @@ public sealed class Plugin : IDalamudPlugin
         // M6 + F2: トリガーエンジン（複合条件評価器付き）
         _targetResolver = new TargetResolver(PartyList, PlayerState);
         _eventMatcher = new EventMatcher(_targetResolver);
-        _conditionEvaluator = new ConditionEvaluator(_targetResolver);
+        _conditionEvaluator = new ConditionEvaluator(_targetResolver, _variableStore);
         _triggerEngine = new TriggerEngine(_eventBus, _triggerStore, _eventMatcher, _conditionEvaluator, Log,
-            activeProfileGetter: () => _profileStore.Get(Configuration.ActiveProfile));
+            activeProfileGetter: () => _profileStore.Get(Configuration.ActiveProfile),
+            variables: _variableStore);
 
         // F3: ライブタイムライン HUD
         _liveTimelineWindow = new LiveTimelineWindow(_eventBus, _combatClock, _triggerStore);
@@ -242,6 +250,7 @@ public sealed class Plugin : IDalamudPlugin
 
         // トリガーエンジンを止めて新規 TriggerFired を発生させない
         _triggerEngine.Dispose();
+        _variableStore.Dispose();
 
         // ロガーを閉じて録画ファイルを確実にフラッシュ
         _battleRecorder.Dispose();

@@ -1,5 +1,7 @@
+using System.Text.Json;
 using FfxivEchoes.Events;
 using FfxivEchoes.Triggers.Models;
+using FfxivEchoes.Variables;
 
 namespace FfxivEchoes.Triggers.Matching;
 
@@ -13,10 +15,12 @@ namespace FfxivEchoes.Triggers.Matching;
 public sealed class ConditionEvaluator
 {
     private readonly TargetResolver _targetResolver;
+    private readonly VariableStore? _variables;
 
-    public ConditionEvaluator(TargetResolver targetResolver)
+    public ConditionEvaluator(TargetResolver targetResolver, VariableStore? variables = null)
     {
         _targetResolver = targetResolver;
+        _variables = variables;
     }
 
     public bool Evaluate(ConditionClause clause, IGameEvent ev)
@@ -67,7 +71,8 @@ public sealed class ConditionEvaluator
 
     private static bool HasLeafConstraints(ConditionClause c) =>
         c.Target is not null || c.DurationRange is not null ||
-        c.Stacks is not null || c.HpPct is not null;
+        c.Stacks is not null || c.HpPct is not null ||
+        c.Variable is not null;
 
     private bool EvaluateLeaf(ConditionClause clause, IGameEvent ev)
     {
@@ -137,8 +142,67 @@ public sealed class ConditionEvaluator
             }
         }
 
+        // P2: variable 比較
+        if (clause.Variable is { Length: > 0 } varName)
+        {
+            if (_variables is null)
+            {
+                return false;
+            }
+            var actual = _variables.Get(varName);
+            if (clause.EqualsValue is { } eq && !CompareEquals(actual, eq))
+            {
+                return false;
+            }
+            if (clause.NotEquals is { } neq && CompareEquals(actual, neq))
+            {
+                return false;
+            }
+            if (clause.GreaterThan is { } gt && !CompareNumeric(actual, gt, (a, b) => a > b))
+            {
+                return false;
+            }
+            if (clause.LessThan is { } lt && !CompareNumeric(actual, lt, (a, b) => a < b))
+            {
+                return false;
+            }
+        }
+
         return true;
     }
+
+    private static bool CompareEquals(object? actual, JsonElement expected)
+    {
+        return expected.ValueKind switch
+        {
+            JsonValueKind.Number when actual is not null => System.Math.Abs(ToDouble(actual) - expected.GetDouble()) < 1e-9,
+            JsonValueKind.String => actual is string s && string.Equals(s, expected.GetString(), System.StringComparison.OrdinalIgnoreCase),
+            JsonValueKind.True => actual is bool b1 && b1,
+            JsonValueKind.False => actual is bool b2 && !b2,
+            JsonValueKind.Null => actual is null,
+            _ => false,
+        };
+    }
+
+    private static bool CompareNumeric(object? actual, JsonElement expected, System.Func<double, double, bool> op)
+    {
+        if (expected.ValueKind != JsonValueKind.Number || actual is null)
+        {
+            return false;
+        }
+        return op(ToDouble(actual), expected.GetDouble());
+    }
+
+    private static double ToDouble(object v) => v switch
+    {
+        double d => d,
+        int i => i,
+        long l => l,
+        float f => f,
+        bool b => b ? 1.0 : 0.0,
+        string s when double.TryParse(s, out var p) => p,
+        _ => 0.0,
+    };
 
     private static uint ExtractTargetId(IGameEvent ev) => ev switch
     {
