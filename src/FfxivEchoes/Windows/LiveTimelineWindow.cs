@@ -4,6 +4,7 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility;
 using Dalamud.Interface.Windowing;
+using System.Globalization;
 using FfxivEchoes.Capture;
 using FfxivEchoes.Events;
 using FfxivEchoes.Triggers;
@@ -179,6 +180,32 @@ public sealed class LiveTimelineWindow : Window, IDisposable
                     0xFF4ADE80, 2f);
                 draw.AddText(new Vector2(x + 4f, pos.Y + 10f), 0xFF4ADE80, sp.Id);
             }
+
+            // タイムラインノート（軽減/LB 等のメモ）
+            foreach (var note in triggerFile.Notes)
+            {
+                if (note.Time < minSec || note.Time > maxSec)
+                {
+                    continue;
+                }
+                var noteColor = ParseColor(note.Color, 0xFFFCD34D); // amber
+                var x = pos.X + (float)((note.Time - minSec) / span) * width;
+                // ノート用のラインは下半分に。SyncPoints と区別。
+                draw.AddLine(new Vector2(x, pos.Y + height / 2f), new Vector2(x, pos.Y + height - 14f),
+                    noteColor, 2f);
+
+                // 長尺ノートはバー幅で示す
+                if (note.Duration is { } dur && dur > 0)
+                {
+                    var x2 = pos.X + (float)((note.Time + dur - minSec) / span) * width;
+                    var barTop = pos.Y + height - 32f;
+                    var barColor = (noteColor & 0x00FFFFFF) | 0x40000000;
+                    draw.AddRectFilled(new Vector2(x, barTop), new Vector2(x2, barTop + 6f), barColor);
+                }
+
+                var label = string.IsNullOrEmpty(note.Label) ? note.Id : note.Label;
+                draw.AddText(new Vector2(x + 4f, pos.Y + height / 2f), noteColor, label);
+            }
         }
 
         // 履歴
@@ -215,4 +242,20 @@ public sealed class LiveTimelineWindow : Window, IDisposable
     }
 
     private readonly record struct HistoryEntry(double RelativeSec, string Label, uint Color);
+
+    private static uint ParseColor(string? color, uint fallback)
+    {
+        if (string.IsNullOrEmpty(color) || color.Length != 7 || color[0] != '#')
+        {
+            return fallback;
+        }
+        if (!uint.TryParse(color.AsSpan(1), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var rgb))
+        {
+            return fallback;
+        }
+        var r = (rgb >> 16) & 0xFF;
+        var g = (rgb >> 8) & 0xFF;
+        var b = rgb & 0xFF;
+        return (0xFFu << 24) | (b << 16) | (g << 8) | r;
+    }
 }
