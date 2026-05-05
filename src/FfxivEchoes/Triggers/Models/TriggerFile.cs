@@ -72,6 +72,12 @@ public sealed class TimelineNote
     [JsonPropertyName("color")]
     public string? Color { get; set; }
 
+    /// <summary>表示アイコン。絵文字（"🛡"）または画像 URL を文字列単独 or 配列で指定。
+    /// 配列にすると複数アイコンを横並びで描画する（例：ランパート + ブラインド）。</summary>
+    [JsonPropertyName("icon")]
+    [JsonConverter(typeof(StringOrStringArrayJsonConverter))]
+    public List<string> Icons { get; set; } = new();
+
     /// <summary>このノートの time の何秒前に TTS / overlay で先行通知するか。
     /// 0 や null なら通知しない（タイムライン表示のみ）。</summary>
     [JsonPropertyName("advance_warning_sec")]

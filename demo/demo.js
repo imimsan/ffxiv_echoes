@@ -42,9 +42,9 @@
     const elJson = $('config-json');
     const elApplyStatus = $('apply-status');
     const elTimeline = $('live-timeline');
-    const elOverlay = $('overlay-center');
     const elTimers = $('timer-bars');
     const elChat = $('chat-log');
+    const elUpcoming = $('upcoming-list');
 
     // ── ユーティリティ ─────────────────────────────────────────────────
     const nowSec = () => combatStartedAt === null
@@ -75,6 +75,23 @@
     const escape = (s) => String(s).replace(/[&<>]/g, (c) =>
         ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 
+    /**
+     * icon フィールドを HTML に変換。string でも array でも受ける。
+     * 各要素は絵文字 or 画像 URL（http(s)://〜）。
+     * 配列の場合は横並びで全部表示する（例：ランパート + ブラインド）。
+     */
+    const renderIcons = (icon) => {
+        if (!icon) return '';
+        const list = Array.isArray(icon) ? icon : [icon];
+        return list.map((entry) => {
+            if (typeof entry !== 'string' || !entry) return '';
+            const isUrl = /^https?:\/\//.test(entry);
+            return isUrl
+                ? `<img src="${escape(entry)}" alt="" class="icon-img">`
+                : `<span class="icon-emoji">${escape(entry)}</span>`;
+        }).join('');
+    };
+
     // role 判定（プラグイン側 NoteReminderService.MatchesPlayer と同等）
     const noteMatchesPlayer = (note) => {
         if (note.role) {
@@ -101,7 +118,9 @@
                         log(action.text || '', '');
                         break;
                     case 'overlay_text':
-                        addOverlayText(action.text, action.duration || 5, action.color, action.size);
+                        // 中央オーバーレイは画面が埋まるためデモでは省略。
+                        // チャットログに「警告」として表示。
+                        log(`⚠️  ${action.text || ''}`, 'tts');
                         break;
                     case 'timer_bar':
                         addTimerBar(action.label || '', action.duration || 0, action.color, action.warn_at);
@@ -276,35 +295,16 @@
         });
     };
 
-    // ── オーバーレイ描画（テキスト + タイマーバー） ─────────────────────
+    // ── オーバーレイ描画（タイマーバーのみ） ────────────────────────────
     const renderOverlays = () => {
         const now = performance.now();
 
         // 期限切れを除去
-        for (let i = activeOverlayTexts.length - 1; i >= 0; i--) {
-            if (now > activeOverlayTexts[i].startedAt + activeOverlayTexts[i].duration) {
-                activeOverlayTexts.splice(i, 1);
-            }
-        }
         for (let i = activeTimerBars.length - 1; i >= 0; i--) {
             if (now > activeTimerBars[i].startedAt + activeTimerBars[i].duration) {
                 activeTimerBars.splice(i, 1);
             }
         }
-
-        // テキスト
-        elOverlay.innerHTML = '';
-        activeOverlayTexts.forEach((item) => {
-            const remaining = item.duration - (now - item.startedAt);
-            const div = document.createElement('div');
-            div.className = `text-item size-${item.size}`;
-            div.style.color = item.color;
-            if (remaining < 400) {
-                div.classList.add('fading');
-            }
-            div.textContent = item.text;
-            elOverlay.appendChild(div);
-        });
 
         // タイマーバー
         elTimers.innerHTML = '';
@@ -324,6 +324,85 @@
         });
     };
 
+    // ── 次に来るイベントリスト（カウントダウン + アイコン） ─────────────
+    const renderUpcoming = () => {
+        const now = nowSec() ?? 0;
+        const items = [];
+
+        // ボスキャスト
+        config?._demo_boss_casts?.forEach((c) => {
+            if (c.time < now - 1) return;
+            items.push({
+                kind: 'cast',
+                time: c.time,
+                icon: c.icon || '⚡',
+                label: c.cast_name,
+                sub: `cast ${c.cast_time}s`,
+                color: '#60A5FA',
+                muted: false,
+            });
+        });
+
+        // SyncPoint
+        config?.sync_points?.forEach((sp) => {
+            if (sp.expected_time < now - 1) return;
+            items.push({
+                kind: 'sync',
+                time: sp.expected_time,
+                icon: '🔖',
+                label: sp.id,
+                sub: 'sync',
+                color: '#4ADE80',
+                muted: false,
+            });
+        });
+
+        // Note
+        config?.notes?.forEach((note) => {
+            if (note.time < now - 1) return;
+            const matches = noteMatchesPlayer(note);
+            items.push({
+                kind: 'note',
+                time: note.time,
+                icon: note.icon || '📌',
+                label: note.label || note.id,
+                sub: note.role ? `role: ${note.role}` : (note.duration ? `${note.duration}s` : 'note'),
+                color: note.color || '#FCD34D',
+                muted: !matches,
+                advance: note.advance_warning_sec,
+            });
+        });
+
+        items.sort((a, b) => a.time - b.time);
+        const visible = items.slice(0, 6);
+
+        elUpcoming.innerHTML = '';
+        visible.forEach((item) => {
+            const remaining = item.time - now;
+            const imminent = remaining <= 5 && remaining >= -0.5 && !item.muted;
+            const row = document.createElement('div');
+            row.className = 'upcoming-row';
+            if (imminent) row.classList.add('imminent');
+            if (item.muted) row.classList.add('muted-role');
+            row.style.borderLeftColor = item.color;
+
+            const iconsHtml = renderIcons(item.icon);
+            const cdStr = remaining < 0
+                ? `+${(-remaining).toFixed(1)}s`
+                : `${remaining.toFixed(1)}s`;
+
+            row.innerHTML = `
+                <div class="icons">${iconsHtml}</div>
+                <div class="countdown">${cdStr}</div>
+                <div>
+                    <div class="label">${escape(item.label)}</div>
+                    <div class="sub">${escape(item.sub)}</div>
+                </div>
+            `;
+            elUpcoming.appendChild(row);
+        });
+    };
+
     // ── メインループ ──────────────────────────────────────────────────
     const tick = () => {
         const t = nowSec();
@@ -334,6 +413,7 @@
         }
         renderTimeline();
         renderOverlays();
+        renderUpcoming();
         rafId = requestAnimationFrame(tick);
     };
 
@@ -364,6 +444,7 @@
         elChat.innerHTML = '';
         renderTimeline();
         renderOverlays();
+        renderUpcoming();
     };
 
     // ── 設定読み込み ──────────────────────────────────────────────────
