@@ -60,6 +60,9 @@ public sealed class Plugin : IDalamudPlugin
     private readonly TriggerStore _triggerStore;
     private readonly TriggerWatcher _triggerWatcher;
 
+    // ── M10: バックアップ ────────────────────────────────
+    private readonly TriggerBackupManager _backupManager;
+
     // ── M6: トリガーエンジン ─────────────────────────────
     private readonly TargetResolver _targetResolver;
     private readonly EventMatcher _eventMatcher;
@@ -77,9 +80,10 @@ public sealed class Plugin : IDalamudPlugin
     {
         Configuration = Configuration.LoadAndMigrate(PluginInterface, Log);
 
-        // M5: トリガー定義（タブが参照するので先に作成）
+        // M5 + M10: トリガー定義 + バックアップ
+        _backupManager = new TriggerBackupManager(PluginInterface.ConfigDirectory.FullName, Log);
         _triggerLoader = new TriggerLoader(PluginInterface.ConfigDirectory.FullName, Log);
-        _triggerStore = new TriggerStore(_triggerLoader, Log);
+        _triggerStore = new TriggerStore(_triggerLoader, Log, _backupManager);
         _triggerStore.Reload();
         _triggerWatcher = new TriggerWatcher(_triggerLoader.TriggersDirectory, _triggerStore, Log);
 
