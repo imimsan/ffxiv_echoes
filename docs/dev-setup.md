@@ -46,13 +46,13 @@ dotnet build --configuration Debug
 ビルド成果物は次の場所に出力される：
 
 ```
-src/FfxivEchoes/bin/x64/Debug/FfxivEchoes/
+src/FfxivEchoes/bin/x64/Debug/
+├── FfxivEchoes.deps.json
 ├── FfxivEchoes.dll
-├── FfxivEchoes.json   ← プラグインマニフェスト
-└── ...依存DLL
+└── FfxivEchoes.json   ← プラグインマニフェスト
 ```
 
-`Dalamud.NET.Sdk` が自動的に Dalamud アセンブリ（`%AppData%\XIVLauncher\addon\Hooks\dev\`）を解決するため、追加の参照設定は不要。
+`Dalamud.NET.Sdk` が自動的に Dalamud アセンブリ（`%AppData%\XIVLauncher\addon\Hooks\dev\`）を解決するため、追加の参照設定は不要。Dalamud 依存 DLL は実行時に同じフォルダから読み込まれる（コピーされない）。
 
 ## ゲームへのインストール（dev plugin として読み込ませる）
 
@@ -60,7 +60,7 @@ src/FfxivEchoes/bin/x64/Debug/FfxivEchoes/
 
 1. ゲーム中に `/xlsettings` を実行（または XIVLauncher Setup → Dalamud Settings）
 2. 「**Dev Plugin Locations**」タブを開く
-3. ビルド出力ディレクトリ（例：`C:\Users\<user>\Documents\GitHub\ffxiv_echoes\src\FfxivEchoes\bin\x64\Debug\FfxivEchoes\`）を追加
+3. ビルド出力ディレクトリ（`src\FfxivEchoes\bin\x64\Debug\`）を追加
 4. `/xlplugins` で「FFXIV Echoes」を有効化
 
 ### 方法 2：手動コピー
