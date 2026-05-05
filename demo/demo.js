@@ -29,6 +29,7 @@
     const activeOverlayTexts = [];       // { text, color, size, expiresAt, fadeOutAt }
     const activeTimerBars = [];          // { label, color, startedAt, duration, warnAt }
     const activeCasts = [];              // 現在キャスト中のボスキャスト（タイムライン青ドット用）
+    const activeArenaItems = [];         // { gimmick, callout, direction, fanDeg, expiresAt } - arena_view 由来
 
     // ── DOM ────────────────────────────────────────────────────────────
     const $ = (id) => document.getElementById(id);
@@ -45,6 +46,7 @@
     const elTimers = $('timer-bars');
     const elChat = $('chat-log');
     const elUpcoming = $('upcoming-list');
+    const elArena = $('arena-view');
 
     // ── ユーティリティ ─────────────────────────────────────────────────
     const nowSec = () => combatStartedAt === null
@@ -125,6 +127,10 @@
                     case 'timer_bar':
                         addTimerBar(action.label || '', action.duration || 0, action.color, action.warn_at);
                         break;
+                    case 'arena_view':
+                        addArenaItem(action.gimmick, action.callout, action.duration || 5,
+                            action.direction, action.fan_deg);
+                        break;
                     default:
                         log(`(unimplemented action: ${action.type})`, '');
                 }
@@ -149,6 +155,21 @@
             startedAt: performance.now(),
             duration: duration * 1000,
             warnAt: (warnAt || 0) * 1000,
+        });
+    };
+
+    /**
+     * arena_view アクション。プラグイン側 ArenaViewHandler と同等。
+     * gimmick: outer_ring / inner_circle / scatter / stack / cone
+     */
+    const addArenaItem = (gimmick, callout, duration, direction, fanDeg) => {
+        if (!gimmick) return;
+        activeArenaItems.push({
+            gimmick: String(gimmick).toLowerCase(),
+            callout: callout || '',
+            direction: direction || null,
+            fanDeg: typeof fanDeg === 'number' ? fanDeg : 90,
+            expiresAt: performance.now() + (duration > 0 ? duration : 5) * 1000,
         });
     };
 
@@ -324,6 +345,136 @@
         });
     };
 
+    // ── アリーナ図描画（特定ギミック発生中のみ） ──────────────────────
+    /**
+     * activeArenaItems（arena_view アクション由来、プラグインと同モデル）を優先。
+     * 加えてレガシー：boss_cast.gimmick が設定されていればキャスト中のみ表示。
+     * 複数同時なら残時間が短いものを優先。
+     */
+    const renderArena = () => {
+        const now = nowSec();
+        if (now === null) {
+            elArena.classList.remove('active');
+            elArena.innerHTML = '';
+            return;
+        }
+
+        const perfNow = performance.now();
+        // 期限切れを除去
+        for (let i = activeArenaItems.length - 1; i >= 0; i--) {
+            if (perfNow > activeArenaItems[i].expiresAt) activeArenaItems.splice(i, 1);
+        }
+
+        let target = null;
+
+        // 1. arena_view アクション由来（プラグイン互換）
+        for (const it of activeArenaItems) {
+            const remaining = (it.expiresAt - perfNow) / 1000;
+            const candidate = {
+                gimmick: { type: it.gimmick, callout: it.callout, direction: it.direction, fan_deg: it.fanDeg },
+                source: 'action',
+                label: it.callout,
+                remaining,
+            };
+            if (!target || candidate.remaining < target.remaining) target = candidate;
+        }
+
+        // 2. レガシー：boss_cast.gimmick（_demo_boss_casts に直接書かれた場合）
+        for (const c of activeCasts) {
+            const cast = config?._demo_boss_casts?.[c.id];
+            if (!cast || !cast.gimmick) continue;
+            const remaining = (c.startedAt + c.castTime) - now;
+            const candidate = { gimmick: cast.gimmick, source: 'cast', label: cast.cast_name, remaining };
+            if (!target || candidate.remaining < target.remaining) target = candidate;
+        }
+
+        if (!target) {
+            elArena.classList.remove('active');
+            elArena.innerHTML = '';
+            return;
+        }
+
+        const svg = renderArenaSvg(target.gimmick);
+        const cd = Math.max(0, target.remaining).toFixed(1);
+        elArena.innerHTML = `
+            ${svg}
+            <div class="arena-callout">
+                <div class="callout-text">${escape(target.gimmick.callout || '')}</div>
+                <div class="callout-cast">${escape(target.label)} · ${cd}s</div>
+            </div>
+        `;
+        elArena.classList.add('active');
+    };
+
+    /** ギミック種別ごとにアリーナ SVG を組み立てる。 */
+    const renderArenaSvg = (g) => {
+        const arena = `<circle cx="100" cy="100" r="95" fill="rgba(20,25,35,0.82)" stroke="rgba(255,255,255,0.18)" stroke-width="1"/>`;
+        let body = '';
+        let boss = `<circle cx="100" cy="100" r="5" fill="#fb923c" stroke="#fff" stroke-width="1.2"/>`;
+
+        switch (g.type) {
+            case 'outer_ring':
+                // 外周が危険、中央が安置（無の肥大タイプ）
+                body = `
+                    <circle cx="100" cy="100" r="92" fill="rgba(248,113,113,0.42)" stroke="#f87171" stroke-width="1.5"/>
+                    <circle cx="100" cy="100" r="48" fill="rgba(34,197,94,0.5)" stroke="#34D399" stroke-width="2.5" stroke-dasharray="6 3"/>
+                    <text x="100" y="128" text-anchor="middle" font-size="12" fill="#86efac" font-weight="700" letter-spacing="1">SAFE</text>
+                `;
+                break;
+            case 'inner_circle':
+                // 中央が危険、外周が安置（円形 AoE）
+                body = `
+                    <circle cx="100" cy="100" r="55" fill="rgba(248,113,113,0.55)" stroke="#f87171" stroke-width="2"/>
+                    <text x="100" y="103" text-anchor="middle" font-size="20" fill="#fff" font-weight="700">!</text>
+                    <text x="100" y="180" text-anchor="middle" font-size="11" fill="#86efac" font-weight="700">外周安置</text>
+                `;
+                break;
+            case 'scatter': {
+                // 4 方向散開
+                const positions = [
+                    { x: 100, y: 30, label: 'N' },
+                    { x: 170, y: 100, label: 'E' },
+                    { x: 100, y: 170, label: 'S' },
+                    { x: 30, y: 100, label: 'W' },
+                ];
+                body = positions.map(p => `
+                    <circle cx="${p.x}" cy="${p.y}" r="13" fill="rgba(96,165,250,0.42)" stroke="#60A5FA" stroke-width="2"/>
+                    <text x="${p.x}" y="${p.y + 4}" text-anchor="middle" font-size="11" fill="#bfdbfe" font-weight="700">${p.label}</text>
+                `).join('');
+                boss = `
+                    <circle cx="100" cy="100" r="6" fill="#f87171" stroke="#fff" stroke-width="1.5"/>
+                    <text x="100" y="103" text-anchor="middle" font-size="9" fill="#fff" font-weight="700">!</text>
+                `;
+                break;
+            }
+            case 'stack':
+                // 中央集合
+                body = `
+                    <circle cx="100" cy="100" r="38" fill="rgba(96,165,250,0.4)" stroke="#60A5FA" stroke-width="2.5" stroke-dasharray="5 3"/>
+                    <text x="100" y="135" text-anchor="middle" font-size="11" fill="#bfdbfe" font-weight="700">STACK</text>
+                `;
+                break;
+            case 'cone': {
+                // 指定方向への扇形コーン
+                const dirAngles = { N: -90, NE: -45, E: 0, SE: 45, S: 90, SW: 135, W: 180, NW: -135 };
+                const angle = (dirAngles[g.direction] ?? -90) * Math.PI / 180;
+                const halfFan = ((g.fan_deg || 90) * Math.PI) / 360;
+                const cx = 100, cy = 100, r = 95;
+                const a1 = angle - halfFan, a2 = angle + halfFan;
+                const x1 = cx + r * Math.cos(a1);
+                const y1 = cy + r * Math.sin(a1);
+                const x2 = cx + r * Math.cos(a2);
+                const y2 = cy + r * Math.sin(a2);
+                body = `<path d="M ${cx} ${cy} L ${x1.toFixed(1)} ${y1.toFixed(1)} A ${r} ${r} 0 0 1 ${x2.toFixed(1)} ${y2.toFixed(1)} Z" fill="rgba(248,113,113,0.5)" stroke="#f87171" stroke-width="1.5"/>`;
+                break;
+            }
+            default:
+                body = `<text x="100" y="105" text-anchor="middle" font-size="12" fill="#94a3b8">unknown gimmick: ${escape(g.type || '')}</text>`;
+        }
+
+        return `<svg class="arena-svg" viewBox="0 0 200 200">${arena}${body}${boss}</svg>`;
+    };
+
     // ── 次に来るイベントリスト（カウントダウン + アイコン） ─────────────
     const renderUpcoming = () => {
         const now = nowSec() ?? 0;
@@ -414,6 +565,7 @@
         renderTimeline();
         renderOverlays();
         renderUpcoming();
+        renderArena();
         rafId = requestAnimationFrame(tick);
     };
 
@@ -433,6 +585,9 @@
         activeOverlayTexts.length = 0;
         activeTimerBars.length = 0;
         activeCasts.length = 0;
+        activeArenaItems.length = 0;
+        elArena.classList.remove('active');
+        elArena.innerHTML = '';
         log('=== 戦闘終了 ===', 'combat');
     };
 
@@ -445,6 +600,7 @@
         renderTimeline();
         renderOverlays();
         renderUpcoming();
+        renderArena();
     };
 
     // ── 設定読み込み ──────────────────────────────────────────────────
