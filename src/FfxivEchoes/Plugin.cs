@@ -11,6 +11,7 @@ using FfxivEchoes.Commands;
 using FfxivEchoes.Commands.Handlers;
 using FfxivEchoes.Diagnostics;
 using FfxivEchoes.Events;
+using FfxivEchoes.Profiles;
 using FfxivEchoes.Recording;
 using FfxivEchoes.SafeZone;
 using FfxivEchoes.SafeZone.Presets;
@@ -67,6 +68,9 @@ public sealed class Plugin : IDalamudPlugin
     // ── M10: バックアップ ────────────────────────────────
     private readonly TriggerBackupManager _backupManager;
 
+    // ── F10: プロファイル ────────────────────────────────
+    private readonly ProfileStore _profileStore;
+
     // ── M6 + F2: トリガーエンジン ────────────────────────
     private readonly TargetResolver _targetResolver;
     private readonly EventMatcher _eventMatcher;
@@ -101,6 +105,10 @@ public sealed class Plugin : IDalamudPlugin
         _triggerStore = new TriggerStore(_triggerLoader, Log, _backupManager);
         _triggerStore.Reload();
         _triggerWatcher = new TriggerWatcher(_triggerLoader.TriggersDirectory, _triggerStore, Log);
+
+        // F10: プロファイル
+        _profileStore = new ProfileStore(PluginInterface.ConfigDirectory.FullName, Log);
+        _profileStore.Reload();
 
         // M8: 録画スキャナ
         _recordingScanner = new RecordingScanner(PluginInterface, Log);
@@ -144,7 +152,8 @@ public sealed class Plugin : IDalamudPlugin
         _targetResolver = new TargetResolver(PartyList, PlayerState);
         _eventMatcher = new EventMatcher(_targetResolver);
         _conditionEvaluator = new ConditionEvaluator(_targetResolver);
-        _triggerEngine = new TriggerEngine(_eventBus, _triggerStore, _eventMatcher, _conditionEvaluator, Log);
+        _triggerEngine = new TriggerEngine(_eventBus, _triggerStore, _eventMatcher, _conditionEvaluator, Log,
+            activeProfileGetter: () => _profileStore.Get(Configuration.ActiveProfile));
 
         // F3: ライブタイムライン HUD
         _liveTimelineWindow = new LiveTimelineWindow(_eventBus, _combatClock, _triggerStore);
@@ -275,12 +284,7 @@ public sealed class Plugin : IDalamudPlugin
         router.Register(new RecordCommand(_recordingController, _battleRecorder, ChatGui));
         router.Register(new ReloadCommand(_triggerStore, ChatGui));
         router.Register(new TimelineCommand(_liveTimelineWindow, ChatGui));
-        router.Register(new PendingCommand(
-            verb: "profile",
-            usage: "profile <name>",
-            description: "アクティブプロファイルの切替",
-            plannedFor: "F10",
-            chatGui: ChatGui));
+        router.Register(new ProfileCommand(_profileStore, Configuration, ChatGui));
         router.Register(new HelpCommand(router, ChatGui));
 
         return router;

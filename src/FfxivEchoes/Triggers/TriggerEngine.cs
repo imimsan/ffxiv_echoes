@@ -1,6 +1,7 @@
 using System;
 using Dalamud.Plugin.Services;
 using FfxivEchoes.Events;
+using FfxivEchoes.Profiles;
 using FfxivEchoes.Triggers.Matching;
 using FfxivEchoes.Triggers.Models;
 
@@ -19,12 +20,14 @@ public sealed class TriggerEngine : IDisposable
     private readonly CooldownTracker _cooldowns;
     private readonly IPluginLog _log;
     private readonly IDisposable _allEventsSub;
+    private readonly Func<Profile?> _activeProfileGetter;
 
     private string _currentZone = "Unknown";
 
     public TriggerEngine(
         IEventBus bus, TriggerStore store, EventMatcher matcher,
-        ConditionEvaluator conditionEvaluator, IPluginLog log)
+        ConditionEvaluator conditionEvaluator, IPluginLog log,
+        Func<Profile?>? activeProfileGetter = null)
     {
         _bus = bus;
         _store = store;
@@ -32,6 +35,7 @@ public sealed class TriggerEngine : IDisposable
         _conditionEvaluator = conditionEvaluator;
         _log = log;
         _cooldowns = new CooldownTracker();
+        _activeProfileGetter = activeProfileGetter ?? (() => null);
 
         _allEventsSub = bus.SubscribeAll(OnEvent);
     }
@@ -71,9 +75,15 @@ public sealed class TriggerEngine : IDisposable
             return;
         }
 
+        var activeProfile = _activeProfileGetter();
         foreach (var trigger in triggerFile.Triggers)
         {
             if (!trigger.Enabled)
+            {
+                continue;
+            }
+            // F10: アクティブプロファイルでこのトリガーが有効かチェック
+            if (activeProfile is not null && !activeProfile.IsTriggerActive(_currentZone, trigger.Id))
             {
                 continue;
             }
