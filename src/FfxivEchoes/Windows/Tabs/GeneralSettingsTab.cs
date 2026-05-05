@@ -49,6 +49,15 @@ public sealed class GeneralSettingsTab : ITab
         ImGui.TextDisabled("  音声 / オーバーレイが鳴らない時の動作確認用フォールバック。");
         ImGui.Spacing();
 
+        var autoVis = _configuration.AutoVisualForTts;
+        if (ImGui.Checkbox("TTS のみのトリガーで自動オーバーレイ", ref autoVis))
+        {
+            _configuration.AutoVisualForTts = autoVis;
+            _configuration.Save();
+        }
+        ImGui.TextDisabled("  TTS だけのトリガー発火時にも、同じ文字を画面中央に 3 秒表示する。");
+        ImGui.Spacing();
+
         // 言語表示（SPEC §1.5：日本語クライアント前提のため当面ロックされた値）
         ImGui.AlignTextToFramePadding();
         ImGui.Text("言語");

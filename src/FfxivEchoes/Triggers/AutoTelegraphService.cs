@@ -62,31 +62,36 @@ public sealed class AutoTelegraphService : IDisposable
     private void OnCastStart(CastStartedEvent ev)
     {
         var file = _store.GetByZone(_currentZone);
-        if (file is null || !file.AutoSettings.ShowAutoTelegraphs)
+        if (file is null)
         {
+            _log.Information("[FfxivEchoes] AutoTelegraph: skip (zone={Zone}, no file)", _currentZone);
+            return;
+        }
+        if (!file.AutoSettings.ShowAutoTelegraphs)
+        {
+            _log.Information("[FfxivEchoes] AutoTelegraph: skip (show_auto_telegraphs=false)");
             return;
         }
 
-        // ソースが PT 内なら無視（敵のみ対象）
         if (IsFriendlyActor(ev.SourceId))
         {
+            _log.Information("[FfxivEchoes] AutoTelegraph: skip friendly source ({Name})", ev.SourceName);
             return;
         }
 
         if (!TryResolveAoe(ev.CastActionId, out var radius, out var shape, out var inferredFromCaster))
         {
+            _log.Information("[FfxivEchoes] AutoTelegraph: skip non-AoE cast {Name} (id={Id:X4})",
+                ev.CastActionName, ev.CastActionId);
             return;
         }
 
-        // ソース（敵）の位置を取得。inferredFromCaster=true なら敵中心、
-        // false でもターゲット位置が無ければとりあえず敵中心に出す。
         Vector3? worldPos = null;
         var src = _objectTable.SearchById(ev.SourceId);
         if (src is not null)
         {
             worldPos = new Vector3(src.Position.X, src.Position.Y, src.Position.Z);
         }
-        // 自分中心 / 一部のターゲット指定 AoE はターゲット位置に出す
         if (!inferredFromCaster && ev.TargetId is { } tid && tid != 0)
         {
             var target = _objectTable.SearchById(tid);
@@ -95,14 +100,20 @@ public sealed class AutoTelegraphService : IDisposable
                 worldPos = new Vector3(target.Position.X, target.Position.Y, target.Position.Z);
             }
         }
-        if (worldPos is null) return;
+        if (worldPos is null)
+        {
+            _log.Warning("[FfxivEchoes] AutoTelegraph: 位置不明 cast={Name} src={SrcId} tgt={TgtId}",
+                ev.CastActionName, ev.SourceId, ev.TargetId ?? 0);
+            return;
+        }
 
-        // キャスト時間 + 0.5 秒で消す（実発動と少し被らせて視認性を保つ）
+        _log.Information("[FfxivEchoes] AutoTelegraph: 描画 cast={Name} radius={R}m shape={S} pos=({X:0.0},{Z:0.0})",
+            ev.CastActionName, radius, shape, worldPos.Value.X, worldPos.Value.Z);
         _worldOverlay.AddMarker(
             worldPos: worldPos.Value,
             shape: shape,
             radius: radius,
-            colorHex: "#FF6464", // 薄い赤
+            colorHex: "#FF6464",
             durationSec: ev.CastTime + 0.5);
     }
 

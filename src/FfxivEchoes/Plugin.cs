@@ -267,7 +267,7 @@ public sealed class Plugin : IDalamudPlugin
             // P4: 位置保存
             new StorePositionHandler(_safeZoneEngine, _safeZoneContextBuilder, _variableStore, Log),
         };
-        _actionDispatcher = new ActionDispatcher(_eventBus, handlers, Log);
+        _actionDispatcher = new ActionDispatcher(_eventBus, handlers, Configuration, Log);
 
         // MainWindow（依存：BuildTabs 内で _combatClock / _eventBus を参照する LiveHudTab）
         _mainWindow = new MainWindow(BuildTabs(), _tabContext);

@@ -17,11 +17,13 @@ namespace FfxivEchoes.Actions;
 public sealed class ActionDispatcher : IDisposable
 {
     private readonly Dictionary<string, IActionHandler> _handlers;
+    private readonly Configuration _configuration;
     private readonly IPluginLog _log;
     private readonly IDisposable _subscription;
 
-    public ActionDispatcher(IEventBus bus, IEnumerable<IActionHandler> handlers, IPluginLog log)
+    public ActionDispatcher(IEventBus bus, IEnumerable<IActionHandler> handlers, Configuration configuration, IPluginLog log)
     {
+        _configuration = configuration;
         _log = log;
         _handlers = new Dictionary<string, IActionHandler>(StringComparer.OrdinalIgnoreCase);
         foreach (var h in handlers)
@@ -35,7 +37,11 @@ public sealed class ActionDispatcher : IDisposable
 
     private void OnTriggerFired(TriggerFiredEvent ev)
     {
-        foreach (var action in ev.Actions)
+        // 補助：TTS だけのトリガーには自動で overlay_text を追加（auto_visual_for_tts）
+        // 何のビジュアルも出ないと「動いてるのか？」が分からないので、デフォルト ON。
+        var actions = AugmentActionsForVisibility(ev.Actions);
+
+        foreach (var action in actions)
         {
             if (string.IsNullOrEmpty(action.Type))
             {
@@ -50,6 +56,48 @@ public sealed class ActionDispatcher : IDisposable
 
             DispatchOne(handler, action, ev);
         }
+    }
+
+    /// <summary>
+    /// 視認性のため、TTS のみのアクション集合に overlay_text を補完する。
+    /// 既に overlay_text や arena_view が入っていれば何もしない。
+    /// Configuration.AutoVisualForTts で OFF にできる。
+    /// </summary>
+    private List<ActionDefinition> AugmentActionsForVisibility(IReadOnlyList<ActionDefinition> original)
+    {
+        if (!_configuration.AutoVisualForTts) return new List<ActionDefinition>(original);
+
+        bool hasTts = false;
+        bool hasVisual = false;
+        string? ttsText = null;
+        foreach (var a in original)
+        {
+            if (string.Equals(a.Type, "tts", StringComparison.OrdinalIgnoreCase))
+            {
+                hasTts = true;
+                ttsText ??= a.Text;
+            }
+            if (string.Equals(a.Type, "overlay_text", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(a.Type, "overlay_corner_text", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(a.Type, "arena_view", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(a.Type, "timer_bar", StringComparison.OrdinalIgnoreCase))
+            {
+                hasVisual = true;
+            }
+        }
+        var list = new List<ActionDefinition>(original);
+        if (hasTts && !hasVisual && !string.IsNullOrEmpty(ttsText))
+        {
+            list.Add(new ActionDefinition
+            {
+                Type = "overlay_text",
+                Text = ttsText,
+                Duration = 3.0,
+                Color = "#FBBF24",
+                Size = "large",
+            });
+        }
+        return list;
     }
 
     private void DispatchOne(IActionHandler handler, ActionDefinition action, TriggerFiredEvent ev)
