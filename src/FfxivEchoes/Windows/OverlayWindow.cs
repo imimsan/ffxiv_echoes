@@ -54,11 +54,13 @@ public sealed class OverlayWindow : Window, IDisposable
             return;
         }
         var ttl = durationSec <= 0 ? 5.0 : durationSec;
+        var now = DateTimeOffset.UtcNow;
         var item = new TextItem(
             Text: text,
             Color: ParseColor(colorHex, DefaultTextColor),
             Scale: ResolveScale(size),
-            ExpiresAt: DateTimeOffset.UtcNow.AddSeconds(ttl));
+            CreatedAt: now,
+            ExpiresAt: now.AddSeconds(ttl));
         lock (_gate)
         {
             _texts.Add(item);
@@ -143,9 +145,23 @@ public sealed class OverlayWindow : Window, IDisposable
 
     private static void DrawText(TextItem item)
     {
+        // P6: フェードイン（最初の 0.15s）+ フェードアウト（最後の 0.4s）
+        var now = DateTimeOffset.UtcNow;
+        var elapsed = (now - item.CreatedAt).TotalSeconds;
+        var remaining = (item.ExpiresAt - now).TotalSeconds;
+        var alpha = 1.0f;
+        if (elapsed < 0.15)
+        {
+            alpha = (float)(elapsed / 0.15);
+        }
+        else if (remaining < 0.4)
+        {
+            alpha = MathF.Max(0f, (float)(remaining / 0.4));
+        }
+        var color = item.Color with { W = item.Color.W * alpha };
+
         ImGui.SetWindowFontScale(item.Scale);
-        ImGui.PushStyleColor(ImGuiCol.Text, item.Color);
-        // 中央寄せ：テキスト幅を測ってカーソルを補正
+        ImGui.PushStyleColor(ImGuiCol.Text, color);
         var size = ImGui.CalcTextSize(item.Text);
         var avail = ImGui.GetContentRegionAvail();
         var indent = MathF.Max(0, (avail.X - size.X) * 0.5f);
@@ -167,6 +183,14 @@ public sealed class OverlayWindow : Window, IDisposable
         var remaining = item.RemainingSeconds(now);
         var fraction = (float)Math.Clamp(remaining / item.DurationSec, 0.0, 1.0);
         var color = item.WarnAt is { } warn && remaining <= warn ? WarnColor : item.Color;
+
+        // P6: warn フェーズで色をパルス（sine 波で alpha を 0.6〜1.0 に振らせる）
+        if (item.WarnAt is { } warn2 && remaining <= warn2)
+        {
+            var phase = (float)((now - item.StartedAt).TotalSeconds * 4.0);
+            var pulse = 0.5f + 0.5f * MathF.Sin(phase * MathF.PI);
+            color = color with { W = 0.6f + 0.4f * pulse };
+        }
 
         if (!string.IsNullOrEmpty(item.Label))
         {
@@ -205,7 +229,9 @@ public sealed class OverlayWindow : Window, IDisposable
         _ => 2.5f,
     };
 
-    private sealed record TextItem(string Text, Vector4 Color, float Scale, DateTimeOffset ExpiresAt);
+    private sealed record TextItem(
+        string Text, Vector4 Color, float Scale,
+        DateTimeOffset CreatedAt, DateTimeOffset ExpiresAt);
 
     private sealed record TimerBarItem(
         string Label,
