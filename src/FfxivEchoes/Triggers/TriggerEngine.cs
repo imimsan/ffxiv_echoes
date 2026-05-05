@@ -4,6 +4,7 @@ using FfxivEchoes.Events;
 using FfxivEchoes.Profiles;
 using FfxivEchoes.Triggers.Matching;
 using FfxivEchoes.Triggers.Models;
+using FfxivEchoes.Variables;
 
 namespace FfxivEchoes.Triggers;
 
@@ -21,13 +22,15 @@ public sealed class TriggerEngine : IDisposable
     private readonly IPluginLog _log;
     private readonly IDisposable _allEventsSub;
     private readonly Func<Profile?> _activeProfileGetter;
+    private readonly VariableStore? _variables;
 
     private string _currentZone = "Unknown";
 
     public TriggerEngine(
         IEventBus bus, TriggerStore store, EventMatcher matcher,
         ConditionEvaluator conditionEvaluator, IPluginLog log,
-        Func<Profile?>? activeProfileGetter = null)
+        Func<Profile?>? activeProfileGetter = null,
+        VariableStore? variables = null)
     {
         _bus = bus;
         _store = store;
@@ -36,6 +39,7 @@ public sealed class TriggerEngine : IDisposable
         _log = log;
         _cooldowns = new CooldownTracker();
         _activeProfileGetter = activeProfileGetter ?? (() => null);
+        _variables = variables;
 
         _allEventsSub = bus.SubscribeAll(OnEvent);
     }
@@ -102,6 +106,13 @@ public sealed class TriggerEngine : IDisposable
             }
 
             _cooldowns.MarkFired(trigger.Id, ev.Timestamp);
+
+            // P1: trigger.set_variable があれば実行
+            if (trigger.SetVariable is { Name: { Length: > 0 } sv } && _variables is not null)
+            {
+                _variables.Apply(sv, trigger.SetVariable.Operation, trigger.SetVariable.Value);
+            }
+
             try
             {
                 _bus.Publish(new TriggerFiredEvent(
