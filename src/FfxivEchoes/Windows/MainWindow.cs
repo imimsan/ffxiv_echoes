@@ -9,7 +9,8 @@ namespace FfxivEchoes.Windows;
 
 public sealed class MainWindow : Window, IDisposable
 {
-    public const string DefaultTabId = "general";
+    // 初回ユーザーが先に見る場所として「使い方」をデフォルトに
+    public const string DefaultTabId = "help";
 
     private readonly IReadOnlyList<ITab> _tabs;
     private string? _focusTabId;

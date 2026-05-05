@@ -267,12 +267,14 @@ public sealed class TriggerEditorTab : ITab
         {
             typeIndex = 0;
         }
-        ImGui.SetNextItemWidth(280f * ImGuiHelpers.GlobalScale);
-        if (ImGui.Combo("タイプ##trigger-type", ref typeIndex, EventTypes, EventTypes.Length))
+        var eventTypeLabels = Localization.LocalizeAll(EventTypes, Localization.EventType);
+        ImGui.SetNextItemWidth(320f * ImGuiHelpers.GlobalScale);
+        if (ImGui.Combo("発火タイミング##trigger-type", ref typeIndex, eventTypeLabels, eventTypeLabels.Length))
         {
             trigger.Type = EventTypes[typeIndex];
             _dirty = true;
         }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("どのゲームイベントでこのトリガーを発動するか");
 
         var cooldown = (float)(trigger.Cooldown ?? 0);
         ImGui.SetNextItemWidth(180f * ImGuiHelpers.GlobalScale);
@@ -392,8 +394,9 @@ public sealed class TriggerEditorTab : ITab
             {
                 typeIndex = 0;
             }
-            ImGui.SetNextItemWidth(150f * ImGuiHelpers.GlobalScale);
-            if (ImGui.Combo("##action-type", ref typeIndex, ActionTypes, ActionTypes.Length))
+            var actionTypeLabels = Localization.LocalizeAll(ActionTypes, Localization.ActionType);
+            ImGui.SetNextItemWidth(280f * ImGuiHelpers.GlobalScale);
+            if (ImGui.Combo("##action-type", ref typeIndex, actionTypeLabels, actionTypeLabels.Length))
             {
                 action.Type = ActionTypes[typeIndex];
                 _dirty = true;
@@ -486,8 +489,9 @@ public sealed class TriggerEditorTab : ITab
                     var gimmick = action.Gimmick ?? "outer_ring";
                     var gIdx = Array.IndexOf(ArenaViewGimmicks, gimmick);
                     if (gIdx < 0) gIdx = 0;
-                    ImGui.SetNextItemWidth(180f * ImGuiHelpers.GlobalScale);
-                    if (ImGui.Combo("gimmick##action-gimmick", ref gIdx, ArenaViewGimmicks, ArenaViewGimmicks.Length))
+                    var gimmickLabels = Localization.LocalizeAll(ArenaViewGimmicks, Localization.Gimmick);
+                    ImGui.SetNextItemWidth(280f * ImGuiHelpers.GlobalScale);
+                    if (ImGui.Combo("ギミック種類##action-gimmick", ref gIdx, gimmickLabels, gimmickLabels.Length))
                     {
                         action.Gimmick = ArenaViewGimmicks[gIdx];
                         _dirty = true;
@@ -496,7 +500,7 @@ public sealed class TriggerEditorTab : ITab
                     // callout
                     var callout = action.Callout ?? string.Empty;
                     ImGui.SetNextItemWidth(280f * ImGuiHelpers.GlobalScale);
-                    if (ImGui.InputText("callout##action-callout", ref callout, 128))
+                    if (ImGui.InputText("読み上げ・表示テキスト##action-callout", ref callout, 128))
                     {
                         action.Callout = callout;
                         _dirty = true;
@@ -505,42 +509,43 @@ public sealed class TriggerEditorTab : ITab
                     // duration
                     var dur = (float)(action.Duration ?? 5.0);
                     ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
-                    if (ImGui.InputFloat("duration (s)##action-duration", ref dur))
+                    if (ImGui.InputFloat("表示秒数 (s)##action-duration", ref dur))
                     {
                         action.Duration = dur <= 0 ? null : dur;
                         _dirty = true;
                     }
-                    if (ImGui.IsItemHovered()) ImGui.SetTooltip("表示秒数。キャスト時間 + α が目安");
+                    if (ImGui.IsItemHovered()) ImGui.SetTooltip("ミニマップを表示する秒数。キャスト時間 + α が目安（例：5）");
                     // arena_radius
                     var ar = (float)(action.ArenaRadius ?? 20.0);
                     ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
-                    if (ImGui.InputFloat("arena_radius (m)##action-ar", ref ar))
+                    if (ImGui.InputFloat("アリーナ半径 (m)##action-ar", ref ar))
                     {
                         action.ArenaRadius = ar <= 0 ? null : ar;
                         _dirty = true;
                     }
-                    if (ImGui.IsItemHovered()) ImGui.SetTooltip("プレイヤー位置プロット用のアリーナ実半径（メートル）。多くの極/絶は 18-25m");
+                    if (ImGui.IsItemHovered()) ImGui.SetTooltip("プレイヤー位置を描画するためのアリーナ実半径（メートル）。極/絶はだいたい 18-25m");
                     // cone のときだけ direction + fan_deg
                     if (action.Gimmick == "cone")
                     {
                         var dir = action.Direction ?? "N";
                         var dIdx = Array.IndexOf(ArenaViewDirections, dir);
                         if (dIdx < 0) dIdx = 0;
-                        ImGui.SetNextItemWidth(80f * ImGuiHelpers.GlobalScale);
-                        if (ImGui.Combo("direction##action-dir", ref dIdx, ArenaViewDirections, ArenaViewDirections.Length))
+                        var dirLabels = Localization.LocalizeAll(ArenaViewDirections, Localization.Direction);
+                        ImGui.SetNextItemWidth(160f * ImGuiHelpers.GlobalScale);
+                        if (ImGui.Combo("方向##action-dir", ref dIdx, dirLabels, dirLabels.Length))
                         {
                             action.Direction = ArenaViewDirections[dIdx];
                             _dirty = true;
                         }
-                        if (ImGui.IsItemHovered()) ImGui.SetTooltip("コーンが向く方位（北上で N=北、E=東 等）");
+                        if (ImGui.IsItemHovered()) ImGui.SetTooltip("コーンが向く方位（北を上として）");
                         var fan = (float)(action.FanDeg ?? 90.0);
                         ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
-                        if (ImGui.InputFloat("fan_deg##action-fan", ref fan))
+                        if (ImGui.InputFloat("扇形の角度 (°)##action-fan", ref fan))
                         {
                             action.FanDeg = fan <= 0 ? null : fan;
                             _dirty = true;
                         }
-                        if (ImGui.IsItemHovered()) ImGui.SetTooltip("扇形の角度（度数法）。90 で 90 度の扇");
+                        if (ImGui.IsItemHovered()) ImGui.SetTooltip("90 で 90 度の扇形（45 度ずつ左右に開く）");
                     }
                     DrawSafeZoneSubEditor(action);
                     break;
@@ -550,13 +555,14 @@ public sealed class TriggerEditorTab : ITab
                     var fmt = action.Format ?? "cardinal_jp";
                     var fIdx = Array.IndexOf(DirectionFormats, fmt);
                     if (fIdx < 0) fIdx = 0;
-                    ImGui.SetNextItemWidth(180f * ImGuiHelpers.GlobalScale);
-                    if (ImGui.Combo("format##action-fmt", ref fIdx, DirectionFormats, DirectionFormats.Length))
+                    var fmtLabels = Localization.LocalizeAll(DirectionFormats, Localization.DirectionFormat);
+                    ImGui.SetNextItemWidth(280f * ImGuiHelpers.GlobalScale);
+                    if (ImGui.Combo("読み上げ形式##action-fmt", ref fIdx, fmtLabels, fmtLabels.Length))
                     {
                         action.Format = DirectionFormats[fIdx];
                         _dirty = true;
                     }
-                    if (ImGui.IsItemHovered()) ImGui.SetTooltip("読み上げ表記：cardinal=「north」、cardinal_jp=「北」、clock=「12時」、relative_jp=「左前」");
+                    if (ImGui.IsItemHovered()) ImGui.SetTooltip("方位の読み上げ方を選択。日本語方位なら「北」、時計なら「12時」など");
 
                     var ttsOn = action.Tts ?? true;
                     if (ImGui.Checkbox("TTS で読み上げ##dc-tts", ref ttsOn)) { action.Tts = ttsOn; _dirty = true; }
@@ -587,21 +593,22 @@ public sealed class TriggerEditorTab : ITab
                     var shape = action.Shape ?? "circle";
                     var sIdx = Array.IndexOf(FieldShapes, shape);
                     if (sIdx < 0) sIdx = 0;
-                    ImGui.SetNextItemWidth(160f * ImGuiHelpers.GlobalScale);
-                    if (ImGui.Combo("shape##action-shape", ref sIdx, FieldShapes, FieldShapes.Length))
+                    var shapeLabels = Localization.LocalizeAll(FieldShapes, Localization.FieldShape);
+                    ImGui.SetNextItemWidth(180f * ImGuiHelpers.GlobalScale);
+                    if (ImGui.Combo("形状##action-shape", ref sIdx, shapeLabels, shapeLabels.Length))
                     {
                         action.Shape = FieldShapes[sIdx];
                         _dirty = true;
                     }
                     var rad = (float)(action.Radius ?? 3.0);
                     ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
-                    if (ImGui.InputFloat("radius (m)##action-fm-rad", ref rad)) { action.Radius = rad <= 0 ? null : rad; _dirty = true; }
+                    if (ImGui.InputFloat("半径 (m)##action-fm-rad", ref rad)) { action.Radius = rad <= 0 ? null : rad; _dirty = true; }
                     var durFm = (float)(action.Duration ?? 5.0);
                     ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
-                    if (ImGui.InputFloat("duration (s)##action-dur-fm", ref durFm)) { action.Duration = durFm <= 0 ? null : durFm; _dirty = true; }
+                    if (ImGui.InputFloat("表示秒数 (s)##action-dur-fm", ref durFm)) { action.Duration = durFm <= 0 ? null : durFm; _dirty = true; }
                     var colorFm = action.Color ?? "#00FF00";
                     ImGui.SetNextItemWidth(140f * ImGuiHelpers.GlobalScale);
-                    if (ImGui.InputText("color (#RRGGBB)##action-color-fm", ref colorFm, 16)) { action.Color = colorFm; _dirty = true; }
+                    if (ImGui.InputText("色 (#RRGGBB)##action-color-fm", ref colorFm, 16)) { action.Color = colorFm; _dirty = true; }
                     DrawSafeZoneSubEditor(action);
                     break;
                 }
@@ -1320,14 +1327,14 @@ public sealed class TriggerEditorTab : ITab
         "stored_position",
     };
 
-    /// <summary>arena_view の gimmick タイプごとの説明文。</summary>
+    /// <summary>arena_view のギミック種類ごとの説明文（日本語）。</summary>
     private static string GimmickTooltip(string gimmick) => gimmick switch
     {
-        "outer_ring" => "外周が危険、中央に安置丸を表示（無の肥大タイプ）",
-        "inner_circle" => "中央が危険、外周は通常（円形 AoE）",
-        "scatter" => "4 方向（N/E/S/W）にマーカーを表示（散開）",
-        "stack" => "中央に集合マーカー",
-        "cone" => "指定方向への扇形を危険ゾーンとして表示。direction + fan_deg を設定",
+        "outer_ring" => "ボスから遠いほど危険、中央に安置の緑丸を描画。\n例：「無の肥大」「外周回避」のような全体 AoE",
+        "inner_circle" => "ボス周囲が危険、外周が安置。\n例：「サークル AoE」「中央回避」のようなボス中心 AoE",
+        "scatter" => "4 方向（北東南西）に散開ポジを描画。\n例：散開デバフ、ターゲット指定 AoE 系",
+        "stack" => "中央集合マーカー。\n例：シェアダメージ、テラスト系",
+        "cone" => "指定方向への扇形危険ゾーン。\n方向と扇の角度（90 度等）を別途設定。",
         _ => gimmick,
     };
 
@@ -1355,8 +1362,9 @@ public sealed class TriggerEditorTab : ITab
                 var method = sz.Method;
                 var mIdx = Array.IndexOf(SafeZoneMethods, method);
                 if (mIdx < 0) mIdx = 0;
-                ImGui.SetNextItemWidth(220f * ImGuiHelpers.GlobalScale);
-                if (ImGui.Combo("method##sz-method", ref mIdx, SafeZoneMethods, SafeZoneMethods.Length))
+                var methodLabels = Localization.LocalizeAll(SafeZoneMethods, Localization.SafeZoneMethod);
+                ImGui.SetNextItemWidth(360f * ImGuiHelpers.GlobalScale);
+                if (ImGui.Combo("計算方式##sz-method", ref mIdx, methodLabels, methodLabels.Length))
                 {
                     sz.Method = SafeZoneMethods[mIdx];
                     _dirty = true;
@@ -1443,22 +1451,22 @@ public sealed class TriggerEditorTab : ITab
 
     private static string SafeZoneMethodTooltip(string method) => method switch
     {
-        "fixed" => "params: { x, y, z } の固定座標",
-        "boss_relative" => "params: { offset: {x,y,z} } ボスからの相対",
-        "marker_relative" => "params: { marker: \"A\"|\"B\"|... } フィールドマーカー基準",
-        "arena_center_relative" => "params: { offset: {x,y,z} } アリーナ中心からの相対",
-        "inverse_of_telegraph" => "params: { telegraph: {shape, ...} } AoE の反対側",
-        "party_member_relative" => "params: { role: \"tank\"|..., index: 0 } PT メンバー基準",
-        "find_actor_with_status" => "params: { status_id, offset } 特定 status を持つ敵基準",
-        "find_actor_without_status" => "params: { status_id, offset } 特定 status を持たない敵基準",
-        "find_actor_not_casting" => "params: { offset } キャストしていない敵基準",
-        "find_actor_by_distance" => "params: { side: \"nearest\"|\"farthest\" }",
-        "midpoint" => "params: { actors: [name, name] } 2 アクターの中点",
-        "between_actors" => "params: { actor_a, actor_b, fraction } 2 アクター間のうち指定割合",
-        "line_perpendicular" => "params: { actors: [a,b], distance } 2 点を結ぶ線への垂線",
-        "telegraph_gap" => "params: { telegraphs: [...] } 複数 AoE の隙間",
-        "intersection" => "params: { calculations: [calc1, calc2, ...] } 複数の計算結果の AND",
-        "stored_position" => "params: { name } P4: 以前 store_position で保存した位置",
+        "fixed" => "params 例: { x: 100, y: 0, z: 100 }\n固定の世界座標を安置とする",
+        "boss_relative" => "params 例: { offset: { x: 0, z: 15 } }\nボス位置からの相対オフセット（南に 15m など）",
+        "marker_relative" => "params 例: { marker: \"A\" }\nフィールドマーカー（A/B/C/D/1/2/3/4）基準",
+        "arena_center_relative" => "params 例: { offset: { x: 0, z: -15 } }\nアリーナ中心からの相対",
+        "inverse_of_telegraph" => "params 例: { telegraph: { shape: \"fan\", angle_deg: 180 } }\n敵の AoE の反対側を安置とする（最も使う）",
+        "party_member_relative" => "params 例: { role: \"tank\", index: 0, offset: { z: 5 } }\n指定ロールの PT メンバー基準",
+        "find_actor_with_status" => "params 例: { status_id: 1234, offset: { z: 5 } }\n特定ステータスを持つ敵基準",
+        "find_actor_without_status" => "params 例: { status_id: 1234 }\n特定ステータスを持たない敵基準",
+        "find_actor_not_casting" => "params 例: { offset: { z: 0 } }\nキャストしていない敵基準",
+        "find_actor_by_distance" => "params 例: { side: \"nearest\" }\n自分から最も近い／遠い敵基準",
+        "midpoint" => "params 例: { actors: [\"敵A\", \"敵B\"] }\n2 アクターの中点",
+        "between_actors" => "params 例: { actor_a: \"X\", actor_b: \"Y\", fraction: 0.5 }\n2 アクターを結ぶ線分上の指定割合の点",
+        "line_perpendicular" => "params 例: { actors: [\"X\", \"Y\"], distance: 10 }\n2 点を結ぶ線への垂線方向",
+        "telegraph_gap" => "params 例: { telegraphs: [...] }\n複数 AoE の隙間",
+        "intersection" => "params 例: { calculations: [calc1, calc2] }\n複数計算の交差点（AND）",
+        "stored_position" => "params 例: { name: \"slot1\" }\n以前 store_position で保存した位置（P4）",
         _ => method,
     };
 

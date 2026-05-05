@@ -360,6 +360,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private List<ITab> BuildTabs() => new()
     {
+        new HelpTab(),
         new ContentListTab(_triggerStore, _recordingScanner, _tabContext),
         new TriggerEditorTab(_triggerStore, _recordingScanner, _tabContext, _eventBus),
         new LiveHudTab(_eventBus, _combatClock),
