@@ -85,6 +85,11 @@ public sealed class TriggerEditorTab : ITab
                 DrawFileSettingsPanel();
                 ImGui.EndTabItem();
             }
+            if (ImGui.BeginTabItem("ノート"))
+            {
+                DrawNotesPanel();
+                ImGui.EndTabItem();
+            }
             if (ImGui.BeginTabItem("バックアップ"))
             {
                 DrawBackupsPanel(zone);
@@ -738,6 +743,110 @@ public sealed class TriggerEditorTab : ITab
                 ImGui.CloseCurrentPopup();
             }
             ImGui.EndPopup();
+        }
+    }
+
+    private void DrawNotesPanel()
+    {
+        if (_workingCopy is null)
+        {
+            return;
+        }
+        ImGui.TextWrapped("時刻指定で「ここで軽減」「ここで LB」などを書いておくと、" +
+            "ライブタイムラインに表示されます。advance_warning_sec を設定すると " +
+            "その秒数前に TTS / オーバーレイで先行通知します。");
+        ImGui.Spacing();
+
+        if (ImGui.Button("新規ノート##new-note"))
+        {
+            _workingCopy.Notes.Add(new TimelineNote
+            {
+                Id = $"note_{_workingCopy.Notes.Count + 1}",
+                Time = 0,
+                Label = "",
+            });
+            _dirty = true;
+        }
+        ImGui.Spacing();
+
+        if (_workingCopy.Notes.Count == 0)
+        {
+            ImGui.TextDisabled("ノートがありません。「新規ノート」で追加してください。");
+            return;
+        }
+
+        if (ImGui.BeginTable("##notes-table", 7,
+            ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp))
+        {
+            ImGui.TableSetupColumn("ID", ImGuiTableColumnFlags.WidthStretch, 1.0f);
+            ImGui.TableSetupColumn("時刻(s)", ImGuiTableColumnFlags.WidthFixed, 80f * ImGuiHelpers.GlobalScale);
+            ImGui.TableSetupColumn("ラベル", ImGuiTableColumnFlags.WidthStretch, 2.0f);
+            ImGui.TableSetupColumn("先行通知(s)", ImGuiTableColumnFlags.WidthFixed, 90f * ImGuiHelpers.GlobalScale);
+            ImGui.TableSetupColumn("ロール", ImGuiTableColumnFlags.WidthFixed, 80f * ImGuiHelpers.GlobalScale);
+            ImGui.TableSetupColumn("色", ImGuiTableColumnFlags.WidthFixed, 90f * ImGuiHelpers.GlobalScale);
+            ImGui.TableSetupColumn("操作", ImGuiTableColumnFlags.WidthFixed, 70f * ImGuiHelpers.GlobalScale);
+            ImGui.TableHeadersRow();
+
+            for (int i = 0; i < _workingCopy.Notes.Count; i++)
+            {
+                var note = _workingCopy.Notes[i];
+                ImGui.PushID($"note-{i}");
+                ImGui.TableNextRow();
+
+                ImGui.TableNextColumn();
+                var id = note.Id;
+                ImGui.SetNextItemWidth(-1);
+                if (ImGui.InputText("##id", ref id, 32)) { note.Id = id; _dirty = true; }
+
+                ImGui.TableNextColumn();
+                var time = (float)note.Time;
+                ImGui.SetNextItemWidth(-1);
+                if (ImGui.InputFloat("##time", ref time, 1.0f, 5.0f, "%.1f")) { note.Time = time; _dirty = true; }
+
+                ImGui.TableNextColumn();
+                var label = note.Label;
+                ImGui.SetNextItemWidth(-1);
+                if (ImGui.InputText("##label", ref label, 128)) { note.Label = label; _dirty = true; }
+
+                ImGui.TableNextColumn();
+                var warn = (float)(note.AdvanceWarningSec ?? 0);
+                ImGui.SetNextItemWidth(-1);
+                if (ImGui.InputFloat("##warn", ref warn, 0.5f, 1.0f, "%.1f"))
+                {
+                    note.AdvanceWarningSec = warn <= 0 ? null : warn;
+                    _dirty = true;
+                }
+
+                ImGui.TableNextColumn();
+                var role = note.Role ?? string.Empty;
+                ImGui.SetNextItemWidth(-1);
+                if (ImGui.InputText("##role", ref role, 16))
+                {
+                    note.Role = string.IsNullOrEmpty(role) ? null : role;
+                    _dirty = true;
+                }
+
+                ImGui.TableNextColumn();
+                var color = note.Color ?? string.Empty;
+                ImGui.SetNextItemWidth(-1);
+                if (ImGui.InputText("##color", ref color, 8))
+                {
+                    note.Color = string.IsNullOrEmpty(color) ? null : color;
+                    _dirty = true;
+                }
+
+                ImGui.TableNextColumn();
+                if (ImGui.SmallButton("削除"))
+                {
+                    _workingCopy.Notes.RemoveAt(i);
+                    _dirty = true;
+                    ImGui.PopID();
+                    break;
+                }
+
+                ImGui.PopID();
+            }
+            ImGui.EndTable();
         }
     }
 

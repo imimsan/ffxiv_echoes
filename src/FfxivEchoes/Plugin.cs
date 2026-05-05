@@ -76,6 +76,9 @@ public sealed class Plugin : IDalamudPlugin
     // ── F11: インポート/エクスポート ──────────────────────
     private readonly TriggerExportImport _triggerExportImport;
 
+    // ── タイムラインノート（軽減等メモ） ──────────────────
+    private NoteReminderService? _noteReminder;
+
     // ── P1+P2: 状態変数 ──────────────────────────────────
     private readonly VariableStore _variableStore;
 
@@ -179,6 +182,10 @@ public sealed class Plugin : IDalamudPlugin
         var scriptContext = new ScriptContext(_eventBus, _triggerStore, _variableStore, Log);
         _scriptManager = new ScriptManager(PluginInterface, scriptContext, Log);
 
+        // タイムラインノート：advance_warning_sec で先行通知
+        _noteReminder = new NoteReminderService(
+            Framework, _eventBus, _triggerStore, _combatClock, PlayerState, Log);
+
         // F3: ライブタイムライン HUD
         _liveTimelineWindow = new LiveTimelineWindow(_eventBus, _combatClock, _triggerStore);
         WindowSystem.AddWindow(_liveTimelineWindow);
@@ -261,6 +268,9 @@ public sealed class Plugin : IDalamudPlugin
         // アクションディスパッチャを先に止めて新規アクション実行を遮断
         _actionDispatcher.Dispose();
         _ttsHandler.Dispose();
+
+        // タイムラインノート通知を停止
+        _noteReminder?.Dispose();
 
         // P5: スクリプト群を解放
         _scriptManager.Dispose();
