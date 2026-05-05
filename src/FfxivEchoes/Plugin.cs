@@ -9,6 +9,7 @@ using FfxivEchoes.Commands;
 using FfxivEchoes.Commands.Handlers;
 using FfxivEchoes.Diagnostics;
 using FfxivEchoes.Events;
+using FfxivEchoes.Recording;
 using FfxivEchoes.Windows;
 using FfxivEchoes.Windows.Tabs;
 
@@ -25,6 +26,8 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IClientState ClientState { get; private set; } = null!;
     [PluginService] internal static ICondition Condition { get; private set; } = null!;
     [PluginService] internal static IDataManager DataManager { get; private set; } = null!;
+    [PluginService] internal static IPartyList PartyList { get; private set; } = null!;
+    [PluginService] internal static IPlayerState PlayerState { get; private set; } = null!;
 
     public Configuration Configuration { get; }
     public WindowSystem WindowSystem { get; } = new("FfxivEchoes");
@@ -41,6 +44,10 @@ public sealed class Plugin : IDalamudPlugin
     private readonly StatusCapture _statusCapture;
     private readonly HpCapture _hpCapture;
     private readonly DebugChatEcho _debugChatEcho;
+
+    // ── M4: ロガー（録画） ────────────────────────────────
+    private readonly RecordingController _recordingController;
+    private readonly BattleRecorder _battleRecorder;
 
     public Plugin()
     {
@@ -68,6 +75,12 @@ public sealed class Plugin : IDalamudPlugin
         _hpCapture = new HpCapture(Framework, ObjectTable, _eventBus, Log);
         _debugChatEcho = new DebugChatEcho(_eventBus, Configuration, ChatGui, _combatClock);
 
+        // M4: ロガー
+        _recordingController = new RecordingController(Log);
+        _battleRecorder = new BattleRecorder(
+            _eventBus, _recordingController, PluginInterface,
+            PartyList, ClientState, ObjectTable, PlayerState, DataManager, Log);
+
         // UI ビルダーへのフック
         PluginInterface.UiBuilder.Draw += WindowSystem.Draw;
         PluginInterface.UiBuilder.OpenConfigUi += OpenSettings;
@@ -84,6 +97,9 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.Draw -= WindowSystem.Draw;
         PluginInterface.UiBuilder.OpenConfigUi -= OpenSettings;
         PluginInterface.UiBuilder.OpenMainUi -= OpenSettings;
+
+        // ロガーを先に閉じて録画ファイルを確実にフラッシュ
+        _battleRecorder.Dispose();
 
         // キャプチャ群を逆順で破棄（DebugEcho が他のキャプチャに依存していないが念のため）
         _debugChatEcho.Dispose();
@@ -121,12 +137,7 @@ public sealed class Plugin : IDalamudPlugin
         var router = new CommandRouter(OpenSettings, Log, ChatGui);
 
         router.Register(new DebugCommand(Configuration, ChatGui));
-        router.Register(new PendingCommand(
-            verb: "record",
-            usage: "record <on|off|auto>",
-            description: "戦闘ログ記録モードの制御",
-            plannedFor: "M4",
-            chatGui: ChatGui));
+        router.Register(new RecordCommand(_recordingController, _battleRecorder, ChatGui));
         router.Register(new PendingCommand(
             verb: "reload",
             usage: "reload",
