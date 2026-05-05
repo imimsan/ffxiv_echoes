@@ -93,6 +93,7 @@ public sealed class Plugin : IDalamudPlugin
 
     // ── M7: アクションディスパッチャ ──────────────────────
     private readonly OverlayWindow _overlayWindow;
+    private readonly MinimapWindow _minimapWindow;
     private readonly TtsHandler _ttsHandler;
     private readonly ActionDispatcher _actionDispatcher;
 
@@ -145,6 +146,9 @@ public sealed class Plugin : IDalamudPlugin
 
         _overlayWindow = new OverlayWindow();
         WindowSystem.AddWindow(_overlayWindow);
+
+        _minimapWindow = new MinimapWindow();
+        WindowSystem.AddWindow(_minimapWindow);
 
         // コマンドルータ
         _commandRouter = BuildCommandRouter();
@@ -235,6 +239,7 @@ public sealed class Plugin : IDalamudPlugin
             new ChatEchoHandler(ChatGui),
             new OverlayTextHandler(_overlayWindow),
             new TimerBarHandler(_overlayWindow),
+            new ArenaViewHandler(_minimapWindow),
             // F8: 位置情報出力
             new DirectionCallHandler(_safeZoneEngine, _safeZoneContextBuilder,
                 Configuration, _overlayWindow, _ttsHandler, ChatGui, Log),
@@ -298,6 +303,7 @@ public sealed class Plugin : IDalamudPlugin
         WindowSystem.RemoveAllWindows();
         _mainWindow.Dispose();
         _overlayWindow.Dispose();
+        _minimapWindow.Dispose();
         _liveTimelineWindow.Dispose();
         _worldOverlayWindow.Dispose();
 

@@ -17,7 +17,8 @@
       "match": { "cast_id": "0x9D32", "cast_name": "無の肥大" },
       "actions": [
         { "type": "tts", "text": "外周回避" },
-        { "type": "overlay_text", "text": "外周回避", "duration": 5, "color": "#FF4444", "size": "large" }
+        { "type": "overlay_text", "text": "外周回避", "duration": 5, "color": "#FF4444", "size": "large" },
+        { "type": "arena_view", "gimmick": "outer_ring", "callout": "中央安置（外周回避）", "duration": 5 }
       ]
     },
     {
@@ -28,7 +29,39 @@
       "actions": [
         { "type": "tts", "text": "散開" },
         { "type": "overlay_text", "text": "散開", "duration": 4, "color": "#FBBF24", "size": "medium" },
-        { "type": "timer_bar", "label": "デバフ", "duration": 18, "warn_at": 5, "color": "#FBBF24" }
+        { "type": "timer_bar", "label": "デバフ", "duration": 18, "warn_at": 5, "color": "#FBBF24" },
+        { "type": "arena_view", "gimmick": "scatter", "callout": "4方向散開", "duration": 4 }
+      ]
+    },
+    {
+      "id": "kyoumu_no_hadou",
+      "name": "虚無の波動（外周安置）",
+      "type": "cast_start",
+      "match": { "cast_id": "0x9D50", "cast_name": "虚無の波動" },
+      "actions": [
+        { "type": "tts", "text": "外周安置" },
+        { "type": "arena_view", "gimmick": "inner_circle", "callout": "外周安置（中央 AoE）", "duration": 4.5 }
+      ]
+    },
+    {
+      "id": "shuugou_kaijo",
+      "name": "集合解除（中央集合）",
+      "type": "cast_start",
+      "match": { "cast_id": "0x9D60", "cast_name": "集合解除" },
+      "actions": [
+        { "type": "tts", "text": "集合" },
+        { "type": "arena_view", "gimmick": "stack", "callout": "中央集合", "duration": 3.5 }
+      ]
+    },
+    {
+      "id": "zenpou_naginarai",
+      "name": "前方薙ぎ払い",
+      "type": "cast_start",
+      "match": { "cast_id": "0x9D70", "cast_name": "前方薙ぎ払い" },
+      "actions": [
+        { "type": "tts", "text": "南へ回避" },
+        { "type": "arena_view", "gimmick": "cone", "direction": "N", "fan_deg": 90,
+          "callout": "南へ回避", "duration": 4 }
       ]
     },
     {
@@ -100,8 +133,11 @@
   "_demo_boss_casts": [
     { "time": 8,   "cast_id": "0x9D32", "cast_name": "無の肥大",   "cast_time": 4.7, "icon": "💥" },
     { "time": 25,  "cast_id": "0x9D40", "cast_name": "無の追跡",   "cast_time": 4.0, "icon": "🎯" },
+    { "time": 45,  "cast_id": "0x9D50", "cast_name": "虚無の波動", "cast_time": 4.5, "icon": "🌀" },
     { "time": 60,  "cast_id": "0x9D32", "cast_name": "無の肥大",   "cast_time": 4.7, "icon": "💥" },
+    { "time": 80,  "cast_id": "0x9D60", "cast_name": "集合解除",   "cast_time": 3.5, "icon": "🤝" },
     { "time": 90,  "cast_id": "0x9D40", "cast_name": "無の追跡",   "cast_time": 4.0, "icon": "🎯" },
+    { "time": 120, "cast_id": "0x9D70", "cast_name": "前方薙ぎ払い", "cast_time": 4.0, "icon": "🗡" },
     { "time": 150, "cast_id": "0x9D32", "cast_name": "無の肥大",   "cast_time": 4.7, "icon": "💥" },
     { "time": 178, "cast_id": "0xPHASE2", "cast_name": "後半移行", "cast_time": 6.0, "icon": "🌙" },
     { "time": 220, "cast_id": "0x9D40", "cast_name": "無の追跡",   "cast_time": 4.0, "icon": "🎯" },
