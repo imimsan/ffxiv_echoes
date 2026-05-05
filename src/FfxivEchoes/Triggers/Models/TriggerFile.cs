@@ -113,6 +113,14 @@ public sealed class AutoSettings
     /// </summary>
     [JsonPropertyName("show_predicted_casts")]
     public bool ShowPredictedCasts { get; set; } = true;
+
+    /// <summary>
+    /// 敵のキャストに対し、Lumina Action の EffectRange / CastType から推測した
+    /// AoE 形状（円のみ簡易版）をフィールド上に自動描画する（デフォルト無効）。
+    /// 個別トリガーで field_marker を書かなくても、ボスの範囲技がだいたい見える。
+    /// </summary>
+    [JsonPropertyName("show_auto_telegraphs")]
+    public bool ShowAutoTelegraphs { get; set; } = false;
 }
 
 public sealed class TriggerFileMetadata

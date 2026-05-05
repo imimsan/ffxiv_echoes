@@ -82,6 +82,9 @@ public sealed class Plugin : IDalamudPlugin
     // ── 録画ベースの予測アドバンス警告 ──────────────────
     private PredictedCastReminderService? _predictedCastReminder;
 
+    // ── 自動 AoE テレグラフ ──────────────────────────────
+    private AutoTelegraphService? _autoTelegraph;
+
     // ── P1+P2: 状態変数 ──────────────────────────────────
     private readonly VariableStore _variableStore;
 
@@ -187,6 +190,8 @@ public sealed class Plugin : IDalamudPlugin
         _predictedCastReminder = new PredictedCastReminderService(
             Framework, _eventBus, _triggerStore, _combatClock, _recordingScanner, Log);
 
+        // 自動 AoE テレグラフ（auto_settings.show_auto_telegraphs で有効化、後段で _worldOverlayWindow 構築後に再設定）
+
         // F3: ライブタイムライン HUD（録画ベースの予定キャストを未来側に描く）
         _liveTimelineWindow = new LiveTimelineWindow(_eventBus, _combatClock, _triggerStore, _recordingScanner);
         WindowSystem.AddWindow(_liveTimelineWindow);
@@ -229,6 +234,10 @@ public sealed class Plugin : IDalamudPlugin
         // F8: ワールドオーバーレイ
         _worldOverlayWindow = new WorldOverlayWindow(GameGui, ObjectTable);
         WindowSystem.AddWindow(_worldOverlayWindow);
+
+        // 自動 AoE テレグラフ（敵キャストを Lumina Action 形状で自動描画）
+        _autoTelegraph = new AutoTelegraphService(
+            _eventBus, DataManager, ObjectTable, _worldOverlayWindow, _triggerStore, Log);
 
         // M7 + F8: アクションディスパッチャ
         _ttsHandler = new TtsHandler(Configuration, Log);
@@ -296,6 +305,7 @@ public sealed class Plugin : IDalamudPlugin
         // タイムラインノート通知を停止
         _noteReminder?.Dispose();
         _predictedCastReminder?.Dispose();
+        _autoTelegraph?.Dispose();
 
         // P5: スクリプト群を解放
         _scriptManager.Dispose();

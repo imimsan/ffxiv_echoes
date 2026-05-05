@@ -30,6 +30,8 @@ public sealed class TriggerEditorTab : ITab
     private bool _dirty;
     private readonly TimelineRenderer _timelineRenderer = new();
     private bool _aggregateAsTimeline = true;
+    private bool _hideSelfEvents = true;
+    private bool _hideStatusEvents = false;
 
     public TriggerEditorTab(TriggerStore triggerStore, RecordingScanner scanner, TabContext context,
         Events.IEventBus? eventBus = null)
@@ -689,17 +691,32 @@ public sealed class TriggerEditorTab : ITab
         ImGui.TextDisabled($"録画ファイル {agg.RecordingFileCount} / 戦闘 {agg.BattleCount} / 総イベント {agg.TotalEventCount}");
         ImGui.SameLine(0, 24f);
         ImGui.Checkbox("タイムライン表示", ref _aggregateAsTimeline);
+        ImGui.SameLine(0, 24f);
+        ImGui.Checkbox("自分・PT のイベントを隠す", ref _hideSelfEvents);
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip("status_gain / status_update / hp_change のうち、target / source が PT メンバー名のものを除外。\n" +
+                             "ボスのキャストやステータスだけに絞れる。");
+        }
+        ImGui.SameLine(0, 24f);
+        ImGui.Checkbox("status を隠す", ref _hideStatusEvents);
         ImGui.Spacing();
 
-        if (agg.Events.Count == 0)
+        // フィルタ後のイベントを生成
+        var filteredEvents = ApplyEventFilters(agg);
+
+        if (filteredEvents.Count == 0)
         {
-            ImGui.TextWrapped("録画データから集計できるイベントがありません。/echoes record on で録画してください。");
+            ImGui.TextWrapped("表示できるイベントがありません。フィルタを緩めるか、" +
+                "/echoes record on で録画してください。");
             return;
         }
 
         if (_aggregateAsTimeline)
         {
-            _timelineRenderer.Draw(agg);
+            var filteredAgg = new Recording.AggregatedEvents(
+                filteredEvents, agg.BattleCount, agg.TotalEventCount, agg.RecordingFileCount);
+            _timelineRenderer.Draw(filteredAgg);
             if (_timelineRenderer.SelectedEvent is { } selected)
             {
                 ImGui.Spacing();
@@ -726,7 +743,7 @@ public sealed class TriggerEditorTab : ITab
             ImGui.TableSetupColumn("初回時刻", ImGuiTableColumnFlags.WidthFixed, 90f * ImGuiHelpers.GlobalScale);
             ImGui.TableHeadersRow();
 
-            foreach (var ev in agg.Events)
+            foreach (var ev in filteredEvents)
             {
                 ImGui.TableNextRow();
                 ImGui.TableNextColumn(); ImGui.TextUnformatted(ev.Key.Type);
@@ -844,6 +861,18 @@ public sealed class TriggerEditorTab : ITab
         {
             _workingCopy.AutoSettings.ShowPredictedCasts = showPredicted;
             _dirty = true;
+        }
+        var autoTel = _workingCopy.AutoSettings.ShowAutoTelegraphs;
+        if (ImGui.Checkbox("show_auto_telegraphs（敵キャストの AoE 範囲を自動でフィールドに描画）", ref autoTel))
+        {
+            _workingCopy.AutoSettings.ShowAutoTelegraphs = autoTel;
+            _dirty = true;
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip("Lumina Action.EffectRange / CastType を読んで円形 AoE を自動表示。\n" +
+                             "Cone / Line は方向計算が未対応のため、半径だけ目安として円で出る。\n" +
+                             "PT 内のプレイヤーキャストは無視。");
         }
 
         ImGui.Spacing();
@@ -1210,6 +1239,50 @@ public sealed class TriggerEditorTab : ITab
     }
 
     private string? _szParseError;
+
+    /// <summary>
+    /// 集計イベントをフィルタする。「自分・PT のイベントを隠す」「status を隠す」の組合せ。
+    /// PT 名は録画 meta から取得する。
+    /// </summary>
+    private IReadOnlyList<Recording.AggregatedEvent> ApplyEventFilters(Recording.AggregatedEvents agg)
+    {
+        if (!_hideSelfEvents && !_hideStatusEvents) return agg.Events;
+
+        HashSet<string>? party = null;
+        if (_hideSelfEvents)
+        {
+            var members = _recordingScanner.ListPartyMembers(_workingZone);
+            if (members.Count > 0)
+            {
+                party = new HashSet<string>(members, StringComparer.OrdinalIgnoreCase);
+            }
+        }
+
+        var result = new List<Recording.AggregatedEvent>(agg.Events.Count);
+        foreach (var ev in agg.Events)
+        {
+            if (_hideStatusEvents && (ev.Key.Type == "status_gain" || ev.Key.Type == "status_lose" ||
+                                       ev.Key.Type == "status_update"))
+            {
+                continue;
+            }
+            if (party is not null)
+            {
+                // status_gain / status_update / hp_change : Target が PT 内 → 隠す
+                if (!string.IsNullOrEmpty(ev.Key.Target) && party.Contains(ev.Key.Target!))
+                {
+                    continue;
+                }
+                // cast_start 等：Source が PT 内 → 隠す
+                if (!string.IsNullOrEmpty(ev.Key.Source) && party.Contains(ev.Key.Source!))
+                {
+                    continue;
+                }
+            }
+            result.Add(ev);
+        }
+        return result;
+    }
 
     private static string SafeZoneMethodTooltip(string method) => method switch
     {

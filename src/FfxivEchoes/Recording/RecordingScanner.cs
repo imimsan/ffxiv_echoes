@@ -147,6 +147,47 @@ public sealed class RecordingScanner
         return new AggregatedEvents(events, battles, totalEvents, recordings.Count);
     }
 
+    /// <summary>
+    /// 指定ゾーンの最新録画ファイルの meta 行から party メンバー名を抽出する。
+    /// 自分を含む 1〜8 名のリストを返す（取得できなければ空）。
+    /// 集計ビューで「自分・PT のイベントを隠す」フィルタに使う。
+    /// </summary>
+    public IReadOnlyList<string> ListPartyMembers(string zoneName)
+    {
+        var recordings = ListRecordings(zoneName);
+        if (recordings.Count == 0) return Array.Empty<string>();
+        // 最新（List は modified 降順想定でないので念のためソート）
+        var latest = recordings.OrderByDescending(r => r.LastModifiedUtc).First();
+        try
+        {
+            using var stream = File.OpenRead(latest.Path);
+            using var reader = new StreamReader(stream);
+            var line = reader.ReadLine();
+            if (string.IsNullOrEmpty(line)) return Array.Empty<string>();
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("meta", out var meta) || !meta.GetBoolean())
+                return Array.Empty<string>();
+            if (!root.TryGetProperty("party", out var partyArr) || partyArr.ValueKind != JsonValueKind.Array)
+                return Array.Empty<string>();
+            var names = new List<string>();
+            foreach (var member in partyArr.EnumerateArray())
+            {
+                if (member.TryGetProperty("name", out var nameEl) && nameEl.ValueKind == JsonValueKind.String)
+                {
+                    var n = nameEl.GetString();
+                    if (!string.IsNullOrEmpty(n)) names.Add(n);
+                }
+            }
+            return names;
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex, "[FfxivEchoes] meta party の読み出しに失敗：{Path}", latest.Path);
+            return Array.Empty<string>();
+        }
+    }
+
     private static EventKey? ExtractKey(JsonElement evRoot)
     {
         if (!evRoot.TryGetProperty("type", out var typeProp))
