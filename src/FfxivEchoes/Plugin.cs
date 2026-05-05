@@ -263,6 +263,11 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenConfigUi += OpenSettings;
         PluginInterface.UiBuilder.OpenMainUi += OpenSettings;
 
+        // すべての subscriber が attach し終えた段階で、現在ゾーンを初回発行する。
+        // プラグイン読み込み時に既にゾーン内にいる場合（dev 再 enable / クライアント起動済みでの新規読込）
+        // でも TriggerEngine 等が _currentZone を取得できるようにする。
+        _zoneCapture.PublishInitialState();
+
         Log.Information("[FfxivEchoes] Loaded v{Version} (config v{ConfigVersion}), capture services online",
             PluginInterface.Manifest.AssemblyVersion, Configuration.Version);
     }
