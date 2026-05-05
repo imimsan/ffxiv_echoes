@@ -224,6 +224,8 @@ public sealed class Plugin : IDalamudPlugin
             new ScreenArrowHandler(_safeZoneEngine, _safeZoneContextBuilder, _worldOverlayWindow, Log),
             new FieldMarkerHandler(_safeZoneEngine, _safeZoneContextBuilder, _worldOverlayWindow, Log),
             new ProximityFeedbackHandler(_safeZoneEngine, _safeZoneContextBuilder, wavHandler, ChatGui, Log),
+            // P3: 連鎖トリガー
+            new ChainTriggerHandler(_eventBus, _triggerStore, Log),
         };
         _actionDispatcher = new ActionDispatcher(_eventBus, handlers, Log);
 
