@@ -72,7 +72,7 @@ public sealed class FindActorWithoutStatusPreset : ISafeZonePreset
 
     private static bool FilterAccepts(IBattleChara chara, string filter) => filter.ToLowerInvariant() switch
     {
-        "enemy" => chara is IBattleNpc bn && bn.SubKind != (byte)Dalamud.Game.ClientState.Objects.SubKinds.BattleNpcSubKind.Pet,
+        "enemy" => chara is IBattleNpc bn && bn.BattleNpcKind != Dalamud.Game.ClientState.Objects.Enums.BattleNpcSubKind.Pet,
         "ally" => chara is Dalamud.Game.ClientState.Objects.SubKinds.IPlayerCharacter,
         _ => true,
     };
