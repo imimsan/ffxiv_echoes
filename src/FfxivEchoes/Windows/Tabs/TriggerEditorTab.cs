@@ -476,6 +476,64 @@ public sealed class TriggerEditorTab : ITab
                     }
                     break;
                 }
+                case "arena_view":
+                {
+                    // gimmick タイプ
+                    var gimmick = action.Gimmick ?? "outer_ring";
+                    var gIdx = Array.IndexOf(ArenaViewGimmicks, gimmick);
+                    if (gIdx < 0) gIdx = 0;
+                    ImGui.SetNextItemWidth(180f * ImGuiHelpers.GlobalScale);
+                    if (ImGui.Combo("gimmick##action-gimmick", ref gIdx, ArenaViewGimmicks, ArenaViewGimmicks.Length))
+                    {
+                        action.Gimmick = ArenaViewGimmicks[gIdx];
+                        _dirty = true;
+                    }
+                    // callout
+                    var callout = action.Callout ?? string.Empty;
+                    ImGui.SetNextItemWidth(280f * ImGuiHelpers.GlobalScale);
+                    if (ImGui.InputText("callout##action-callout", ref callout, 128))
+                    {
+                        action.Callout = callout;
+                        _dirty = true;
+                    }
+                    // duration
+                    var dur = (float)(action.Duration ?? 5.0);
+                    ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
+                    if (ImGui.InputFloat("duration (s)##action-duration", ref dur))
+                    {
+                        action.Duration = dur <= 0 ? null : dur;
+                        _dirty = true;
+                    }
+                    // arena_radius
+                    var ar = (float)(action.ArenaRadius ?? 20.0);
+                    ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
+                    if (ImGui.InputFloat("arena_radius (m)##action-ar", ref ar))
+                    {
+                        action.ArenaRadius = ar <= 0 ? null : ar;
+                        _dirty = true;
+                    }
+                    // cone のときだけ direction + fan_deg
+                    if (action.Gimmick == "cone")
+                    {
+                        var dir = action.Direction ?? "N";
+                        var dIdx = Array.IndexOf(ArenaViewDirections, dir);
+                        if (dIdx < 0) dIdx = 0;
+                        ImGui.SetNextItemWidth(80f * ImGuiHelpers.GlobalScale);
+                        if (ImGui.Combo("direction##action-dir", ref dIdx, ArenaViewDirections, ArenaViewDirections.Length))
+                        {
+                            action.Direction = ArenaViewDirections[dIdx];
+                            _dirty = true;
+                        }
+                        var fan = (float)(action.FanDeg ?? 90.0);
+                        ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
+                        if (ImGui.InputFloat("fan_deg##action-fan", ref fan))
+                        {
+                            action.FanDeg = fan <= 0 ? null : fan;
+                            _dirty = true;
+                        }
+                    }
+                    break;
+                }
                 default:
                     ImGui.TextDisabled($"({action.Type} は M8 範囲外。JSON 直接編集を推奨)");
                     break;
@@ -876,6 +934,16 @@ public sealed class TriggerEditorTab : ITab
         "tts", "wav", "overlay_text", "overlay_corner_text", "timer_bar",
         "chat_echo", "direction_call", "screen_arrow", "field_marker",
         "proximity_feedback", "set_variable", "chain_trigger",
-        "store_position",
+        "store_position", "arena_view",
+    };
+
+    private static readonly string[] ArenaViewGimmicks =
+    {
+        "outer_ring", "inner_circle", "scatter", "stack", "cone",
+    };
+
+    private static readonly string[] ArenaViewDirections =
+    {
+        "N", "NE", "E", "SE", "S", "SW", "W", "NW",
     };
 }
