@@ -159,6 +159,10 @@ public sealed class Plugin : IDalamudPlugin
             new FindActorWithoutStatusPreset(ObjectTable),
             new FindActorNotCastingPreset(ObjectTable),
             new FindActorByDistancePreset(ObjectTable),
+            // F6
+            new MidpointPreset(ObjectTable),
+            new BetweenActorsPreset(ObjectTable),
+            new LinePerpendicularPreset(ObjectTable),
         };
         _safeZoneEngine = new SafeZoneEngine(safeZonePresets, Log);
         _safeZoneContextBuilder = new SafeZoneContextBuilder(ObjectTable, PartyList);
