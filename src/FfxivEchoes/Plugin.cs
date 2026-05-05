@@ -52,6 +52,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly CastCapture _castCapture;
     private readonly StatusCapture _statusCapture;
     private readonly HpCapture _hpCapture;
+    private readonly ObjectCapture _objectCapture;
     private readonly DebugChatEcho _debugChatEcho;
 
     // ── M4: ロガー（録画） ────────────────────────────────
@@ -130,6 +131,7 @@ public sealed class Plugin : IDalamudPlugin
         _castCapture = new CastCapture(Framework, ObjectTable, DataManager, _eventBus, Log);
         _statusCapture = new StatusCapture(Framework, ObjectTable, DataManager, _eventBus, Log);
         _hpCapture = new HpCapture(Framework, ObjectTable, _eventBus, Log);
+        _objectCapture = new ObjectCapture(Framework, ObjectTable, _eventBus, Log);
         _debugChatEcho = new DebugChatEcho(_eventBus, Configuration, ChatGui, _combatClock);
 
         // M4: ロガー
@@ -232,6 +234,7 @@ public sealed class Plugin : IDalamudPlugin
 
         // キャプチャ群を逆順で破棄（DebugEcho が他のキャプチャに依存していないが念のため）
         _debugChatEcho.Dispose();
+        _objectCapture.Dispose();
         _hpCapture.Dispose();
         _statusCapture.Dispose();
         _castCapture.Dispose();
