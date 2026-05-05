@@ -42,8 +42,27 @@ public sealed class EventMatcher
             CombatStartedEvent => true,
             CombatEndedEvent => true,
             ZoneChangedEvent x => MatchZoneChanged(x, match),
+            ObjectAppearedEvent x => MatchObjectAppeared(x, match),
+            ObjectDisappearedEvent x => MatchObjectDisappeared(x, match),
             _ => false,
         };
+    }
+
+    private static bool MatchObjectAppeared(ObjectAppearedEvent ev, MatchCondition? m)
+    {
+        if (m is null) return true;
+        // match.actor を「名前部分一致」として再利用、source_id はオブジェクト ID として一致判定
+        if (m.Actor is not null && !ev.ObjectName.Contains(m.Actor)) return false;
+        if (m.SourceId is { } expected && ev.ObjectId != expected) return false;
+        return true;
+    }
+
+    private static bool MatchObjectDisappeared(ObjectDisappearedEvent ev, MatchCondition? m)
+    {
+        if (m is null) return true;
+        if (m.Actor is not null && !ev.ObjectName.Contains(m.Actor)) return false;
+        if (m.SourceId is { } expected && ev.ObjectId != expected) return false;
+        return true;
     }
 
     public static string EventTypeName(IGameEvent ev) => ev switch
@@ -58,6 +77,8 @@ public sealed class EventMatcher
         CombatStartedEvent => "combat_start",
         CombatEndedEvent => "combat_end",
         ZoneChangedEvent => "zone_change",
+        ObjectAppearedEvent => "object_appear",
+        ObjectDisappearedEvent => "object_disappear",
         _ => string.Empty,
     };
 

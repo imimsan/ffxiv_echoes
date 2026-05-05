@@ -108,6 +108,20 @@ public sealed record HpChangedEvent(
     uint MaxHp
 ) : IGameEvent;
 
+// ─── オブジェクト出現／消失（F9） ──────────────────────────────────
+
+public sealed record ObjectAppearedEvent(
+    DateTimeOffset Timestamp,
+    uint ObjectId,
+    string ObjectName,
+    uint DataId,
+    System.Numerics.Vector3 Position) : IGameEvent;
+
+public sealed record ObjectDisappearedEvent(
+    DateTimeOffset Timestamp,
+    uint ObjectId,
+    string ObjectName) : IGameEvent;
+
 // ─── トリガー発火（M6 で発行） ─────────────────────────────────────
 
 /// <summary>
