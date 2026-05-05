@@ -122,6 +122,9 @@ public sealed class Plugin : IDalamudPlugin
         // M9: オーディオデバイス（タブが参照するので先）
         _audioDevices = new AudioDeviceEnumerator(Log);
 
+        // M3: イベントバスを早期構築（タブのプレビュー機能が参照するため）
+        _eventBus = new InMemoryEventBus(Log);
+
         // タブ／ウィンドウ
         _mainWindow = new MainWindow(BuildTabs(), _tabContext);
         WindowSystem.AddWindow(_mainWindow);
@@ -137,8 +140,7 @@ public sealed class Plugin : IDalamudPlugin
                           + $"{CommandRouter.RootCommand} help でサブコマンド一覧。",
         });
 
-        // M3: イベントバス + キャプチャ群
-        _eventBus = new InMemoryEventBus(Log);
+        // M3: キャプチャ群（イベントバスは前段で構築済み）
         _combatClock = new CombatClock(_eventBus);
         _combatStateCapture = new CombatStateCapture(Condition, _eventBus, Log);
         _zoneCapture = new ZoneCapture(ClientState, DataManager, _eventBus, Log);
@@ -274,10 +276,10 @@ public sealed class Plugin : IDalamudPlugin
     private List<ITab> BuildTabs() => new()
     {
         new ContentListTab(_triggerStore, _recordingScanner, _tabContext),
-        new TriggerEditorTab(_triggerStore, _recordingScanner, _tabContext),
+        new TriggerEditorTab(_triggerStore, _recordingScanner, _tabContext, _eventBus),
         new LiveHudTab(),
         new AudioTab(Configuration, _audioDevices),
-        new ProfileTab(),
+        new ProfileTab(_profileStore, _triggerStore, Configuration),
         new ImportExportTab(_triggerStore, _triggerExportImport),
         new GeneralSettingsTab(Configuration, PluginInterface),
     };
