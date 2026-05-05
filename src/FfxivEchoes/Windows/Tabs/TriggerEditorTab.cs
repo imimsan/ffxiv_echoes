@@ -32,6 +32,7 @@ public sealed class TriggerEditorTab : ITab
     private bool _aggregateAsTimeline = true;
     private bool _hideSelfEvents = true;
     private bool _hideStatusEvents = false;
+    private int _attachNoteIndex = -1;
 
     public TriggerEditorTab(TriggerStore triggerStore, RecordingScanner scanner, TabContext context,
         Events.IEventBus? eventBus = null)
@@ -996,9 +997,9 @@ public sealed class TriggerEditorTab : ITab
         {
             return;
         }
-        ImGui.TextWrapped("時刻指定で「ここで軽減」「ここで LB」などを書いておくと、" +
-            "ライブタイムラインに表示されます。advance_warning_sec を設定すると " +
-            "その秒数前に TTS / オーバーレイで先行通知します。");
+        ImGui.TextWrapped("「ここで軽減」「ここで LB」を書いておくと、ライブタイムラインに表示されます。" +
+            "時刻は秒で直接指定するか、「特定キャストに紐付け」で録画から自動解決させられます。" +
+            "advance_warning_sec を設定するとその秒数前に TTS / オーバーレイで先行通知。");
         ImGui.Spacing();
 
         if (ImGui.Button("新規ノート##new-note"))
@@ -1011,11 +1012,17 @@ public sealed class TriggerEditorTab : ITab
             });
             _dirty = true;
         }
+        ImGui.SameLine();
+        if (ImGui.Button("録画キャストから一括追加"))
+        {
+            ImGui.OpenPopup("note-from-cast-popup");
+        }
+        DrawNoteFromCastPopup();
         ImGui.Spacing();
 
         if (_workingCopy.Notes.Count == 0)
         {
-            ImGui.TextDisabled("ノートがありません。「新規ノート」で追加してください。");
+            ImGui.TextDisabled("ノートがありません。「新規ノート」or「録画キャストから一括追加」で追加してください。");
             return;
         }
 
@@ -1043,14 +1050,38 @@ public sealed class TriggerEditorTab : ITab
                 if (ImGui.InputText("##id", ref id, 32)) { note.Id = id; _dirty = true; }
 
                 ImGui.TableNextColumn();
-                var time = (float)note.Time;
-                ImGui.SetNextItemWidth(-1);
-                if (ImGui.InputFloat("##time", ref time, 1.0f, 5.0f, "%.1f")) { note.Time = time; _dirty = true; }
+                if (note.AttachedTo is not null)
+                {
+                    // 紐付け中：時刻入力は無効化、cast_id を表示し編集ボタンで切替
+                    var attachLabel = note.AttachedTo.CastId ?? note.AttachedTo.CastName ?? "—";
+                    ImGui.AlignTextToFramePadding();
+                    ImGui.TextColored(new Vector4(0.4f, 0.85f, 1f, 1f), $"📌 {attachLabel}");
+                    if (ImGui.IsItemHovered()) ImGui.SetTooltip("特定キャストに紐付け中。クリックすると解除");
+                    if (ImGui.IsItemClicked())
+                    {
+                        note.AttachedTo = null;
+                        _dirty = true;
+                    }
+                }
+                else
+                {
+                    var time = (float)note.Time;
+                    ImGui.SetNextItemWidth(-1);
+                    if (ImGui.InputFloat("##time", ref time, 1.0f, 5.0f, "%.1f")) { note.Time = time; _dirty = true; }
+                    if (ImGui.IsItemHovered()) ImGui.SetTooltip("戦闘相対秒。録画キャストに紐付けたい時はラベル右横の 📎 ボタン");
+                }
 
                 ImGui.TableNextColumn();
                 var label = note.Label;
-                ImGui.SetNextItemWidth(-1);
+                ImGui.SetNextItemWidth(-32f * ImGuiHelpers.GlobalScale);
                 if (ImGui.InputText("##label", ref label, 128)) { note.Label = label; _dirty = true; }
+                ImGui.SameLine();
+                if (ImGui.SmallButton("📎"))
+                {
+                    _attachNoteIndex = i;
+                    ImGui.OpenPopup("note-attach-popup");
+                }
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("録画されたキャストに紐付けて時刻を自動解決");
 
                 ImGui.TableNextColumn();
                 var warn = (float)(note.AdvanceWarningSec ?? 0);
@@ -1092,6 +1123,132 @@ public sealed class TriggerEditorTab : ITab
             }
             ImGui.EndTable();
         }
+
+        DrawNoteAttachPopup();
+    }
+
+    /// <summary>
+    /// ノートを録画されたキャストに紐付けるためのピッカー popup。
+    /// </summary>
+    private void DrawNoteAttachPopup()
+    {
+        ImGui.SetNextWindowSize(new Vector2(500f * ImGuiHelpers.GlobalScale, 400f * ImGuiHelpers.GlobalScale));
+        if (!ImGui.BeginPopup("note-attach-popup"))
+        {
+            return;
+        }
+        if (_attachNoteIndex < 0 || _workingCopy is null || _attachNoteIndex >= _workingCopy.Notes.Count)
+        {
+            ImGui.EndPopup();
+            return;
+        }
+        var note = _workingCopy.Notes[_attachNoteIndex];
+        ImGui.TextWrapped("録画から拾ったキャストにこのノートを紐付けます。" +
+                          "選択するとノートの時刻が自動で「キャスト開始の相対秒」に追従します。");
+        ImGui.Spacing();
+
+        var agg = _recordingScanner.Aggregate(_workingZone);
+        var filtered = ApplyEventFilters(agg);
+        if (ImGui.BeginChild("##attach-list", new Vector2(-1, 320f * ImGuiHelpers.GlobalScale), true))
+        {
+            foreach (var ev in filtered)
+            {
+                if (ev.Key.Type != "cast_start") continue;
+                var label = $"[{ev.FirstSeenSeconds:0.0}s]  {ev.Key.Name ?? "?"}  ({ev.Key.Id ?? "—"})  ×{ev.Count}";
+                if (ImGui.Selectable(label))
+                {
+                    note.AttachedTo = new MatchCondition
+                    {
+                        CastId = ev.Key.Id,
+                        CastName = ev.Key.Name,
+                    };
+                    _dirty = true;
+                    ImGui.CloseCurrentPopup();
+                }
+            }
+        }
+        ImGui.EndChild();
+
+        if (ImGui.Button("キャンセル##attach-cancel"))
+        {
+            ImGui.CloseCurrentPopup();
+        }
+        ImGui.EndPopup();
+    }
+
+    /// <summary>
+    /// 録画キャストから一括ノート生成 popup。チェックを入れたものだけノートにする。
+    /// </summary>
+    private readonly HashSet<string> _bulkSelectedCastIds = new(StringComparer.OrdinalIgnoreCase);
+    private float _bulkAdvanceWarn = 5f;
+
+    private void DrawNoteFromCastPopup()
+    {
+        ImGui.SetNextWindowSize(new Vector2(560f * ImGuiHelpers.GlobalScale, 480f * ImGuiHelpers.GlobalScale));
+        if (!ImGui.BeginPopupModal("note-from-cast-popup", ImGuiWindowFlags.NoCollapse))
+        {
+            return;
+        }
+        if (_workingCopy is null) { ImGui.EndPopup(); return; }
+
+        ImGui.TextWrapped("録画されたキャストから一括でノートを生成します。チェックを入れたキャストごとに" +
+                          "「📌 紐付けノート」が作成されます（時刻は自動解決）。");
+        ImGui.Spacing();
+
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextUnformatted("先行通知秒数:");
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
+        ImGui.InputFloat("##bulk-warn", ref _bulkAdvanceWarn, 0.5f, 1.0f, "%.1f");
+        ImGui.Spacing();
+
+        var agg = _recordingScanner.Aggregate(_workingZone);
+        var filtered = ApplyEventFilters(agg);
+        if (ImGui.BeginChild("##bulk-list", new Vector2(-1, 340f * ImGuiHelpers.GlobalScale), true))
+        {
+            foreach (var ev in filtered)
+            {
+                if (ev.Key.Type != "cast_start") continue;
+                var key = ev.Key.Id ?? ev.Key.Name ?? "?";
+                var checkedNow = _bulkSelectedCastIds.Contains(key);
+                if (ImGui.Checkbox($"[{ev.FirstSeenSeconds:0.0}s]  {ev.Key.Name ?? "?"}  ({ev.Key.Id ?? "—"})  ×{ev.Count}##bulk-{key}",
+                        ref checkedNow))
+                {
+                    if (checkedNow) _bulkSelectedCastIds.Add(key);
+                    else _bulkSelectedCastIds.Remove(key);
+                }
+            }
+        }
+        ImGui.EndChild();
+
+        if (ImGui.Button($"{_bulkSelectedCastIds.Count} 件のノートを生成", new Vector2(220f * ImGuiHelpers.GlobalScale, 0)))
+        {
+            foreach (var ev in filtered)
+            {
+                if (ev.Key.Type != "cast_start") continue;
+                var key = ev.Key.Id ?? ev.Key.Name ?? "?";
+                if (!_bulkSelectedCastIds.Contains(key)) continue;
+                var label = ev.Key.Name ?? key;
+                _workingCopy.Notes.Add(new TimelineNote
+                {
+                    Id = $"note_attached_{key.Replace("0x", "").Replace("#", "").ToLowerInvariant()}",
+                    Label = label,
+                    AttachedTo = new MatchCondition { CastId = ev.Key.Id, CastName = ev.Key.Name },
+                    AdvanceWarningSec = _bulkAdvanceWarn > 0 ? _bulkAdvanceWarn : null,
+                    Color = "#FCD34D",
+                });
+            }
+            _dirty = true;
+            _bulkSelectedCastIds.Clear();
+            ImGui.CloseCurrentPopup();
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("キャンセル##bulk-cancel"))
+        {
+            _bulkSelectedCastIds.Clear();
+            ImGui.CloseCurrentPopup();
+        }
+        ImGui.EndPopup();
     }
 
     private static TriggerFile Clone(TriggerFile src)

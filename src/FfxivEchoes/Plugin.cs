@@ -85,6 +85,9 @@ public sealed class Plugin : IDalamudPlugin
     // ── 自動 AoE テレグラフ ──────────────────────────────
     private AutoTelegraphService? _autoTelegraph;
 
+    // ── 同期オフセットトラッカー ──────────────────────────
+    private SyncOffsetTracker? _syncOffset;
+
     // ── P1+P2: 状態変数 ──────────────────────────────────
     private readonly VariableStore _variableStore;
 
@@ -182,18 +185,21 @@ public sealed class Plugin : IDalamudPlugin
         var scriptContext = new ScriptContext(_eventBus, _triggerStore, _variableStore, Log);
         _scriptManager = new ScriptManager(PluginInterface, scriptContext, Log);
 
+        // 同期オフセットトラッカー（録画予測 vs 実戦のズレを追跡）
+        _syncOffset = new SyncOffsetTracker(_eventBus, _triggerStore, _combatClock, _recordingScanner, Log);
+
         // タイムラインノート：advance_warning_sec で先行通知
         _noteReminder = new NoteReminderService(
-            Framework, _eventBus, _triggerStore, _combatClock, PlayerState, Log);
+            Framework, _eventBus, _triggerStore, _combatClock, PlayerState, _recordingScanner, _syncOffset, Log);
 
         // 録画ベースの予測アドバンス警告（auto_settings.predict_advance_warning_sec で有効化）
         _predictedCastReminder = new PredictedCastReminderService(
-            Framework, _eventBus, _triggerStore, _combatClock, _recordingScanner, Log);
+            Framework, _eventBus, _triggerStore, _combatClock, _recordingScanner, _syncOffset, Log);
 
         // 自動 AoE テレグラフ（auto_settings.show_auto_telegraphs で有効化、後段で _worldOverlayWindow 構築後に再設定）
 
         // F3: ライブタイムライン HUD（録画ベースの予定キャストを未来側に描く）
-        _liveTimelineWindow = new LiveTimelineWindow(_eventBus, _combatClock, _triggerStore, _recordingScanner);
+        _liveTimelineWindow = new LiveTimelineWindow(_eventBus, _combatClock, _triggerStore, _recordingScanner, _syncOffset);
         WindowSystem.AddWindow(_liveTimelineWindow);
 
         // F4-F7: 安置計算プリセット（合計 15 種）
@@ -306,6 +312,7 @@ public sealed class Plugin : IDalamudPlugin
         _noteReminder?.Dispose();
         _predictedCastReminder?.Dispose();
         _autoTelegraph?.Dispose();
+        _syncOffset?.Dispose();
 
         // P5: スクリプト群を解放
         _scriptManager.Dispose();

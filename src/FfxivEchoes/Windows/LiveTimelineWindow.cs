@@ -25,14 +25,16 @@ public sealed class LiveTimelineWindow : Window, IDisposable
 {
     public enum DisplayMode { Configured, All, Hidden }
 
-    private const float Width = 640f;
-    private const float Height = 110f;
+    private const float Width = 720f;
+    private const float Height = 150f;
     private const float PastSeconds = 10f;
     private const float FutureSeconds = 30f;
+    private const int MaxLabelChars = 14;
 
     private readonly CombatClock _combatClock;
     private readonly TriggerStore _store;
     private readonly RecordingScanner _recordings;
+    private readonly SyncOffsetTracker _syncOffset;
     private readonly IDisposable _eventSub;
     private readonly List<HistoryEntry> _history = new();
     private readonly List<PredictedCast> _predictions = new();
@@ -41,7 +43,8 @@ public sealed class LiveTimelineWindow : Window, IDisposable
     private string _currentZone = "Unknown";
     private DisplayMode _mode = DisplayMode.Configured;
 
-    public LiveTimelineWindow(IEventBus bus, CombatClock combatClock, TriggerStore store, RecordingScanner recordings)
+    public LiveTimelineWindow(IEventBus bus, CombatClock combatClock, TriggerStore store,
+        RecordingScanner recordings, SyncOffsetTracker syncOffset)
         : base("##ffxiv-echoes-live-timeline",
             ImGuiWindowFlags.NoTitleBar |
             ImGuiWindowFlags.NoResize |
@@ -53,6 +56,7 @@ public sealed class LiveTimelineWindow : Window, IDisposable
         _combatClock = combatClock;
         _store = store;
         _recordings = recordings;
+        _syncOffset = syncOffset;
 
         Size = new Vector2(Width, Height);
         SizeCondition = ImGuiCond.FirstUseEver;
@@ -187,93 +191,118 @@ public sealed class LiveTimelineWindow : Window, IDisposable
                 draw.AddText(new Vector2(x + 4f, pos.Y + 10f), 0xFF4ADE80, sp.Id);
             }
 
-            // タイムラインノート（軽減/LB 等のメモ）
+            // タイムラインノート（軽減/LB 等のメモ）。AttachedTo 解決のため録画 agg を取得。
+            Recording.AggregatedEvents? aggForNotes = null;
+            try { aggForNotes = _recordings.Aggregate(_currentZone); } catch { }
+
             foreach (var note in triggerFile.Notes)
             {
-                if (note.Time < minSec || note.Time > maxSec)
+                var noteTime = TimelineNoteResolver.ResolveTime(note, aggForNotes);
+                if (noteTime is null) continue;
+                // AttachedTo / Time に同期オフセットを加算
+                var t = noteTime.Value + _syncOffset.CurrentOffsetSec;
+                if (t < minSec || t > maxSec)
                 {
                     continue;
                 }
-                var noteColor = ParseColor(note.Color, 0xFFFCD34D); // amber
-                var x = pos.X + (float)((note.Time - minSec) / span) * width;
-                // ノート用のラインは下半分に。SyncPoints と区別。
+                var noteColor = ParseColor(note.Color, 0xFFFCD34D);
+                var x = pos.X + (float)((t - minSec) / span) * width;
                 draw.AddLine(new Vector2(x, pos.Y + height / 2f), new Vector2(x, pos.Y + height - 14f),
                     noteColor, 2f);
 
-                // 長尺ノートはバー幅で示す
                 if (note.Duration is { } dur && dur > 0)
                 {
-                    var x2 = pos.X + (float)((note.Time + dur - minSec) / span) * width;
+                    var x2 = pos.X + (float)((t + dur - minSec) / span) * width;
                     var barTop = pos.Y + height - 32f;
                     var barColor = (noteColor & 0x00FFFFFF) | 0x40000000;
                     draw.AddRectFilled(new Vector2(x, barTop), new Vector2(x2, barTop + 6f), barColor);
                 }
 
                 var label = string.IsNullOrEmpty(note.Label) ? note.Id : note.Label;
+                if (note.AttachedTo is not null) label = "📌 " + label; // 紐付けノートは目印
                 draw.AddText(new Vector2(x + 4f, pos.Y + height / 2f), noteColor, label);
             }
         }
 
-        // 録画ベースの予定キャスト（advance warning の主役）：
-        // 録画に出現したキャストを「次回も同じ時刻に出る」前提で未来側に薄く描く。
-        // 通過済み（minSec より過去）は描かない（履歴で出るため）。
+        // 録画ベースの予定キャスト（advance warning の主役）。
+        // 縦方向に複数行で並べて重なりを避ける。ラベルは固定長で truncate。
         var showPredicted = triggerFile?.AutoSettings.ShowPredictedCasts ?? true;
         PredictedCast[] predictions;
         lock (_gate)
         {
             predictions = showPredicted ? _predictions.ToArray() : Array.Empty<PredictedCast>();
         }
-        foreach (var p in predictions)
+
+        // 同期オフセットを各予測時刻に加算してから配置を決める
+        var syncOffsetSec = _syncOffset.CurrentOffsetSec;
+
+        // 未来側の予測：各イベントを 4 行に振り分けて重なりを軽減
+        var predictedRowAssignments = AssignRows(predictions, p => p.RelativeSec + syncOffsetSec, minSec, maxSec, 4);
+        for (var pi = 0; pi < predictions.Length; pi++)
         {
-            if (p.RelativeSec < (float)nowSec - 1.0f) continue; // 既に過ぎた
-            if (p.RelativeSec < minSec || p.RelativeSec > maxSec) continue;
-            var x = pos.X + (float)((p.RelativeSec - minSec) / span) * width;
+            var p = predictions[pi];
+            var effectiveSec = p.RelativeSec + syncOffsetSec;
+            if (effectiveSec < (float)nowSec - 1.0f) continue;
+            if (effectiveSec < minSec || effectiveSec > maxSec) continue;
+            var x = pos.X + (float)((effectiveSec - minSec) / span) * width;
 
-            // 未来側は半透明、近づく（5 秒以内）と濃く
-            var distance = MathF.Max(0, (float)p.RelativeSec - (float)nowSec);
-            var alpha = distance < 5.0f ? 0xC8u : (distance < 15.0f ? 0x80u : 0x50u);
-            var fillColor = (alpha << 24) | 0x00A5FA60u;            // sky blue
-            var strokeColor = (alpha << 24) | 0x00FFFA60u | 0xFF000000;
+            var distance = MathF.Max(0, (float)effectiveSec - (float)nowSec);
+            var alpha = distance < 5.0f ? 0xE0u : (distance < 15.0f ? 0xA0u : 0x70u);
+            var fillColor = (alpha << 24) | 0x00A5FA60u;
+            var strokeColor = (alpha << 24) | 0x00FFFA60u;
 
-            // 縦の点線
+            var row = predictedRowAssignments[pi];
+            var y = pos.Y + 26f + row * 16f;
+
+            // 縦薄線（タイミング基準）
             DrawDashedVerticalLine(draw, new Vector2(x, pos.Y + 4f), pos.Y + height - 16f,
-                strokeColor, 1.5f, 4f);
-            draw.AddCircleFilled(new Vector2(x, pos.Y + 6f), 4f, fillColor, 12);
-            draw.AddText(new Vector2(x + 5f, pos.Y + 4f), strokeColor,
-                $"{p.Label} ({distance:0.0}s)");
+                (0x60u << 24) | (strokeColor & 0x00FFFFFFu), 1.0f, 3f);
+            // ドット
+            draw.AddCircleFilled(new Vector2(x, y + 6f), 3.5f, fillColor, 12);
+
+            // ラベル（背景付きピル）
+            var label = $"{Truncate(p.Label, MaxLabelChars)} {distance:0.0}s";
+            DrawPillLabel(draw, new Vector2(x + 6f, y), label, fillColor, strokeColor, alpha);
         }
 
-        // 履歴
+        // 履歴：時系列順に行を割り当て直して重なりを軽減
         HistoryEntry[] entries;
         lock (_gate)
         {
             entries = _history.ToArray();
         }
+        var historyRowAssignments = AssignRows(entries, e => e.RelativeSec, minSec, maxSec, 4);
         for (var i = 0; i < entries.Length; i++)
         {
             var e = entries[i];
-            if (e.RelativeSec < minSec || e.RelativeSec > maxSec)
-            {
-                continue;
-            }
+            if (e.RelativeSec < minSec || e.RelativeSec > maxSec) continue;
             var x = pos.X + (float)((e.RelativeSec - minSec) / span) * width;
-            var y = pos.Y + 26f + (i % 3) * 18f;
-            draw.AddCircleFilled(new Vector2(x, y), 4f, e.Color);
-            draw.AddText(new Vector2(x + 6f, y - 6f), 0xFFE2E8F0, e.Label);
+            var row = historyRowAssignments[i];
+            var y = pos.Y + 26f + row * 16f;
+            draw.AddCircleFilled(new Vector2(x, y + 6f), 3.5f, e.Color, 12);
+            var label = Truncate(e.Label, MaxLabelChars);
+            DrawPillLabel(draw, new Vector2(x + 6f, y), label, e.Color, 0xFFE2E8F0, 0xC0);
         }
 
         // ウィンドウ末端のヘッダ
         ImGui.SetCursorScreenPos(pos);
         ImGui.Dummy(new Vector2(width, height));
 
-        // 右上にモード表示
+        // 右上にモード表示と同期オフセット
         var modeLabel = _mode switch
         {
             DisplayMode.All => "MODE: ALL",
             DisplayMode.Configured => "MODE: CONFIGURED",
             _ => "MODE: HIDDEN",
         };
-        draw.AddText(new Vector2(pos.X + width - 130f, pos.Y + 4f), 0xFF888888, modeLabel);
+        draw.AddText(new Vector2(pos.X + width - 200f, pos.Y + 4f), 0xFF888888, modeLabel);
+
+        if (Math.Abs(_syncOffset.CurrentOffsetSec) > 0.05)
+        {
+            var (label, _) = _syncOffset.LastSyncInfo;
+            var syncTxt = $"SYNC: {_syncOffset.CurrentOffsetSec:+0.0;-0.0;0}s {label ?? ""}";
+            draw.AddText(new Vector2(pos.X + width - 200f, pos.Y + 18f), 0xFF60D394, syncTxt);
+        }
     }
 
     private readonly record struct HistoryEntry(double RelativeSec, string Label, uint Color);
@@ -315,6 +344,81 @@ public sealed class LiveTimelineWindow : Window, IDisposable
             draw.AddLine(new Vector2(top.X, y), new Vector2(top.X, y2), color, thickness);
             y = y2 + dashPx;
         }
+    }
+
+    /// <summary>
+    /// 文字列を maxChars で切る（日本語混在も考慮して文字数で切る）。
+    /// </summary>
+    private static string Truncate(string s, int maxChars)
+    {
+        if (string.IsNullOrEmpty(s) || s.Length <= maxChars) return s;
+        return s[..maxChars] + "…";
+    }
+
+    /// <summary>
+    /// イベントを N 行に振り分けて重なりを避ける。各行で「次のイベントが
+    /// 近すぎる」場合は次の行に移す。シンプルな貪欲法。
+    /// </summary>
+    private static int[] AssignRows<T>(IReadOnlyList<T> events, Func<T, double> timeOf,
+        float minSec, float maxSec, int numRows)
+    {
+        var result = new int[events.Count];
+        if (events.Count == 0) return result;
+
+        // 各行の「最後にラベルを置いた時刻」
+        var lastTimePerRow = new double[numRows];
+        for (var i = 0; i < numRows; i++) lastTimePerRow[i] = double.NegativeInfinity;
+
+        // 時間順に並べてから割り当て（元の順序のために index 付き）
+        var indices = new int[events.Count];
+        for (var i = 0; i < events.Count; i++) indices[i] = i;
+        Array.Sort(indices, (a, b) => timeOf(events[a]).CompareTo(timeOf(events[b])));
+
+        // 1 ラベル分の最低時間幅（軸 40 秒で 1 行に置けるラベル数の目安）
+        var span = MathF.Max(1f, maxSec - minSec);
+        var minGapSec = span / 9.0; // 9 ラベルが 1 行に乗る程度
+
+        foreach (var idx in indices)
+        {
+            var t = timeOf(events[idx]);
+            var assigned = -1;
+            for (var r = 0; r < numRows; r++)
+            {
+                if (t - lastTimePerRow[r] >= minGapSec)
+                {
+                    assigned = r;
+                    break;
+                }
+            }
+            if (assigned < 0)
+            {
+                // 全行詰まってる → 最も古い行を強制利用
+                assigned = 0;
+                var oldest = lastTimePerRow[0];
+                for (var r = 1; r < numRows; r++)
+                {
+                    if (lastTimePerRow[r] < oldest) { oldest = lastTimePerRow[r]; assigned = r; }
+                }
+            }
+            result[idx] = assigned;
+            lastTimePerRow[assigned] = t;
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// ラベル背景の半透明丸囲い（pill）を描く。
+    /// </summary>
+    private static void DrawPillLabel(ImDrawListPtr draw, Vector2 textPos, string label,
+        uint dotColor, uint textColor, uint alphaForBg)
+    {
+        var size = ImGui.CalcTextSize(label);
+        var pad = new Vector2(4f, 1f);
+        var bgRect1 = textPos - new Vector2(2f, 0f);
+        var bgRect2 = textPos + size + pad * 2f - new Vector2(2f, 2f);
+        var bgColor = ((alphaForBg / 2) << 24) | 0x00181C25u; // 半透明な暗背景
+        draw.AddRectFilled(bgRect1, bgRect2, bgColor, 3f);
+        draw.AddText(textPos + new Vector2(2f, 1f), textColor, label);
     }
 
     private static uint ParseColor(string? color, uint fallback)

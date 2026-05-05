@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Dalamud.Plugin.Services;
 using FfxivEchoes.Capture;
 using FfxivEchoes.Events;
+using FfxivEchoes.Recording;
 using FfxivEchoes.Triggers.Models;
 
 namespace FfxivEchoes.Triggers;
@@ -18,6 +19,8 @@ public sealed class NoteReminderService : IDisposable
     private readonly TriggerStore _store;
     private readonly CombatClock _combatClock;
     private readonly IPlayerState _playerState;
+    private readonly RecordingScanner _recordings;
+    private readonly SyncOffsetTracker _syncOffset;
     private readonly IPluginLog _log;
 
     private readonly IDisposable _combatStartSub;
@@ -30,13 +33,15 @@ public sealed class NoteReminderService : IDisposable
 
     public NoteReminderService(
         IFramework framework, IEventBus bus, TriggerStore store, CombatClock combatClock,
-        IPlayerState playerState, IPluginLog log)
+        IPlayerState playerState, RecordingScanner recordings, SyncOffsetTracker syncOffset, IPluginLog log)
     {
         _framework = framework;
         _bus = bus;
         _store = store;
         _combatClock = combatClock;
         _playerState = playerState;
+        _recordings = recordings;
+        _syncOffset = syncOffset;
         _log = log;
 
         _combatStartSub = bus.Subscribe<CombatStartedEvent>(_ => Schedule());
@@ -67,6 +72,10 @@ public sealed class NoteReminderService : IDisposable
             return;
         }
 
+        // AttachedTo 解決のため、現ゾーンの録画 aggregate を一度だけ取得
+        Recording.AggregatedEvents? agg = null;
+        try { agg = _recordings.Aggregate(_currentZone); } catch { /* 失敗時 null */ }
+
         lock (_gate)
         {
             _pending.Clear();
@@ -80,7 +89,9 @@ public sealed class NoteReminderService : IDisposable
                 {
                     continue;
                 }
-                var fireTime = note.Time - warn;
+                var resolved = TimelineNoteResolver.ResolveTime(note, agg);
+                if (resolved is null) continue;
+                var fireTime = resolved.Value - warn;
                 if (fireTime < 0)
                 {
                     fireTime = 0;
@@ -131,13 +142,15 @@ public sealed class NoteReminderService : IDisposable
         {
             return;
         }
+        // 同期オフセットを適用：実時刻が「予測時刻 + offset」に達したら発火
+        var offset = _syncOffset.CurrentOffsetSec;
 
         List<PendingNote>? toFire = null;
         lock (_gate)
         {
             for (var i = _pending.Count - 1; i >= 0; i--)
             {
-                if (_pending[i].FireAtRelSec <= nowRel.Value)
+                if (_pending[i].FireAtRelSec + offset <= nowRel.Value)
                 {
                     toFire ??= new List<PendingNote>();
                     toFire.Add(_pending[i]);

@@ -72,6 +72,15 @@ public sealed class TimelineNote
     [JsonPropertyName("color")]
     public string? Color { get; set; }
 
+    /// <summary>
+    /// 時刻の代わりに、特定イベントに紐付ける場合のマッチ条件。
+    /// ここが指定されていれば Time は無視され、対象イベントが過去に観測された
+    /// 相対秒（録画から取得）にノートを配置する。
+    /// 例：｛type:cast_start, cast_id:0x189E｝でホリッドロアの瞬間にノートを表示。
+    /// </summary>
+    [JsonPropertyName("attached_to")]
+    public MatchCondition? AttachedTo { get; set; }
+
     /// <summary>表示アイコン。絵文字（"🛡"）または画像 URL を文字列単独 or 配列で指定。
     /// 配列にすると複数アイコンを横並びで描画する（例：ランパート + ブラインド）。</summary>
     [JsonPropertyName("icon")]
