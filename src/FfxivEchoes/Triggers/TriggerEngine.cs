@@ -90,6 +90,7 @@ public sealed class TriggerEngine : IDisposable
                     Zone: _currentZone,
                     TriggerId: trigger.Id,
                     TriggerName: trigger.Name,
+                    Actions: trigger.Actions,
                     SourceEvent: ev));
             }
             catch (Exception ex)

@@ -11,4 +11,11 @@
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- M7: TTS via SAPI5（Windows 専用） -->
+    <PackageReference Include="System.Speech" Version="9.0.0" />
+    <!-- M7: WAV 再生用 SoundPlayer（System.Media.SoundPlayer は Windows 専用） -->
+    <PackageReference Include="System.Windows.Extensions" Version="9.0.0" />
+  </ItemGroup>
 </Project>
