@@ -22,8 +22,9 @@ public class Configuration : IPluginConfiguration
     public bool EchoTriggerFires { get; set; } = true;
 
     /// <summary>true: TTS のみのトリガーが発火したとき、自動で overlay_text を追加して
-    /// 画面中央にも 3 秒間その文字を出す。デフォルト ON。OFF にすると音声だけ。</summary>
-    public bool AutoVisualForTts { get; set; } = true;
+    /// 画面中央にも 3 秒間その文字を出す。デフォルト OFF（中央表示は邪魔なため）。
+    /// 必要なときはユーザーが各トリガーに明示的に overlay_text を入れる。</summary>
+    public bool AutoVisualForTts { get; set; } = false;
 
     // プロファイル
     public string ActiveProfile { get; set; } = "default";

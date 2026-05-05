@@ -185,10 +185,11 @@ public sealed class NoteReminderService : IDisposable
             return;
         }
 
+        // ノートの先行通知も音声のみ。中央オーバーレイは画面が埋まるため出さない。
+        // 視覚通知は LiveTimeline / UpcomingEventsWindow / 「📌 ノート」表示で見える。
         var actions = new List<Models.ActionDefinition>
         {
             new() { Type = "tts", Text = text },
-            new() { Type = "overlay_text", Text = text, Duration = 4.0, Color = note.Color },
         };
         _bus.Publish(new TriggerFiredEvent(
             Timestamp: DateTimeOffset.UtcNow,
