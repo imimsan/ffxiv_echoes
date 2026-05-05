@@ -148,14 +148,7 @@ public sealed class Plugin : IDalamudPlugin
         WindowSystem.AddWindow(_overlayWindow);
 
         // MinimapWindow は SafeZoneContextBuilder に依存するので後で構築する
-
-        // コマンドルータ
-        _commandRouter = BuildCommandRouter();
-        CommandManager.AddHandler(CommandRouter.RootCommand, new CommandInfo(OnCommand)
-        {
-            HelpMessage = "FFXIV Echoes：絶コンテンツ攻略支援。 "
-                          + $"{CommandRouter.RootCommand} help でサブコマンド一覧。",
-        });
+        // CommandRouter の構築は依存先（_recordingController 等）が揃った後に行う
 
         // M3: キャプチャ群（イベントバスは前段で構築済み）
         _combatClock = new CombatClock(_eventBus);
@@ -255,6 +248,15 @@ public sealed class Plugin : IDalamudPlugin
             new StorePositionHandler(_safeZoneEngine, _safeZoneContextBuilder, _variableStore, Log),
         };
         _actionDispatcher = new ActionDispatcher(_eventBus, handlers, Log);
+
+        // コマンドルータ：依存先（_recordingController / _battleRecorder / _liveTimelineWindow など）
+        // が揃った後に構築する。先に構築すると null が捕まり、コマンド実行時に NRE になる
+        _commandRouter = BuildCommandRouter();
+        CommandManager.AddHandler(CommandRouter.RootCommand, new CommandInfo(OnCommand)
+        {
+            HelpMessage = "FFXIV Echoes：絶コンテンツ攻略支援。 "
+                          + $"{CommandRouter.RootCommand} help でサブコマンド一覧。",
+        });
 
         // UI ビルダーへのフック
         PluginInterface.UiBuilder.Draw += WindowSystem.Draw;
