@@ -48,10 +48,7 @@
       "Bash(git push --force-with-lease:*)",
       "Bash(git push origin main:*)",
       "Bash(git push origin main)",
-      "Bash(git push origin develop:*)",
-      "Bash(git push origin develop)",
       "Bash(git push origin HEAD:main:*)",
-      "Bash(git push origin HEAD:develop:*)",
       "Bash(git push --delete:*)",
       "Bash(git push origin --delete:*)",
 
@@ -72,7 +69,6 @@
       "Bash(git commit -n:*)",
       "Bash(git commit --no-gpg-sign:*)",
 
-      "Bash(gh pr merge:*)",
       "Bash(gh pr close:*)",
       "Bash(gh repo delete:*)",
       "Bash(gh release delete:*)",
@@ -93,6 +89,7 @@
     "ask": [
       "Bash(gh pr create --base main:*)",
       "Bash(gh pr create -B main:*)",
+      "Bash(gh pr merge:*)",
       "Bash(git merge:*)",
       "Bash(git rebase:*)",
       "Bash(git cherry-pick:*)",

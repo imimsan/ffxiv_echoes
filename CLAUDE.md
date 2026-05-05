@@ -58,7 +58,19 @@ main ── develop ── feature/m1-dev-environment
 
 - [SPEC.md](./SPEC.md) — メイン仕様書
 - [roadmap.md](./roadmap.md) — 実装ロードマップ
+- [docs/dev-setup.md](./docs/dev-setup.md) — 開発環境構築（M1）の手順
 - [trigger-schema.json](./trigger-schema.json) — トリガー定義のJSONスキーマ
 - [極エヌオー討滅戦.json](./極エヌオー討滅戦.json) — サンプルトリガー（基本）
 - [絶妖星乱舞.json](./絶妖星乱舞.json) — サンプルトリガー（高度）
 - [sample-recording.jsonl](./sample-recording.jsonl) — 録画ログサンプル
+
+## プロジェクト構成（M1 時点）
+
+- `FfxivEchoes.sln` — ソリューション
+- `src/FfxivEchoes/FfxivEchoes.csproj` — プラグイン本体（`Dalamud.NET.Sdk/15.0.0`）
+- `src/FfxivEchoes/FfxivEchoes.json` — Dalamud プラグインマニフェスト
+- `src/FfxivEchoes/Plugin.cs` — エントリポイント（`IDalamudPlugin` 実装）
+- `src/FfxivEchoes/Configuration.cs` — `IPluginConfiguration` 実装
+- `src/FfxivEchoes/Windows/` — ImGui ウィンドウ群
+
+スラッシュコマンド：`/echoes` でメインウィンドウを開く。

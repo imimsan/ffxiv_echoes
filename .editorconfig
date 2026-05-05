@@ -1,0 +1,89 @@
+root = true
+# top-most EditorConfig file
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# 4 space indentation by default
+indent_style = space
+indent_size = 4
+
+# Markdown / YAML 系は trailing whitespace を温存（Markdown は line break 用に末尾2スペースを使う）
+[*.md]
+trim_trailing_whitespace = false
+
+[*.{yml,yaml}]
+indent_size = 2
+
+# Windows バッチ系は CRLF
+[*.{bat,cmd,ps1}]
+end_of_line = crlf
+
+# C# / .NET 系の規約
+[*.{cs,csx,vb,vbx,csproj,vbproj,proj,props,targets,sln}]
+indent_style = space
+indent_size = 4
+tab_width = 4
+
+# C# 言語スタイル
+[*.cs]
+# コードブロックは Allman 形式（{ を改行して開く）
+csharp_new_line_before_open_brace = all
+csharp_new_line_before_else = true
+csharp_new_line_before_catch = true
+csharp_new_line_before_finally = true
+csharp_indent_braces = false
+
+# var の使い方
+csharp_style_var_for_built_in_types = true:suggestion
+csharp_style_var_when_type_is_apparent = true:suggestion
+csharp_style_var_elsewhere = false:suggestion
+
+# 空白の扱い
+csharp_space_after_keywords_in_control_flow_statements = true
+csharp_space_between_method_call_parameter_list_parentheses = false
+csharp_space_between_method_declaration_parameter_list_parentheses = false
+csharp_space_between_parentheses = none
+csharp_space_around_binary_operators = before_and_after
+
+# .NET 命名規則
+dotnet_style_predefined_type_for_member_access = true:suggestion
+dotnet_style_require_accessibility_modifiers = for_non_interface_members:suggestion
+dotnet_style_qualification_for_field = false:suggestion
+dotnet_style_qualification_for_property = false:suggestion
+dotnet_style_qualification_for_method = false:suggestion
+dotnet_style_qualification_for_event = false:suggestion
+
+# private フィールドは _camelCase（coding-rules.md に準拠）
+dotnet_naming_rule.private_fields_rule.severity = warning
+dotnet_naming_rule.private_fields_rule.style = underscore_camel_case_style
+dotnet_naming_rule.private_fields_rule.symbols = private_fields_symbols
+
+dotnet_naming_symbols.private_fields_symbols.applicable_kinds = field
+dotnet_naming_symbols.private_fields_symbols.applicable_accessibilities = private
+
+dotnet_naming_style.underscore_camel_case_style.capitalization = camel_case
+dotnet_naming_style.underscore_camel_case_style.required_prefix = _
+
+# 定数は PascalCase
+dotnet_naming_rule.constants_rule.severity = warning
+dotnet_naming_rule.constants_rule.style = pascal_case_style
+dotnet_naming_rule.constants_rule.symbols = constants_symbols
+
+dotnet_naming_symbols.constants_symbols.applicable_kinds = field
+dotnet_naming_symbols.constants_symbols.applicable_accessibilities = *
+dotnet_naming_symbols.constants_symbols.required_modifiers = const
+
+dotnet_naming_style.pascal_case_style.capitalization = pascal_case
+
+# JSON / JSONL は 2 スペース
+[*.{json,jsonl}]
+indent_size = 2
+
+# シェルは LF
+[*.sh]
+end_of_line = lf
+indent_size = 2
