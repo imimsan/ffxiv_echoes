@@ -1,0 +1,18 @@
+{
+  "Author": "imimsan",
+  "Name": "FFXIV Echoes",
+  "Punchline": "絶コンテンツ攻略支援：イベント検知 → 音声・表示・安置指示。",
+  "Description": "FF14の絶コンテンツ攻略を支援するプラグイン。戦闘ログを録画してGUIでトリガー化し、キャスト/ステータス/アクション等のイベントに対して音声読み上げ・画面表示・タイマー・安置位置指示を発動する。詳細は SPEC.md を参照。",
+  "ApplicableVersion": "any",
+  "RepoUrl": "https://github.com/imimsan/ffxiv_echoes",
+  "Tags": [
+    "raid",
+    "ultimate",
+    "trigger",
+    "tts"
+  ],
+  "CategoryTags": [
+    "Other"
+  ],
+  "AcceptsFeedback": false
+}

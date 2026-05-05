@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+  <PropertyGroup>
+    <Version>0.0.1.0</Version>
+    <Authors>imimsan</Authors>
+    <Company>imimsan</Company>
+    <Description>FFXIV 絶コンテンツ攻略支援プラグイン (Dalamud)</Description>
+    <PackageProjectUrl>https://github.com/imimsan/ffxiv_echoes</PackageProjectUrl>
+    <IsPackable>false</IsPackable>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+</Project>
