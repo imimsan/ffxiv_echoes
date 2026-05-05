@@ -80,6 +80,11 @@ public sealed class TriggerEditorTab : ITab
                 DrawFileSettingsPanel();
                 ImGui.EndTabItem();
             }
+            if (ImGui.BeginTabItem("バックアップ"))
+            {
+                DrawBackupsPanel(zone);
+                ImGui.EndTabItem();
+            }
             ImGui.EndTabBar();
         }
     }
@@ -516,6 +521,84 @@ public sealed class TriggerEditorTab : ITab
         if (path is not null)
         {
             ImGui.TextDisabled($"ファイル: {path}");
+        }
+    }
+
+    private string? _pendingRestorePath;
+
+    private void DrawBackupsPanel(string zone)
+    {
+        var backupManager = _triggerStore.BackupManager;
+        if (backupManager is null)
+        {
+            ImGui.TextDisabled("バックアップ機構が利用できません。");
+            return;
+        }
+
+        ImGui.TextWrapped("ゾーン定義の保存（上書き）時には、直前の状態が自動でバックアップされます。" +
+            "古いバックアップは保持上限を超えると自動削除されます。");
+        ImGui.Spacing();
+
+        var backups = backupManager.List(zone);
+        ImGui.TextDisabled($"{backups.Count} 件のバックアップ");
+        ImGui.Spacing();
+
+        if (backups.Count == 0)
+        {
+            ImGui.TextWrapped("まだバックアップがありません。一度「保存」を行うとここに表示されます。");
+            return;
+        }
+
+        if (ImGui.BeginTable("##backups-table", 4,
+            ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp |
+            ImGuiTableFlags.ScrollY))
+        {
+            ImGui.TableSetupColumn("作成日時", ImGuiTableColumnFlags.WidthStretch, 2.0f);
+            ImGui.TableSetupColumn("サイズ", ImGuiTableColumnFlags.WidthFixed, 80f * ImGuiHelpers.GlobalScale);
+            ImGui.TableSetupColumn("ファイル", ImGuiTableColumnFlags.WidthStretch, 3.0f);
+            ImGui.TableSetupColumn("操作", ImGuiTableColumnFlags.WidthFixed, 130f * ImGuiHelpers.GlobalScale);
+            ImGui.TableHeadersRow();
+
+            foreach (var backup in backups)
+            {
+                ImGui.TableNextRow();
+                ImGui.TableNextColumn(); ImGui.TextUnformatted(backup.CreatedAtLocal.ToString("yyyy-MM-dd HH:mm:ss"));
+                ImGui.TableNextColumn(); ImGui.TextUnformatted($"{backup.Size:N0} B");
+                ImGui.TableNextColumn(); ImGui.TextUnformatted(System.IO.Path.GetFileName(backup.Path));
+                ImGui.TableNextColumn();
+                if (ImGui.SmallButton($"復元##{backup.Path}"))
+                {
+                    _pendingRestorePath = backup.Path;
+                    ImGui.OpenPopup("restore-confirm");
+                }
+            }
+            ImGui.EndTable();
+        }
+
+        if (ImGui.BeginPopupModal("restore-confirm", ImGuiWindowFlags.AlwaysAutoResize))
+        {
+            ImGui.TextWrapped("このバックアップで現在の定義を上書きしますか？");
+            ImGui.TextDisabled(_pendingRestorePath ?? string.Empty);
+            ImGui.Spacing();
+            ImGui.TextWrapped("（上書き前の現状もバックアップが取られます）");
+            ImGui.Spacing();
+            if (ImGui.Button("復元する"))
+            {
+                if (_pendingRestorePath is { } path)
+                {
+                    _triggerStore.RestoreFromBackup(zone, path);
+                    LoadWorkingCopy(zone);
+                }
+                _pendingRestorePath = null;
+                ImGui.CloseCurrentPopup();
+            }
+            ImGui.SameLine();
+            if (ImGui.Button("キャンセル"))
+            {
+                _pendingRestorePath = null;
+                ImGui.CloseCurrentPopup();
+            }
+            ImGui.EndPopup();
         }
     }
 

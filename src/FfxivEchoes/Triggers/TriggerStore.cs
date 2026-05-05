@@ -13,6 +13,7 @@ namespace FfxivEchoes.Triggers;
 public sealed class TriggerStore
 {
     private readonly TriggerLoader _loader;
+    private readonly TriggerBackupManager? _backupManager;
     private readonly IPluginLog _log;
     private readonly object _gate = new();
 
@@ -20,11 +21,14 @@ public sealed class TriggerStore
     private Dictionary<string, string> _zoneToFilePath = new(StringComparer.OrdinalIgnoreCase);
     private List<TriggerLoadResult> _lastResults = new();
 
-    public TriggerStore(TriggerLoader loader, IPluginLog log)
+    public TriggerStore(TriggerLoader loader, IPluginLog log, TriggerBackupManager? backupManager = null)
     {
         _loader = loader;
+        _backupManager = backupManager;
         _log = log;
     }
+
+    public TriggerBackupManager? BackupManager => _backupManager;
 
     /// <summary>最後の <see cref="Reload"/> 結果が完了した時刻。</summary>
     public DateTimeOffset? LastReloadedAt { get; private set; }
@@ -169,12 +173,47 @@ public sealed class TriggerStore
     /// </summary>
     public string SaveZone(string zone, TriggerFile file)
     {
+        // 既存ファイルがあればバックアップを取ってから上書き
         var existingPath = GetFilePathForZone(zone);
+        if (existingPath is not null && _backupManager is not null)
+        {
+            var existing = GetByZone(zone);
+            if (existing is not null)
+            {
+                try
+                {
+                    _backupManager.CreateBackup(zone, existing);
+                }
+                catch (Exception ex)
+                {
+                    _log.Warning(ex, "[FfxivEchoes] バックアップ作成に失敗（保存は続行）：{Zone}", zone);
+                }
+            }
+        }
+
         var path = existingPath ?? Path.Combine(_loader.TriggersDirectory, $"{Sanitize(zone)}.json");
         TriggerSerializer.WriteToFile(file, path);
         _log.Information("[FfxivEchoes] トリガー定義を保存：{Path}", path);
         Reload();
         return path;
+    }
+
+    /// <summary>バックアップファイルから現在の定義を復元する（バックアップ取得 → 上書き → リロード）。</summary>
+    public bool RestoreFromBackup(string zone, string backupPath)
+    {
+        if (_backupManager is null)
+        {
+            _log.Warning("[FfxivEchoes] BackupManager 未構成のため復元不可");
+            return false;
+        }
+        var loaded = _backupManager.Load(backupPath);
+        if (loaded is null)
+        {
+            return false;
+        }
+        SaveZone(zone, loaded);
+        _log.Information("[FfxivEchoes] バックアップから復元：{Zone} ← {Path}", zone, backupPath);
+        return true;
     }
 
     private static string Sanitize(string s)
