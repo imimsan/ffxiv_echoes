@@ -1,0 +1,419 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "FF14 攻略支援プラグイン トリガー定義",
+  "description": "コンテンツ単位のトリガー定義ファイル",
+  "type": "object",
+  "required": ["version", "zone", "triggers"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "トリガー定義フォーマットのバージョン",
+      "examples": ["1.0"]
+    },
+    "zone": {
+      "type": "string",
+      "description": "コンテンツ名（日本語）",
+      "examples": ["極エヌオー討滅戦", "絶妖星乱舞"]
+    },
+    "auto_settings": {
+      "type": "object",
+      "description": "コンテンツ突入時の自動挙動設定",
+      "properties": {
+        "enable_triggers": {
+          "type": "boolean",
+          "description": "突入時にトリガーを自動有効化",
+          "default": false
+        },
+        "auto_record": {
+          "type": "boolean",
+          "description": "突入時にログ記録を自動開始",
+          "default": false
+        },
+        "show_timeline": {
+          "type": "boolean",
+          "description": "突入時にライブタイムラインを表示",
+          "default": false
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "description": "ファイルのメタ情報",
+      "properties": {
+        "created_at": { "type": "string", "format": "date-time" },
+        "last_modified": { "type": "string", "format": "date-time" },
+        "author": { "type": "string" },
+        "notes": { "type": "string" }
+      }
+    },
+    "sync_points": {
+      "type": "array",
+      "description": "ライブタイムラインの時刻補正用イベント",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "expected_time"],
+        "properties": {
+          "id": { "type": "string" },
+          "type": {
+            "type": "string",
+            "enum": ["cast_start", "cast_complete", "action_used", "status_gain", "hp_change"]
+          },
+          "cast_id": { "type": "string" },
+          "status_id": { "type": "integer" },
+          "action_id": { "type": "string" },
+          "expected_time": {
+            "type": "number",
+            "description": "戦闘開始からの期待時刻（秒）"
+          },
+          "tolerance": {
+            "type": "number",
+            "description": "許容誤差（秒）",
+            "default": 5.0
+          }
+        }
+      }
+    },
+    "triggers": {
+      "type": "array",
+      "description": "トリガー定義の配列",
+      "items": { "$ref": "#/definitions/trigger" }
+    },
+    "ignored_events": {
+      "type": "array",
+      "description": "無視済みイベント（トリガー化不要として明示的にマークされたもの）",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string" },
+          "cast_id": { "type": "string" },
+          "status_id": { "type": "integer" },
+          "action_id": { "type": "string" },
+          "reason": { "type": "string" }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "trigger": {
+      "type": "object",
+      "required": ["id", "type", "actions"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "トリガーの一意ID"
+        },
+        "name": {
+          "type": "string",
+          "description": "人間が読むための説明名"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "cast_start",
+            "cast_complete",
+            "cast_cancel",
+            "action_used",
+            "status_gain",
+            "status_lose",
+            "status_update",
+            "hp_change",
+            "zone_change",
+            "combat_start",
+            "combat_end",
+            "object_appear",
+            "object_disappear",
+            "timeline_elapsed"
+          ]
+        },
+        "match": {
+          "type": "object",
+          "description": "マッチ条件（typeに応じたフィールドを使用）",
+          "properties": {
+            "cast_id": { "type": "string", "description": "キャストID（16進文字列）" },
+            "cast_name": { "type": "string" },
+            "status_id": { "type": "integer" },
+            "status_name": { "type": "string" },
+            "action_id": { "type": "string" },
+            "action_name": { "type": "string" },
+            "source": { "type": "string" },
+            "source_id": { "type": "integer" },
+            "target": { "$ref": "#/definitions/target" },
+            "duration_range": {
+              "type": "object",
+              "properties": {
+                "min": { "type": "number" },
+                "max": { "type": "number" }
+              }
+            },
+            "stacks": {
+              "oneOf": [
+                { "type": "object", "properties": { "equals": { "type": "integer" } } },
+                { "type": "object", "properties": { "min": { "type": "integer" } } },
+                { "type": "object", "properties": { "max": { "type": "integer" } } }
+              ]
+            },
+            "hp_pct": {
+              "type": "object",
+              "properties": {
+                "below": { "type": "number" },
+                "above": { "type": "number" }
+              }
+            },
+            "actor": { "type": "string" },
+            "time": { "type": "number", "description": "タイムライン基点からの秒数" },
+            "tolerance": { "type": "number", "default": 2.0 }
+          }
+        },
+        "conditions": {
+          "$ref": "#/definitions/conditions"
+        },
+        "actions": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/action" }
+        },
+        "set_variable": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "operation": {
+              "type": "string",
+              "enum": ["set", "increment", "decrement", "reset"]
+            },
+            "value": {}
+          }
+        },
+        "cooldown": {
+          "type": "number",
+          "description": "連続発動防止のクールダウン（秒）"
+        },
+        "metadata": {
+          "type": "object",
+          "properties": {
+            "created_at": { "type": "string", "format": "date-time" },
+            "last_modified": { "type": "string", "format": "date-time" },
+            "source_logs": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "notes": { "type": "string" }
+          }
+        }
+      }
+    },
+    "target": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "self", "other", "any", "party",
+            "tank", "mt", "st",
+            "healer", "h1", "h2",
+            "dps", "melee", "ranged", "caster",
+            "marker_a", "marker_b", "marker_c", "marker_d",
+            "marker_e", "marker_f", "marker_g", "marker_h",
+            "marker_1", "marker_2", "marker_3", "marker_4",
+            "marker_5", "marker_6", "marker_7", "marker_8"
+          ]
+        },
+        {
+          "type": "array",
+          "items": { "$ref": "#/definitions/target" }
+        }
+      ]
+    },
+    "conditions": {
+      "type": "object",
+      "description": "複合条件（AND/OR）",
+      "properties": {
+        "all_of": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/condition_clause" }
+        },
+        "any_of": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/condition_clause" }
+        }
+      }
+    },
+    "condition_clause": {
+      "type": "object",
+      "description": "単一条件もしくは複合条件のネスト",
+      "properties": {
+        "target": { "$ref": "#/definitions/target" },
+        "duration_range": {
+          "type": "object",
+          "properties": {
+            "min": { "type": "number" },
+            "max": { "type": "number" }
+          }
+        },
+        "stacks": {},
+        "hp_pct": {},
+        "variable": { "type": "string" },
+        "equals": {},
+        "not_equals": {},
+        "greater_than": {},
+        "less_than": {},
+        "all_of": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/condition_clause" }
+        },
+        "any_of": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/condition_clause" }
+        }
+      }
+    },
+    "action": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "tts",
+            "wav",
+            "overlay_text",
+            "overlay_corner_text",
+            "timer_bar",
+            "chat_echo",
+            "direction_call",
+            "screen_arrow",
+            "field_marker",
+            "proximity_feedback",
+            "set_variable",
+            "chain_trigger"
+          ]
+        },
+        "delay": {
+          "type": "number",
+          "description": "発動遅延（秒）",
+          "default": 0
+        },
+        "text": { "type": "string" },
+        "file": { "type": "string" },
+        "voice": { "type": "string" },
+        "rate": { "type": "number", "default": 1.0 },
+        "volume": { "type": "number", "minimum": 0, "maximum": 1, "default": 1.0 },
+        "duration": { "type": "number" },
+        "color": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "size": { "type": "string", "enum": ["small", "medium", "large"] },
+        "position": {
+          "oneOf": [
+            { "type": "string" },
+            {
+              "type": "object",
+              "properties": {
+                "x": { "type": "number" },
+                "y": { "type": "number" },
+                "z": { "type": "number" }
+              }
+            }
+          ]
+        },
+        "label": { "type": "string" },
+        "warn_at": { "type": "number" },
+        "safe_zone": {
+          "$ref": "#/definitions/safe_zone_calculation"
+        },
+        "format": {
+          "type": "string",
+          "enum": ["cardinal", "cardinal_jp", "clock", "relative_jp", "degrees"]
+        },
+        "tts": { "type": "boolean" },
+        "overlay": { "type": "boolean" },
+        "from": { "type": "string" },
+        "to": {
+          "oneOf": [
+            { "type": "string" },
+            { "$ref": "#/definitions/safe_zone_calculation" }
+          ]
+        },
+        "shape": {
+          "type": "string",
+          "enum": ["circle", "square", "x_mark", "arrow"]
+        },
+        "radius": { "type": "number" },
+        "tolerance": { "type": "number" },
+        "in_sound": { "type": "string" },
+        "out_sound": { "type": "string" },
+        "show_distance": { "type": "boolean" },
+        "trigger_id": { "type": "string", "description": "chain_trigger用、連鎖発動するトリガーID" }
+      }
+    },
+    "safe_zone_calculation": {
+      "type": "object",
+      "description": "安置位置の計算定義",
+      "required": ["method"],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "fixed",
+            "boss_relative",
+            "marker_relative",
+            "inverse_of_telegraph",
+            "find_actor_with_status",
+            "find_actor_without_status",
+            "find_actor_not_casting",
+            "midpoint",
+            "line_perpendicular",
+            "between_actors",
+            "find_actor_by_distance",
+            "telegraph_gap",
+            "party_member_relative",
+            "arena_center_relative",
+            "stored_position",
+            "intersection"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "description": "method に応じたパラメータ",
+          "properties": {
+            "direction": { "type": "string" },
+            "angle": { "type": "number" },
+            "distance": { "type": "number" },
+            "origin": { "type": "string" },
+            "rotation": { "type": "number" },
+            "telegraph_source": { "type": "string" },
+            "status_id": { "type": "integer" },
+            "actor_filter": { "type": "string", "enum": ["enemy", "ally", "any"] },
+            "actors": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "from": { "type": "string" },
+            "to": { "type": "string" },
+            "side": { "type": "string", "enum": ["left", "right"] },
+            "ratio": { "type": "number", "minimum": 0, "maximum": 1 },
+            "target": { "type": "string" },
+            "filter": { "type": "string" },
+            "select": { "type": "string", "enum": ["nearest", "farthest"] },
+            "role": { "type": "string" },
+            "key": { "type": "string", "description": "stored_position用のキー" }
+          }
+        },
+        "constraints": {
+          "type": "array",
+          "description": "intersection用、複数の制約条件",
+          "items": { "$ref": "#/definitions/safe_zone_calculation" }
+        },
+        "output_format": {
+          "type": "object",
+          "properties": {
+            "tts_template": { "type": "string" },
+            "direction_style": {
+              "type": "string",
+              "enum": ["cardinal", "cardinal_jp", "clock", "relative_jp", "degrees"]
+            }
+          }
+        }
+      }
+    }
+  }
+}

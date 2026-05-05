@@ -1,0 +1,409 @@
+{
+  "version": "1.0",
+  "zone": "絶妖星乱舞",
+  "auto_settings": {
+    "enable_triggers": true,
+    "auto_record": true,
+    "show_timeline": true
+  },
+  "metadata": {
+    "created_at": "2026-06-02T22:00:00Z",
+    "last_modified": "2026-06-02T22:00:00Z",
+    "notes": "絶妖星乱舞 サンプル（実装後の録画ログから実IDで置き換え予定）。フェーズ3機能の使用例を含む"
+  },
+  "sync_points": [
+    {
+      "id": "p2_start",
+      "type": "cast_start",
+      "cast_id": "0xPHASE2_START",
+      "expected_time": 180.0,
+      "tolerance": 10.0
+    },
+    {
+      "id": "p3_start",
+      "type": "cast_start",
+      "cast_id": "0xPHASE3_START",
+      "expected_time": 360.0,
+      "tolerance": 10.0
+    },
+    {
+      "id": "p5_start",
+      "type": "cast_start",
+      "cast_id": "0xPHASE5_START",
+      "expected_time": 720.0,
+      "tolerance": 15.0
+    }
+  ],
+  "triggers": [
+    {
+      "id": "p5_count_init",
+      "name": "P5カウンター初期化",
+      "enabled": true,
+      "type": "cast_start",
+      "match": {
+        "cast_id": "0xPHASE5_START"
+      },
+      "actions": [],
+      "set_variable": {
+        "name": "p5_safe_count",
+        "operation": "reset"
+      },
+      "metadata": {
+        "notes": "P5突入時に状態変数をリセット"
+      }
+    },
+    {
+      "id": "p5_safe_zone_counter",
+      "name": "P5安置ギミック発生カウント",
+      "enabled": true,
+      "type": "cast_start",
+      "match": {
+        "cast_id": "0xP5_NARROW_SAFE"
+      },
+      "actions": [],
+      "set_variable": {
+        "name": "p5_safe_count",
+        "operation": "increment"
+      }
+    },
+    {
+      "id": "p5_safe_first",
+      "name": "P5激狭安置（1回目）",
+      "enabled": true,
+      "type": "cast_start",
+      "match": {
+        "cast_id": "0xP5_NARROW_SAFE"
+      },
+      "conditions": {
+        "all_of": [
+          { "variable": "p5_safe_count", "equals": 1 }
+        ]
+      },
+      "actions": [
+        {
+          "type": "direction_call",
+          "safe_zone": {
+            "method": "telegraph_gap",
+            "params": {
+              "actors": "$all_telegraphing_actors"
+            },
+            "output_format": {
+              "tts_template": "安置 ${direction_clock}時方向",
+              "direction_style": "clock"
+            }
+          },
+          "tts": true,
+          "overlay": true
+        },
+        {
+          "type": "field_marker",
+          "position": {
+            "method": "telegraph_gap",
+            "params": {
+              "actors": "$all_telegraphing_actors"
+            }
+          },
+          "shape": "circle",
+          "radius": 1.5,
+          "color": "#00FF00",
+          "duration": 5
+        },
+        {
+          "type": "proximity_feedback",
+          "safe_zone": {
+            "method": "telegraph_gap",
+            "params": {
+              "actors": "$all_telegraphing_actors"
+            }
+          },
+          "tolerance": 1.0,
+          "in_sound": "sounds/safe_in.wav",
+          "out_sound": "sounds/safe_out.wav",
+          "show_distance": true
+        },
+        {
+          "type": "timer_bar",
+          "label": "安置発動まで",
+          "duration": 5,
+          "color": "#FF0000",
+          "warn_at": 2
+        }
+      ],
+      "metadata": {
+        "notes": "telegraph_gapプリセットで複数AoEの隙間を計算、激狭安置に対応。距離フィードバック付き"
+      }
+    },
+    {
+      "id": "p5_safe_subsequent",
+      "name": "P5激狭安置（2回目以降）",
+      "enabled": true,
+      "type": "cast_start",
+      "match": {
+        "cast_id": "0xP5_NARROW_SAFE"
+      },
+      "conditions": {
+        "all_of": [
+          { "variable": "p5_safe_count", "greater_than": 1 }
+        ]
+      },
+      "actions": [
+        {
+          "type": "tts",
+          "text": "2回目以降、前回と違う位置"
+        },
+        {
+          "type": "field_marker",
+          "position": {
+            "method": "telegraph_gap",
+            "params": {
+              "actors": "$all_telegraphing_actors"
+            }
+          },
+          "shape": "circle",
+          "radius": 1.5,
+          "color": "#00FF00",
+          "duration": 5
+        }
+      ]
+    },
+    {
+      "id": "debuff_short_assignment",
+      "name": "短デバフ振り分け",
+      "enabled": true,
+      "type": "status_gain",
+      "match": {
+        "status_id": 12345,
+        "target": "self"
+      },
+      "conditions": {
+        "all_of": [
+          { "duration_range": { "min": 22, "max": 24 } }
+        ]
+      },
+      "actions": [
+        {
+          "type": "tts",
+          "text": "短デバフ、先処理"
+        },
+        {
+          "type": "overlay_text",
+          "text": "短（先）",
+          "duration": 22,
+          "color": "#FF0000",
+          "size": "medium"
+        },
+        {
+          "type": "timer_bar",
+          "label": "短デバフ",
+          "duration": 22,
+          "color": "#FF0000",
+          "warn_at": 5
+        }
+      ],
+      "metadata": {
+        "notes": "デバフ秒数23秒で短組と判定する例"
+      }
+    },
+    {
+      "id": "debuff_long_assignment",
+      "name": "長デバフ振り分け",
+      "enabled": true,
+      "type": "status_gain",
+      "match": {
+        "status_id": 12345,
+        "target": "self"
+      },
+      "conditions": {
+        "all_of": [
+          { "duration_range": { "min": 38, "max": 42 } }
+        ]
+      },
+      "actions": [
+        {
+          "type": "tts",
+          "text": "長デバフ、後処理"
+        },
+        {
+          "type": "overlay_text",
+          "text": "長（後）",
+          "duration": 40,
+          "color": "#0066FF",
+          "size": "medium"
+        },
+        {
+          "type": "timer_bar",
+          "label": "長デバフ",
+          "duration": 40,
+          "color": "#0066FF",
+          "warn_at": 5
+        }
+      ]
+    },
+    {
+      "id": "tower_unmarked_safe",
+      "name": "塔の安置（手を上げてないボス）",
+      "enabled": true,
+      "type": "cast_start",
+      "match": {
+        "cast_id": "0xPRISMATIC_CAST"
+      },
+      "actions": [
+        {
+          "type": "direction_call",
+          "safe_zone": {
+            "method": "find_actor_without_status",
+            "params": {
+              "status_id": 5555,
+              "actor_filter": "enemy"
+            },
+            "output_format": {
+              "tts_template": "${direction_cardinal_jp}",
+              "direction_style": "cardinal_jp"
+            }
+          },
+          "tts": true,
+          "overlay": true
+        },
+        {
+          "type": "screen_arrow",
+          "from": "self",
+          "to": {
+            "method": "find_actor_without_status",
+            "params": {
+              "status_id": 5555,
+              "actor_filter": "enemy"
+            }
+          },
+          "color": "#00FF00",
+          "duration": 6
+        }
+      ],
+      "metadata": {
+        "notes": "プリズマチック系ギミック。手を上げる(ステータス付与)してないボスの位置を安置として算出"
+      }
+    },
+    {
+      "id": "complex_intersection_safe",
+      "name": "複合安置（ボス背面 かつ AoE反対）",
+      "enabled": true,
+      "type": "cast_start",
+      "match": {
+        "cast_id": "0xCOMPLEX_GIMMICK"
+      },
+      "actions": [
+        {
+          "type": "field_marker",
+          "position": {
+            "method": "intersection",
+            "constraints": [
+              {
+                "method": "boss_relative",
+                "params": { "angle": 180, "distance": 10 }
+              },
+              {
+                "method": "inverse_of_telegraph",
+                "params": { "telegraph_source": "$cast_actor" }
+              }
+            ]
+          },
+          "shape": "circle",
+          "radius": 2,
+          "color": "#00FF00",
+          "duration": 6
+        },
+        {
+          "type": "tts",
+          "text": "ボス背面、AoE反対側"
+        }
+      ],
+      "metadata": {
+        "notes": "複合ギミックの例。複数の制約を満たす点を計算"
+      }
+    },
+    {
+      "id": "remember_first_position",
+      "name": "1回目の処理位置を記憶",
+      "enabled": true,
+      "type": "cast_complete",
+      "match": {
+        "cast_id": "0xFIRST_GIMMICK"
+      },
+      "actions": [
+        {
+          "type": "set_variable",
+          "trigger_id": "store_position_internal"
+        }
+      ],
+      "set_variable": {
+        "name": "first_safe_zone",
+        "operation": "set",
+        "value": "$self_position"
+      }
+    },
+    {
+      "id": "second_avoid_first",
+      "name": "2回目は1回目と違う位置",
+      "enabled": true,
+      "type": "cast_start",
+      "match": {
+        "cast_id": "0xSECOND_GIMMICK"
+      },
+      "actions": [
+        {
+          "type": "tts",
+          "text": "1回目と反対側"
+        },
+        {
+          "type": "field_marker",
+          "position": {
+            "method": "stored_position",
+            "params": {
+              "key": "first_safe_zone"
+            },
+            "output_format": {
+              "tts_template": "前回ここ"
+            }
+          },
+          "shape": "x_mark",
+          "radius": 2,
+          "color": "#FF0000",
+          "duration": 5
+        }
+      ],
+      "metadata": {
+        "notes": "履歴ベースの安置計算。前回の安置を「危険マーク」として表示"
+      }
+    },
+    {
+      "id": "tank_swap_call",
+      "name": "タンクスイッチコール",
+      "enabled": true,
+      "type": "status_gain",
+      "match": {
+        "status_id": 7777,
+        "target": "tank"
+      },
+      "conditions": {
+        "all_of": [
+          {
+            "any_of": [
+              { "stacks": { "equals": 2 } },
+              { "duration_range": { "min": 8, "max": 12 } }
+            ]
+          }
+        ]
+      },
+      "actions": [
+        {
+          "type": "tts",
+          "text": "タンクスイッチ"
+        },
+        {
+          "type": "wav",
+          "file": "alerts/tank_swap.wav"
+        }
+      ]
+    }
+  ],
+  "ignored_events": []
+}

@@ -1,0 +1,266 @@
+{
+  "version": "1.0",
+  "zone": "極エヌオー討滅戦",
+  "auto_settings": {
+    "enable_triggers": true,
+    "auto_record": false,
+    "show_timeline": true
+  },
+  "metadata": {
+    "created_at": "2026-05-05T22:00:00Z",
+    "last_modified": "2026-05-05T22:00:00Z",
+    "notes": "極エヌオー サンプルトリガー（実装時の参考用、実際のキャストID等は録画ログから取得して置き換える）"
+  },
+  "sync_points": [
+    {
+      "id": "phase2_transition",
+      "type": "cast_start",
+      "cast_id": "0xPHASE2_CAST_ID",
+      "expected_time": 240.0,
+      "tolerance": 10.0
+    }
+  ],
+  "triggers": [
+    {
+      "id": "muno_higai_outer",
+      "name": "無の肥大（外周）警告",
+      "enabled": true,
+      "type": "cast_start",
+      "match": {
+        "cast_id": "0xCAST_ID_PLACEHOLDER",
+        "source": "エヌオー"
+      },
+      "actions": [
+        {
+          "type": "tts",
+          "text": "外周の無から離れる"
+        },
+        {
+          "type": "overlay_text",
+          "text": "外周回避",
+          "duration": 5,
+          "color": "#FF6600",
+          "size": "large"
+        },
+        {
+          "type": "timer_bar",
+          "label": "無の肥大",
+          "duration": 4.7,
+          "color": "#FFAA00",
+          "warn_at": 1.5
+        }
+      ],
+      "metadata": {
+        "notes": "ボスから外周の無に矢印が出るパターン"
+      }
+    },
+    {
+      "id": "muno_tracking_self_first",
+      "name": "無の追跡（自分が1番目）",
+      "enabled": true,
+      "type": "status_gain",
+      "match": {
+        "status_id": 9999,
+        "target": "self"
+      },
+      "conditions": {
+        "all_of": [
+          { "duration_range": { "min": 17, "max": 19 } }
+        ]
+      },
+      "actions": [
+        {
+          "type": "tts",
+          "text": "1番目、時計回りに捨てる"
+        },
+        {
+          "type": "overlay_text",
+          "text": "1番目（時計回り）",
+          "duration": 8,
+          "color": "#FF0000",
+          "size": "large"
+        },
+        {
+          "type": "timer_bar",
+          "label": "追跡切替まで",
+          "duration": 7,
+          "color": "#FF0000",
+          "warn_at": 2
+        }
+      ],
+      "metadata": {
+        "notes": "デバフ秒数で1番目/2番目を判定する例。実際のID・秒数は録画ログから取得"
+      }
+    },
+    {
+      "id": "muno_tracking_self_second",
+      "name": "無の追跡（自分が2番目）",
+      "enabled": true,
+      "type": "status_gain",
+      "match": {
+        "status_id": 9999,
+        "target": "self"
+      },
+      "conditions": {
+        "all_of": [
+          { "duration_range": { "min": 25, "max": 27 } }
+        ]
+      },
+      "actions": [
+        {
+          "type": "tts",
+          "text": "2番目、最初離れて反時計回り"
+        },
+        {
+          "type": "overlay_text",
+          "text": "2番目（反時計回り）",
+          "duration": 8,
+          "color": "#FFAA00",
+          "size": "large"
+        }
+      ]
+    },
+    {
+      "id": "headvolley_judgment",
+      "name": "頭割り人数判定",
+      "enabled": true,
+      "type": "status_gain",
+      "match": {
+        "status_id": 8888,
+        "target": "healer"
+      },
+      "actions": [
+        {
+          "type": "tts",
+          "text": "ヒラに線、人数確認"
+        },
+        {
+          "type": "overlay_text",
+          "text": "頭割り判定",
+          "duration": 5,
+          "color": "#00AAFF",
+          "size": "medium"
+        }
+      ]
+    },
+    {
+      "id": "scattered_aoe_warning",
+      "name": "散開予告",
+      "enabled": true,
+      "type": "cast_start",
+      "match": {
+        "cast_id": "0xSCATTER_CAST_ID"
+      },
+      "actions": [
+        {
+          "type": "tts",
+          "text": "散開"
+        },
+        {
+          "type": "wav",
+          "file": "alerts/scatter.wav",
+          "volume": 0.8
+        }
+      ]
+    },
+    {
+      "id": "boss_back_safe_zone",
+      "name": "ボス背面安置（例）",
+      "enabled": true,
+      "type": "cast_start",
+      "match": {
+        "cast_id": "0xFRONTAL_CAST_ID"
+      },
+      "actions": [
+        {
+          "type": "direction_call",
+          "safe_zone": {
+            "method": "boss_relative",
+            "params": {
+              "angle": 180,
+              "distance": 10
+            },
+            "output_format": {
+              "tts_template": "ボス${direction_jp}",
+              "direction_style": "relative_jp"
+            }
+          },
+          "tts": true,
+          "overlay": true
+        },
+        {
+          "type": "field_marker",
+          "position": {
+            "method": "boss_relative",
+            "params": {
+              "angle": 180,
+              "distance": 10
+            }
+          },
+          "shape": "circle",
+          "radius": 2,
+          "color": "#00FF00",
+          "duration": 5
+        }
+      ],
+      "metadata": {
+        "notes": "ボス相対の安置計算例。極エヌオーで該当ギミックがあれば使用"
+      }
+    },
+    {
+      "id": "merudaun_8way",
+      "name": "メルトダウン 8方向散開",
+      "enabled": true,
+      "type": "cast_start",
+      "match": {
+        "cast_name": "メルトダウン"
+      },
+      "actions": [
+        {
+          "type": "tts",
+          "text": "8方向散開"
+        },
+        {
+          "type": "overlay_text",
+          "text": "8方向散開",
+          "duration": 5,
+          "color": "#FFFF00",
+          "size": "large"
+        }
+      ]
+    },
+    {
+      "id": "phase2_intro",
+      "name": "後半フェーズ開始",
+      "enabled": true,
+      "type": "hp_change",
+      "match": {
+        "actor": "エヌオー",
+        "hp_pct": { "below": 50 }
+      },
+      "cooldown": 60,
+      "actions": [
+        {
+          "type": "tts",
+          "text": "後半開始"
+        },
+        {
+          "type": "chat_echo",
+          "text": "[Plugin] エヌオー HP50%到達 - 後半フェーズへ"
+        }
+      ]
+    }
+  ],
+  "ignored_events": [
+    {
+      "type": "cast_start",
+      "cast_id": "0xINTRO_CAST",
+      "reason": "戦闘開始の演出詠唱、トリガー化不要"
+    },
+    {
+      "type": "status_gain",
+      "status_id": 1001,
+      "reason": "通常の戦闘バフ、無視"
+    }
+  ]
+}

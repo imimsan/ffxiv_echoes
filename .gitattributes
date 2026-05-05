@@ -1,0 +1,46 @@
+# 既定はテキスト自動判定 + LF 改行
+* text=auto eol=lf
+
+# C# / .NET
+*.cs    text eol=lf diff=csharp
+*.csproj text eol=lf
+*.sln   text eol=crlf
+*.props text eol=lf
+*.targets text eol=lf
+*.config text eol=lf
+
+# データ・設定ファイル
+*.json   text eol=lf
+*.jsonl  text eol=lf
+*.md     text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+*.xml    text eol=lf
+*.txt    text eol=lf
+
+# シェル
+*.sh     text eol=lf
+*.bash   text eol=lf
+# Windows バッチは CRLF
+*.bat    text eol=crlf
+*.cmd    text eol=crlf
+*.ps1    text eol=crlf
+
+# バイナリは text 扱いしない
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.ico    binary
+*.wav    binary
+*.mp3    binary
+*.dll    binary
+*.exe    binary
+*.pdb    binary
+*.snk    binary
+*.zip    binary
+*.7z     binary
+*.gz     binary
+
+# 言語別 GitHub linguist のヒント（Dalamud プラグインプロジェクトとして認識させる）
+*.cs    linguist-language=C#

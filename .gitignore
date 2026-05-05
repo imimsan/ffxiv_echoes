@@ -1,0 +1,133 @@
+# =============================================================================
+# .NET / C# build artifacts
+# =============================================================================
+bin/
+obj/
+out/
+build/
+publish/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.userprefs
+
+# Build outputs
+*.dll
+*.exe
+*.pdb
+*.mdb
+*.cache
+*.ilk
+*.meta
+*.obj
+*.iobj
+*.ipdb
+*.tlog
+
+# Test results
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+coverage/
+.coverage*
+
+# NuGet
+*.nupkg
+*.snupkg
+.nuget/
+packages/
+!**/packages/build/
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# =============================================================================
+# IDE / Editor
+# =============================================================================
+# Visual Studio
+.vs/
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+
+# JetBrains Rider / ReSharper
+.idea/
+*.iml
+_ReSharper*/
+*.[Rr]e[Ss]harper
+*.DotSettings.user
+
+# Visual Studio Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# =============================================================================
+# Dalamud-specific
+# =============================================================================
+# Dalamud SDK / runtime references resolved via env var on dev machine
+# (typically %AppData%/XIVLauncher/addon/Hooks/dev)
+dalamud/
+DalamudPackager.props.user
+
+# Local plugin install / debug outputs
+*.vsix.zip
+plugin-output/
+
+# =============================================================================
+# Secrets / environment
+# =============================================================================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+secrets.json
+appsettings.Development.json
+appsettings.Local.json
+
+# =============================================================================
+# User-generated runtime data (per SPEC.md §2.3)
+# These live under %AppData%/XIVLauncher/pluginConfigs but if any local
+# fixture/dev copy is created in-repo, do not commit it.
+# =============================================================================
+recordings/
+triggers_backup/
+config.local.json
+
+# =============================================================================
+# Logs / temporary files
+# =============================================================================
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+.history/
+
+# =============================================================================
+# OS-specific
+# =============================================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# =============================================================================
+# Tooling / Claude Code workspace
+# =============================================================================
+.claude/worktrees/
+.claude/settings.local.json
