@@ -691,6 +691,108 @@ public sealed class TriggerEditorTab : ITab
             trigger.Actions.Add(new ActionDefinition { Type = "tts" });
             _dirty = true;
         }
+        ImGui.SameLine();
+        ImGui.TextDisabled("|");
+        ImGui.SameLine();
+        ImGui.TextDisabled("クイック追加：");
+        ImGui.SameLine();
+        DrawQuickAddButtons(trigger);
+    }
+
+    /// <summary>
+    /// よく使うアクション組合せを 1 クリックで追加するクイック追加ボタン群。
+    /// 「カータライズの範囲を出したい」のような典型ケースを最短で組める。
+    /// </summary>
+    private void DrawQuickAddButtons(TriggerDefinition trigger)
+    {
+        var castName = trigger.Match?.CastName ?? trigger.Name ?? "AoE";
+
+        if (ImGui.SmallButton("ボス AoE 円##qa-aoe"))
+        {
+            // 「ボス位置を中心とする円形 AoE」を field_marker として追加
+            trigger.Actions.Add(new ActionDefinition
+            {
+                Type = "field_marker",
+                Shape = "circle",
+                Radius = 8.0,
+                Duration = 5.0,
+                Color = "#FF6464",
+                SafeZone = new SafeZoneCalculation { Method = "boss_relative" },
+            });
+            _dirty = true;
+        }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip(
+            "ボス中心の赤い円をフィールドに描画。\n" +
+            "半径 8m / 持続 5 秒 / safe_zone=boss_relative。\n" +
+            "保存後は半径や色を編集可能。");
+
+        ImGui.SameLine();
+        if (ImGui.SmallButton("ボス前方コーン##qa-cone"))
+        {
+            trigger.Actions.Add(new ActionDefinition
+            {
+                Type = "arena_view",
+                Gimmick = "cone",
+                Direction = "N",
+                FanDeg = 90,
+                Callout = $"前方回避：{castName}",
+                Duration = 5.0,
+                ArenaRadius = 20.0,
+            });
+            _dirty = true;
+        }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip(
+            "俯瞰アリーナ図に「北向きの 90 度扇形」を表示。\n" +
+            "実際のボスの向きと合わせるには direction を編集。");
+
+        ImGui.SameLine();
+        if (ImGui.SmallButton("外周回避##qa-outer"))
+        {
+            trigger.Actions.Add(new ActionDefinition
+            {
+                Type = "arena_view",
+                Gimmick = "outer_ring",
+                Callout = $"中央安置：{castName}",
+                Duration = 5.0,
+                ArenaRadius = 20.0,
+            });
+            _dirty = true;
+        }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip(
+            "俯瞰アリーナ図に「外周赤・中央緑」の安置パターンを表示。\n" +
+            "全体 AoE で中央に集まるタイプ向け。");
+
+        ImGui.SameLine();
+        if (ImGui.SmallButton("散開##qa-scatter"))
+        {
+            trigger.Actions.Add(new ActionDefinition
+            {
+                Type = "arena_view",
+                Gimmick = "scatter",
+                Callout = $"散開：{castName}",
+                Duration = 5.0,
+                ArenaRadius = 20.0,
+            });
+            _dirty = true;
+        }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip(
+            "俯瞰アリーナ図に「4 方向散開」を表示。");
+
+        ImGui.SameLine();
+        if (ImGui.SmallButton("タイマーバー##qa-timer"))
+        {
+            trigger.Actions.Add(new ActionDefinition
+            {
+                Type = "timer_bar",
+                Label = castName,
+                Duration = 5.0,
+                Color = "#FBBF24",
+            });
+            _dirty = true;
+        }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip(
+            "画面右下にカウントダウンバー（持続 5 秒）。\n" +
+            "デバフや次イベントまでの時間表示に。");
     }
 
     private void DrawAggregatePanel(string zone)
