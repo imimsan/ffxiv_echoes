@@ -3,7 +3,10 @@ using Dalamud.Interface.Windowing;
 using Dalamud.IoC;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
+using FfxivEchoes.Commands;
+using FfxivEchoes.Commands.Handlers;
 using FfxivEchoes.Windows;
+using FfxivEchoes.Windows.Tabs;
 
 namespace FfxivEchoes;
 
@@ -11,56 +14,99 @@ public sealed class Plugin : IDalamudPlugin
 {
     [PluginService] internal static IDalamudPluginInterface PluginInterface { get; private set; } = null!;
     [PluginService] internal static ICommandManager CommandManager { get; private set; } = null!;
+    [PluginService] internal static IChatGui ChatGui { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
 
-    private const string CommandName = "/echoes";
+    public Configuration Configuration { get; }
+    public WindowSystem WindowSystem { get; } = new("FfxivEchoes");
 
-    public Configuration Configuration { get; init; }
-    public readonly WindowSystem WindowSystem = new("FfxivEchoes");
-
-    private MainWindow MainWindow { get; init; }
-    private ConfigWindow ConfigWindow { get; init; }
+    private readonly MainWindow _mainWindow;
+    private readonly CommandRouter _commandRouter;
 
     public Plugin()
     {
-        Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
+        Configuration = Configuration.LoadAndMigrate(PluginInterface, Log);
 
-        MainWindow = new MainWindow(this);
-        ConfigWindow = new ConfigWindow(this);
+        _mainWindow = new MainWindow(BuildTabs());
+        WindowSystem.AddWindow(_mainWindow);
 
-        WindowSystem.AddWindow(MainWindow);
-        WindowSystem.AddWindow(ConfigWindow);
+        _commandRouter = BuildCommandRouter();
 
-        CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
+        CommandManager.AddHandler(CommandRouter.RootCommand, new CommandInfo(OnCommand)
         {
-            HelpMessage = "FFXIV Echoes の設定画面を開きます。"
+            HelpMessage = "FFXIV Echoes：絶コンテンツ攻略支援。 "
+                          + $"{CommandRouter.RootCommand} help でサブコマンド一覧。",
         });
 
         PluginInterface.UiBuilder.Draw += WindowSystem.Draw;
-        PluginInterface.UiBuilder.OpenMainUi += ToggleMainUi;
-        PluginInterface.UiBuilder.OpenConfigUi += ToggleConfigUi;
+        PluginInterface.UiBuilder.OpenConfigUi += OpenSettings;
+        PluginInterface.UiBuilder.OpenMainUi += OpenSettings;
 
-        Log.Information($"[FfxivEchoes] Loaded v{PluginInterface.Manifest.AssemblyVersion}");
+        Log.Information("[FfxivEchoes] Loaded v{Version} (config v{ConfigVersion})",
+            PluginInterface.Manifest.AssemblyVersion, Configuration.Version);
     }
 
     public void Dispose()
     {
+        Log.Information("[FfxivEchoes] Unloading…");
+
         PluginInterface.UiBuilder.Draw -= WindowSystem.Draw;
-        PluginInterface.UiBuilder.OpenMainUi -= ToggleMainUi;
-        PluginInterface.UiBuilder.OpenConfigUi -= ToggleConfigUi;
+        PluginInterface.UiBuilder.OpenConfigUi -= OpenSettings;
+        PluginInterface.UiBuilder.OpenMainUi -= OpenSettings;
 
         WindowSystem.RemoveAllWindows();
-        MainWindow.Dispose();
-        ConfigWindow.Dispose();
+        _mainWindow.Dispose();
 
-        CommandManager.RemoveHandler(CommandName);
+        CommandManager.RemoveHandler(CommandRouter.RootCommand);
     }
 
-    private void OnCommand(string command, string args)
+    private void OnCommand(string command, string args) => _commandRouter.Dispatch(args);
+
+    /// <summary>SPEC.md §13.3「<c>/myplugin → 設定画面を開く</c>」に対応するエントリ。</summary>
+    private void OpenSettings() => _mainWindow.Open(MainWindow.DefaultTabId);
+
+    private System.Collections.Generic.List<ITab> BuildTabs() => new()
     {
-        ToggleMainUi();
-    }
+        new ContentListTab(),
+        new TriggerEditorTab(),
+        new LiveHudTab(),
+        new AudioTab(Configuration),
+        new ProfileTab(),
+        new ImportExportTab(),
+        new GeneralSettingsTab(Configuration, PluginInterface),
+    };
 
-    public void ToggleMainUi() => MainWindow.Toggle();
-    public void ToggleConfigUi() => ConfigWindow.Toggle();
+    private CommandRouter BuildCommandRouter()
+    {
+        var router = new CommandRouter(OpenSettings, Log, ChatGui);
+
+        router.Register(new DebugCommand(Configuration, ChatGui));
+        router.Register(new PendingCommand(
+            verb: "record",
+            usage: "record <on|off|auto>",
+            description: "戦闘ログ記録モードの制御",
+            plannedFor: "M4",
+            chatGui: ChatGui));
+        router.Register(new PendingCommand(
+            verb: "reload",
+            usage: "reload",
+            description: "トリガー定義の再読み込み",
+            plannedFor: "M5",
+            chatGui: ChatGui));
+        router.Register(new PendingCommand(
+            verb: "timeline",
+            usage: "timeline <all|configured|toggle|hide>",
+            description: "ライブHUDタイムラインの表示制御",
+            plannedFor: "F3",
+            chatGui: ChatGui));
+        router.Register(new PendingCommand(
+            verb: "profile",
+            usage: "profile <name>",
+            description: "アクティブプロファイルの切替",
+            plannedFor: "F10",
+            chatGui: ChatGui));
+        router.Register(new HelpCommand(router, ChatGui));
+
+        return router;
+    }
 }
