@@ -70,6 +70,9 @@ public sealed class Plugin : IDalamudPlugin
     private readonly TtsHandler _ttsHandler;
     private readonly ActionDispatcher _actionDispatcher;
 
+    // ── M9: オーディオデバイス ────────────────────────────
+    private readonly AudioDeviceEnumerator _audioDevices;
+
     public Plugin()
     {
         Configuration = Configuration.LoadAndMigrate(PluginInterface, Log);
@@ -82,6 +85,9 @@ public sealed class Plugin : IDalamudPlugin
 
         // M8: 録画スキャナ
         _recordingScanner = new RecordingScanner(PluginInterface, Log);
+
+        // M9: オーディオデバイス（タブが参照するので先）
+        _audioDevices = new AudioDeviceEnumerator(Log);
 
         // タブ／ウィンドウ
         _mainWindow = new MainWindow(BuildTabs(), _tabContext);
@@ -124,7 +130,7 @@ public sealed class Plugin : IDalamudPlugin
         var handlers = new IActionHandler[]
         {
             _ttsHandler,
-            new WavHandler(Configuration, PluginInterface, Log),
+            new WavHandler(Configuration, PluginInterface, _audioDevices, Log),
             new ChatEchoHandler(ChatGui),
             new OverlayTextHandler(_overlayWindow),
             new TimerBarHandler(_overlayWindow),
@@ -187,7 +193,7 @@ public sealed class Plugin : IDalamudPlugin
         new ContentListTab(_triggerStore, _recordingScanner, _tabContext),
         new TriggerEditorTab(_triggerStore, _recordingScanner, _tabContext),
         new LiveHudTab(),
-        new AudioTab(Configuration),
+        new AudioTab(Configuration, _audioDevices),
         new ProfileTab(),
         new ImportExportTab(),
         new GeneralSettingsTab(Configuration, PluginInterface),

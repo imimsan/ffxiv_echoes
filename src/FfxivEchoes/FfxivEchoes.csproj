@@ -17,5 +17,7 @@
     <PackageReference Include="System.Speech" Version="9.0.0" />
     <!-- M7: WAV 再生用 SoundPlayer（System.Media.SoundPlayer は Windows 専用） -->
     <PackageReference Include="System.Windows.Extensions" Version="9.0.0" />
+    <!-- M9: 音量制御つき音声出力 + デバイス列挙（NAudio meta = Core/Wasapi/WinMM/Asio/MIDI を含む） -->
+    <PackageReference Include="NAudio" Version="2.2.1" />
   </ItemGroup>
 </Project>

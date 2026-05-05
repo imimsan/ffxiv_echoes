@@ -1,33 +1,36 @@
 using System;
 using System.IO;
-using System.Media;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using FfxivEchoes.Events;
 using FfxivEchoes.Triggers.Models;
+using NAudio.CoreAudioApi;
+using NAudio.Wave;
 
 namespace FfxivEchoes.Actions.Handlers;
 
 /// <summary>
-/// WAV ファイル再生（System.Media.SoundPlayer）。
-/// 相対パスは <c>{ConfigDirectory}/sounds/</c> をルートとして解決する。
+/// WAV ファイル再生（NAudio）。三階層音量（master * wav * action）を適用し、
+/// Configuration.AudioDevice の指定があれば該当デバイスへ出力。
 /// </summary>
-/// <remarks>
-/// SoundPlayer は音量制御を持たないため、本実装では音量設定は無視される。
-/// 音量制御は M9 で別バックエンド（NAudio 等）導入時に対応。
-/// </remarks>
-public sealed class WavHandler : IActionHandler
+public sealed class WavHandler : IActionHandler, IDisposable
 {
     public string Type => "wav";
 
     private readonly Configuration _configuration;
     private readonly IDalamudPluginInterface _pluginInterface;
+    private readonly AudioDeviceEnumerator _deviceEnumerator;
     private readonly IPluginLog _log;
 
-    public WavHandler(Configuration configuration, IDalamudPluginInterface pluginInterface, IPluginLog log)
+    public WavHandler(
+        Configuration configuration,
+        IDalamudPluginInterface pluginInterface,
+        AudioDeviceEnumerator deviceEnumerator,
+        IPluginLog log)
     {
         _configuration = configuration;
         _pluginInterface = pluginInterface;
+        _deviceEnumerator = deviceEnumerator;
         _log = log;
     }
 
@@ -37,7 +40,11 @@ public sealed class WavHandler : IActionHandler
         {
             return;
         }
-        if (_configuration.MasterVolume <= 0 || _configuration.WavVolume <= 0 || action.Volume <= 0)
+
+        var volume = (float)Math.Clamp(
+            _configuration.MasterVolume * _configuration.WavVolume * action.Volume,
+            0.0, 1.0);
+        if (volume <= 0)
         {
             return;
         }
@@ -49,15 +56,48 @@ public sealed class WavHandler : IActionHandler
             return;
         }
 
+        // 各再生は独立したライフサイクル：ファイル読込→出力デバイス→再生→停止後 Dispose。
+        // PlaybackStopped で Dispose チェーンを発火させる fire-and-forget スタイル。
         try
         {
-            using var player = new SoundPlayer(resolved);
+            var reader = new AudioFileReader(resolved) { Volume = volume };
+            IWavePlayer player = CreatePlayer();
+
+            player.PlaybackStopped += (_, _) =>
+            {
+                try
+                {
+                    player.Dispose();
+                    reader.Dispose();
+                }
+                catch
+                {
+                    // Dispose 中の例外は無視
+                }
+            };
+
+            player.Init(reader);
             player.Play();
         }
         catch (Exception ex)
         {
             _log.Error(ex, "[FfxivEchoes] WAV 再生エラー：{File}", resolved);
         }
+    }
+
+    private IWavePlayer CreatePlayer()
+    {
+        var deviceId = _configuration.AudioDevice;
+        if (!string.IsNullOrEmpty(deviceId) && deviceId != AudioDeviceEnumerator.SystemDefaultId)
+        {
+            var device = _deviceEnumerator.FindDeviceById(deviceId);
+            if (device is not null)
+            {
+                return new WasapiOut(device, AudioClientShareMode.Shared, true, 100);
+            }
+            _log.Warning("[FfxivEchoes] 指定デバイス '{Id}' が見つかりません。既定デバイスを使用", deviceId);
+        }
+        return new WaveOutEvent();
     }
 
     private string? ResolvePath(string file)
@@ -70,5 +110,10 @@ public sealed class WavHandler : IActionHandler
         var soundsDir = Path.Combine(_pluginInterface.ConfigDirectory.FullName, "sounds");
         var candidate = Path.Combine(soundsDir, file);
         return File.Exists(candidate) ? candidate : null;
+    }
+
+    public void Dispose()
+    {
+        // Stateless（再生ごとに player/reader を作って Dispose）なので何もしない
     }
 }
