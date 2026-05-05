@@ -360,6 +360,11 @@
           "minimum": 1,
           "maximum": 360,
           "description": "arena_view (cone) 用、扇形の角度（度数法、デフォルト 90）"
+        },
+        "arena_radius": {
+          "type": "number",
+          "minimum": 1,
+          "description": "arena_view 用、ミニマップ全体に対応するアリーナ半径（メートル、デフォルト 20）。プレイヤー位置プロットに使用"
         }
       }
     },

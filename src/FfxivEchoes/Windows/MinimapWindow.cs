@@ -5,6 +5,7 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility;
 using Dalamud.Interface.Windowing;
+using FfxivEchoes.SafeZone;
 
 namespace FfxivEchoes.Windows;
 
@@ -37,11 +38,16 @@ public sealed class MinimapWindow : Window, IDisposable
     private const uint ColText = 0xFFFFFFFF;
     private const uint ColCallout = 0xFF24BFFB;      // callout 黄色（amber, ABGR）
     private const uint ColCalloutShadow = 0xFF000000;
+    private const uint ColPlayerSelf = 0xFF80FF80;   // 自分（明緑）
+    private const uint ColPlayerSelfRing = 0xFF60E060;
+    private const uint ColPartyMember = 0xFFCCCCCC;  // PT（薄灰）
+    private const uint ColPartyMemberRing = 0xFFFFFFFF;
 
     private readonly List<ArenaItem> _items = new();
     private readonly object _gate = new();
+    private readonly SafeZoneContextBuilder _contextBuilder;
 
-    public MinimapWindow()
+    public MinimapWindow(SafeZoneContextBuilder contextBuilder)
         : base("##ffxiv-echoes-minimap",
             ImGuiWindowFlags.NoTitleBar |
             ImGuiWindowFlags.NoResize |
@@ -51,6 +57,8 @@ public sealed class MinimapWindow : Window, IDisposable
             ImGuiWindowFlags.NoNav |
             ImGuiWindowFlags.NoScrollbar)
     {
+        _contextBuilder = contextBuilder;
+
         var scale = ImGuiHelpers.GlobalScale;
         Size = new Vector2(ArenaSize + Margin * 2, ArenaSize + CalloutHeight + Margin * 2) * scale;
         SizeCondition = ImGuiCond.FirstUseEver;
@@ -63,18 +71,28 @@ public sealed class MinimapWindow : Window, IDisposable
     /// <summary>
     /// ギミックを 1 件追加。duration 秒経過すると自動で消える。
     /// </summary>
-    public void AddArenaView(string gimmick, string? callout, double durationSec, string? direction, double? fanDeg)
+    /// <param name="arenaRadius">アリーナ半径（メートル）。プレイヤー位置プロット用。
+    /// 0 や指定なしなら 20m を仮定。</param>
+    public void AddArenaView(
+        string gimmick,
+        string? callout,
+        double durationSec,
+        string? direction,
+        double? fanDeg,
+        double? arenaRadius)
     {
         if (string.IsNullOrEmpty(gimmick))
         {
             return;
         }
         var ttl = durationSec <= 0 ? 5.0 : durationSec;
+        var radius = arenaRadius is { } r && r > 0 ? (float)r : 20f;
         var item = new ArenaItem(
             Gimmick: gimmick.ToLowerInvariant(),
             Callout: callout ?? string.Empty,
             Direction: direction,
             FanDeg: fanDeg ?? 90.0,
+            ArenaRadius: radius,
             ExpiresAt: DateTimeOffset.UtcNow.AddSeconds(ttl));
         lock (_gate)
         {
@@ -127,6 +145,7 @@ public sealed class MinimapWindow : Window, IDisposable
         DrawArena(draw, center, r);
         DrawGimmickBody(draw, center, r, item);
         DrawBoss(draw, center, scale, item);
+        DrawPlayerPositions(draw, center, r, scale, item);
 
         // 描画領域を確保（ImGui のレイアウトを進める）
         ImGui.Dummy(new Vector2(size, size));
@@ -234,6 +253,86 @@ public sealed class MinimapWindow : Window, IDisposable
         draw.AddCircle(center, bossR, ColText, 16, 1.5f);
     }
 
+    /// <summary>
+    /// 自分と PT メンバーの世界座標をミニマップ座標に変換してドットで描画する。
+    /// </summary>
+    private void DrawPlayerPositions(ImDrawListPtr draw, Vector2 center, float r, float scale, ArenaItem item)
+    {
+        SafeZoneContext snapshot;
+        try
+        {
+            snapshot = _contextBuilder.Build();
+        }
+        catch
+        {
+            // ObjectTable 走査中に例外が出ても描画は続ける
+            return;
+        }
+
+        var arenaCenter = snapshot.ArenaCenter;
+        var radius = item.ArenaRadius;
+        if (radius <= 0)
+        {
+            return;
+        }
+
+        var selfPos = snapshot.SelfPosition;
+
+        // PT メンバーは小さいドット（自分は後で上書き描画するためスキップ）
+        const float SelfMatchEpsilonSq = 0.05f * 0.05f;
+        foreach (var member in snapshot.Party)
+        {
+            if (member is null) continue;
+            var memberPos = new Vector3(member.Position.X, member.Position.Y, member.Position.Z);
+            var dxSelf = memberPos.X - selfPos.X;
+            var dzSelf = memberPos.Z - selfPos.Z;
+            if ((dxSelf * dxSelf + dzSelf * dzSelf) < SelfMatchEpsilonSq)
+            {
+                // 自分自身はスキップ（後段で前景描画）
+                continue;
+            }
+            DrawPositionDot(draw, center, r, arenaCenter, radius, memberPos,
+                ColPartyMember, ColPartyMemberRing, 4f * scale);
+        }
+
+        // 自分は明緑で前景
+        if (selfPos != Vector3.Zero)
+        {
+            DrawPositionDot(draw, center, r, arenaCenter, radius, selfPos,
+                ColPlayerSelf, ColPlayerSelfRing, 5.5f * scale);
+        }
+    }
+
+    /// <summary>
+    /// 世界座標 (X / Z 平面) をミニマップ円内の画素座標に変換してドットを描画。
+    /// アリーナ円の外に出る場合は外周ぎりぎりに丸める。
+    /// </summary>
+    private static void DrawPositionDot(
+        ImDrawListPtr draw, Vector2 mapCenter, float mapR,
+        Vector3 arenaCenter, float arenaRadius,
+        Vector3 worldPos, uint fillColor, uint ringColor, float dotR)
+    {
+        // FFXIV 座標：X = 東+、Z = 南+。ミニマップは北上、X 右、Y 下なので
+        // mapX = cx + dx / arenaR * mapR
+        // mapY = cy + dz / arenaR * mapR
+        var dx = worldPos.X - arenaCenter.X;
+        var dz = worldPos.Z - arenaCenter.Z;
+        var nx = dx / arenaRadius;
+        var nz = dz / arenaRadius;
+        var dist = MathF.Sqrt(nx * nx + nz * nz);
+        // 円の外に出るなら外周ぎりぎりに丸める（外側に居ることが分かるよう少し控えめ）
+        if (dist > 1.0f)
+        {
+            var clamp = 0.97f / dist;
+            nx *= clamp;
+            nz *= clamp;
+        }
+        var px = mapCenter.X + nx * mapR;
+        var py = mapCenter.Y + nz * mapR;
+        draw.AddCircleFilled(new Vector2(px, py), dotR, fillColor, 16);
+        draw.AddCircle(new Vector2(px, py), dotR, ringColor, 16, 1.2f);
+    }
+
     private static void DrawCallout(ImDrawListPtr draw, Vector2 winPos, float size, float scale, string callout, string sub)
     {
         var top = winPos.Y + size + 4f * scale;
@@ -311,5 +410,6 @@ public sealed class MinimapWindow : Window, IDisposable
         string Callout,
         string? Direction,
         double FanDeg,
+        float ArenaRadius,
         DateTimeOffset ExpiresAt);
 }

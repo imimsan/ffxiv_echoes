@@ -147,8 +147,7 @@ public sealed class Plugin : IDalamudPlugin
         _overlayWindow = new OverlayWindow();
         WindowSystem.AddWindow(_overlayWindow);
 
-        _minimapWindow = new MinimapWindow();
-        WindowSystem.AddWindow(_minimapWindow);
+        // MinimapWindow は SafeZoneContextBuilder に依存するので後で構築する
 
         // コマンドルータ
         _commandRouter = BuildCommandRouter();
@@ -224,6 +223,10 @@ public sealed class Plugin : IDalamudPlugin
         _safeZoneEngine = new SafeZoneEngine(safeZonePresets, Log);
         engineRef = _safeZoneEngine; // IntersectionPreset の遅延参照を解決
         _safeZoneContextBuilder = new SafeZoneContextBuilder(ObjectTable, PartyList);
+
+        // ミニマップ（プレイヤー位置プロットに SafeZoneContextBuilder が必要）
+        _minimapWindow = new MinimapWindow(_safeZoneContextBuilder);
+        WindowSystem.AddWindow(_minimapWindow);
 
         // F8: ワールドオーバーレイ
         _worldOverlayWindow = new WorldOverlayWindow(GameGui, ObjectTable);
