@@ -63,9 +63,10 @@ public sealed class Plugin : IDalamudPlugin
     // ── M10: バックアップ ────────────────────────────────
     private readonly TriggerBackupManager _backupManager;
 
-    // ── M6: トリガーエンジン ─────────────────────────────
+    // ── M6 + F2: トリガーエンジン ────────────────────────
     private readonly TargetResolver _targetResolver;
     private readonly EventMatcher _eventMatcher;
+    private readonly ConditionEvaluator _conditionEvaluator;
     private readonly TriggerEngine _triggerEngine;
 
     // ── M7: アクションディスパッチャ ──────────────────────
@@ -124,10 +125,11 @@ public sealed class Plugin : IDalamudPlugin
             _eventBus, _recordingController, PluginInterface,
             PartyList, ClientState, ObjectTable, PlayerState, DataManager, Log);
 
-        // M6: トリガーエンジン
+        // M6 + F2: トリガーエンジン（複合条件評価器付き）
         _targetResolver = new TargetResolver(PartyList, PlayerState);
         _eventMatcher = new EventMatcher(_targetResolver);
-        _triggerEngine = new TriggerEngine(_eventBus, _triggerStore, _eventMatcher, Log);
+        _conditionEvaluator = new ConditionEvaluator(_targetResolver);
+        _triggerEngine = new TriggerEngine(_eventBus, _triggerStore, _eventMatcher, _conditionEvaluator, Log);
 
         // M7: アクションディスパッチャ
         _ttsHandler = new TtsHandler(Configuration, Log);

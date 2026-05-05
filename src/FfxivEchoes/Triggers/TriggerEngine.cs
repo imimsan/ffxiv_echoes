@@ -15,17 +15,21 @@ public sealed class TriggerEngine : IDisposable
     private readonly IEventBus _bus;
     private readonly TriggerStore _store;
     private readonly EventMatcher _matcher;
+    private readonly ConditionEvaluator _conditionEvaluator;
     private readonly CooldownTracker _cooldowns;
     private readonly IPluginLog _log;
     private readonly IDisposable _allEventsSub;
 
     private string _currentZone = "Unknown";
 
-    public TriggerEngine(IEventBus bus, TriggerStore store, EventMatcher matcher, IPluginLog log)
+    public TriggerEngine(
+        IEventBus bus, TriggerStore store, EventMatcher matcher,
+        ConditionEvaluator conditionEvaluator, IPluginLog log)
     {
         _bus = bus;
         _store = store;
         _matcher = matcher;
+        _conditionEvaluator = conditionEvaluator;
         _log = log;
         _cooldowns = new CooldownTracker();
 
@@ -74,6 +78,11 @@ public sealed class TriggerEngine : IDisposable
                 continue;
             }
             if (!_matcher.Matches(trigger, ev))
+            {
+                continue;
+            }
+            // F2: 複合条件 (conditions) を評価
+            if (trigger.Conditions is { } conditions && !_conditionEvaluator.Evaluate(conditions, ev))
             {
                 continue;
             }
