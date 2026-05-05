@@ -199,6 +199,8 @@ public sealed class Plugin : IDalamudPlugin
             // F7: 高度 2 種（telegraph_gap + intersection）
             new TelegraphGapPreset(),
             intersectionPreset,
+            // P4: stored_position
+            new StoredPositionPreset(_variableStore),
         };
         _safeZoneEngine = new SafeZoneEngine(safeZonePresets, Log);
         engineRef = _safeZoneEngine; // IntersectionPreset の遅延参照を解決
@@ -226,6 +228,8 @@ public sealed class Plugin : IDalamudPlugin
             new ProximityFeedbackHandler(_safeZoneEngine, _safeZoneContextBuilder, wavHandler, ChatGui, Log),
             // P3: 連鎖トリガー
             new ChainTriggerHandler(_eventBus, _triggerStore, Log),
+            // P4: 位置保存
+            new StorePositionHandler(_safeZoneEngine, _safeZoneContextBuilder, _variableStore, Log),
         };
         _actionDispatcher = new ActionDispatcher(_eventBus, handlers, Log);
 

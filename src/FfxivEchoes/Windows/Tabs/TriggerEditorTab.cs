@@ -767,5 +767,6 @@ public sealed class TriggerEditorTab : ITab
         "tts", "wav", "overlay_text", "overlay_corner_text", "timer_bar",
         "chat_echo", "direction_call", "screen_arrow", "field_marker",
         "proximity_feedback", "set_variable", "chain_trigger",
+        "store_position",
     };
 }
