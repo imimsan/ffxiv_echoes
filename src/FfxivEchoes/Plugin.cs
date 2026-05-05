@@ -140,14 +140,12 @@ public sealed class Plugin : IDalamudPlugin
         // P1: 状態変数（CombatEnded で自動リセット）
         _variableStore = new VariableStore(_eventBus, Log);
 
-        // タブ／ウィンドウ
-        _mainWindow = new MainWindow(BuildTabs(), _tabContext);
-        WindowSystem.AddWindow(_mainWindow);
-
+        // ウィンドウ（MainWindow は依存先が揃った後で構築）
         _overlayWindow = new OverlayWindow();
         WindowSystem.AddWindow(_overlayWindow);
 
         // MinimapWindow は SafeZoneContextBuilder に依存するので後で構築する
+        // MainWindow は LiveHudTab が _combatClock を使うので後で構築する
         // CommandRouter の構築は依存先（_recordingController 等）が揃った後に行う
 
         // M3: キャプチャ群（イベントバスは前段で構築済み）
@@ -249,6 +247,10 @@ public sealed class Plugin : IDalamudPlugin
         };
         _actionDispatcher = new ActionDispatcher(_eventBus, handlers, Log);
 
+        // MainWindow（依存：BuildTabs 内で _combatClock / _eventBus を参照する LiveHudTab）
+        _mainWindow = new MainWindow(BuildTabs(), _tabContext);
+        WindowSystem.AddWindow(_mainWindow);
+
         // コマンドルータ：依存先（_recordingController / _battleRecorder / _liveTimelineWindow など）
         // が揃った後に構築する。先に構築すると null が捕まり、コマンド実行時に NRE になる
         _commandRouter = BuildCommandRouter();
@@ -329,7 +331,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         new ContentListTab(_triggerStore, _recordingScanner, _tabContext),
         new TriggerEditorTab(_triggerStore, _recordingScanner, _tabContext, _eventBus),
-        new LiveHudTab(),
+        new LiveHudTab(_eventBus, _combatClock),
         new AudioTab(Configuration, _audioDevices),
         new ProfileTab(_profileStore, _triggerStore, Configuration),
         new ImportExportTab(_triggerStore, _triggerExportImport),

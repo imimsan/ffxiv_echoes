@@ -30,7 +30,17 @@ public sealed class MainWindow : Window, IDisposable
 
     private readonly Tabs.TabContext? _tabContext;
 
-    public void Dispose() { }
+    public void Dispose()
+    {
+        // タブが IDisposable を実装していれば破棄（LiveHudTab の event subscription など）
+        foreach (var tab in _tabs)
+        {
+            if (tab is IDisposable d)
+            {
+                try { d.Dispose(); } catch { /* 破棄時の例外は無視 */ }
+            }
+        }
+    }
 
     /// <summary>
     /// 設定ウィンドウを開く。<paramref name="tabId"/> 指定時は次フレームでそのタブにフォーカス。
