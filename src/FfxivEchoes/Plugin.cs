@@ -144,27 +144,33 @@ public sealed class Plugin : IDalamudPlugin
         _liveTimelineWindow = new LiveTimelineWindow(_eventBus, _combatClock, _triggerStore);
         WindowSystem.AddWindow(_liveTimelineWindow);
 
-        // F4 + F5: 安置計算プリセット（基本 6 種 + オブジェクト検知 4 種）
+        // F4-F7: 安置計算プリセット（合計 15 種）
+        SafeZoneEngine? engineRef = null;
+        var intersectionPreset = new IntersectionPreset((c, ctx) => engineRef!.Calculate(c, ctx));
         var safeZonePresets = new ISafeZonePreset[]
         {
-            // F4
+            // F4: 基本 6 種
             new FixedPreset(),
             new BossRelativePreset(),
             new MarkerRelativePreset(Log),
             new ArenaCenterRelativePreset(),
             new InverseOfTelegraphPreset(),
             new PartyMemberRelativePreset(),
-            // F5
+            // F5: オブジェクト検知 4 種
             new FindActorWithStatusPreset(ObjectTable),
             new FindActorWithoutStatusPreset(ObjectTable),
             new FindActorNotCastingPreset(ObjectTable),
             new FindActorByDistancePreset(ObjectTable),
-            // F6
+            // F6: 関係性 3 種
             new MidpointPreset(ObjectTable),
             new BetweenActorsPreset(ObjectTable),
             new LinePerpendicularPreset(ObjectTable),
+            // F7: 高度 2 種（telegraph_gap + intersection）
+            new TelegraphGapPreset(),
+            intersectionPreset,
         };
         _safeZoneEngine = new SafeZoneEngine(safeZonePresets, Log);
+        engineRef = _safeZoneEngine; // IntersectionPreset の遅延参照を解決
         _safeZoneContextBuilder = new SafeZoneContextBuilder(ObjectTable, PartyList);
 
         // M7: アクションディスパッチャ
