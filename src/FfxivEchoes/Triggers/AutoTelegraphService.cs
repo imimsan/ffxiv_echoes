@@ -146,6 +146,14 @@ public sealed class AutoTelegraphService : IDisposable
             }
             var effectRange = (float)row.EffectRange;
             if (effectRange <= 0) return false;
+            // Lumina の EffectRange が異常に大きい一部の特殊アクション
+            // （アリーナ全域 80m など）は描画しない
+            if (effectRange > 50f)
+            {
+                _log.Debug("[FfxivEchoes] AutoTelegraph: skip oversized AoE id={Id:X4} range={R}m",
+                    actionId, effectRange);
+                return false;
+            }
 
             // CastType: 1=ST, 2=Circle (target-centered), 3=Cone, 4=Line,
             //           5=PBAoE on caster, 6=Donut, 7+=L/Cross 等の特殊

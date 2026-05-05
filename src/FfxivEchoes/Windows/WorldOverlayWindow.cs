@@ -117,7 +117,18 @@ public sealed class WorldOverlayWindow : Window, IDisposable
         foreach (var marker in markers)
         {
             if (!_gameGui.WorldToScreen(marker.WorldPos, out var center)) continue;
-            DrawMarker(draw, center, marker);
+            // 半径をスクリーン画素数に変換：中心 + 水平 N メートル の点を投影して画素距離を取る
+            float pixelRadius;
+            var edgeWorld = marker.WorldPos + new Vector3(marker.Radius, 0, 0);
+            if (_gameGui.WorldToScreen(edgeWorld, out var edge))
+            {
+                pixelRadius = (edge - center).Length();
+            }
+            else
+            {
+                pixelRadius = MathF.Max(20f, marker.Radius * 8f); // フォールバック
+            }
+            DrawMarker(draw, center, pixelRadius, marker);
         }
     }
 
@@ -139,31 +150,48 @@ public sealed class WorldOverlayWindow : Window, IDisposable
         draw.AddTriangleFilled(tip, left, right, color);
     }
 
-    private static void DrawMarker(ImDrawListPtr draw, Vector2 center, MarkerItem marker)
+    private static void DrawMarker(ImDrawListPtr draw, Vector2 center, float pixelRadius, MarkerItem marker)
     {
-        // radius は world 単位なので画面サイズには直接マップできない。固定サイズで描画。
-        var px = 24f;
+        // 円が大き過ぎる場合は描画 segment 数を増やす。最低 24、最大 64
+        var segments = (int)MathF.Min(64, MathF.Max(24, pixelRadius * 0.4f));
+        // 半透明塗り
+        var fillColor = (marker.Color & 0x00FFFFFF) | 0x40000000;
         switch (marker.Shape)
         {
             case "x_mark":
+            {
+                var px = MathF.Max(20f, pixelRadius * 0.4f);
                 draw.AddLine(center + new Vector2(-px, -px), center + new Vector2(px, px), marker.Color, 3f);
                 draw.AddLine(center + new Vector2(-px, px), center + new Vector2(px, -px), marker.Color, 3f);
                 break;
+            }
             case "square":
+            {
+                var px = pixelRadius;
+                draw.AddRectFilled(center + new Vector2(-px, -px), center + new Vector2(px, px), fillColor);
                 draw.AddRect(center + new Vector2(-px, -px), center + new Vector2(px, px), marker.Color, 0f, ImDrawFlags.None, 3f);
                 break;
+            }
             case "arrow":
+            {
+                var px = MathF.Max(20f, pixelRadius * 0.5f);
                 draw.AddTriangleFilled(
                     center + new Vector2(0, -px),
                     center + new Vector2(-px * 0.7f, px * 0.5f),
                     center + new Vector2(px * 0.7f, px * 0.5f),
                     marker.Color);
                 break;
+            }
             case "circle":
             default:
-                draw.AddCircle(center, px, marker.Color, 24, 3f);
-                draw.AddCircleFilled(center, 4f, marker.Color);
+            {
+                // 半径が画面外に出るほど大きい場合のために、min/max 制限
+                var r = MathF.Max(8f, pixelRadius);
+                draw.AddCircleFilled(center, r, fillColor, segments);
+                draw.AddCircle(center, r, marker.Color, segments, 3f);
+                draw.AddCircleFilled(center, 5f, marker.Color); // 中心点
                 break;
+            }
         }
     }
 
