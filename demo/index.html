@@ -38,9 +38,8 @@
             </div>
 
             <div class="panel game-area">
-                <div class="game-area-bg">in-game view（モック）</div>
-                <!-- センターオーバーレイ：overlay_text を描画 -->
-                <div class="overlay-center" id="overlay-center"></div>
+                <!-- 次に来るイベントリスト（カウントダウン + アイコン） -->
+                <div class="upcoming-list" id="upcoming-list"></div>
                 <!-- タイマーバー一覧 -->
                 <div class="timer-bars" id="timer-bars"></div>
             </div>
@@ -80,7 +79,8 @@
                     <li><span class="legend-dot" style="background:#FCD34D"></span> Note（軽減/LB 等）</li>
                 </ul>
                 <div class="muted small">
-                    現在ラインは中央。左に過去 10 秒、右に未来 30 秒。
+                    画面左上：<b>次に来るイベント</b>（アイコン + 残り秒数）。5 秒以内で黄色く点滅。<br>
+                    下のライブタイムライン：左 = 過去 10 秒、右 = 未来 30 秒、中央 = 現在。
                 </div>
             </div>
 
@@ -88,11 +88,15 @@
                 <div class="panel-title">使い方</div>
                 <ol class="muted small">
                     <li><b>戦闘開始</b> でクロックがスタート</li>
+                    <li>左上の「次に来るイベント」にアイコン + カウントダウンが並ぶ（近いものほど上、5 秒以内で点滅）</li>
                     <li>シミュレートされたボスキャストが時刻通りに走る</li>
-                    <li>マッチするトリガーが発火 → TTS（コンソール風表示）+ overlay_text + timer_bar</li>
+                    <li>マッチするトリガーが発火 → TTS + overlay_text + timer_bar</li>
                     <li>Note は <code>advance_warning_sec</code> 秒前にも通知</li>
-                    <li>Role を変えると、role 指定のあるノートのフィルタ結果が変わる</li>
+                    <li>Role を変えると、role 指定のあるノートが半透明（自分宛てでない）になる</li>
                 </ol>
+                <div class="muted small" style="margin-top:8px;">
+                    <b>icon フィールド</b>：絵文字（🛡 💪 💚 🔥 🎯 🔄 等）または画像 URL を指定できます。
+                </div>
             </div>
         </section>
     </main>

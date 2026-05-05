@@ -46,7 +46,8 @@
     {
       "id": "first_mit",
       "time": 30,
-      "label": "迅速 + 堅実",
+      "label": "ランパート + ブラインド",
+      "icon": ["🛡", "💨"],
       "role": "tank",
       "advance_warning_sec": 3,
       "color": "#FBBF24"
@@ -54,7 +55,8 @@
     {
       "id": "raid_buff_2m",
       "time": 120,
-      "label": "全体バフ",
+      "label": "全体バフ（テクステ + 戦歌）",
+      "icon": ["💪", "🎵"],
       "duration": 20,
       "advance_warning_sec": 5,
       "color": "#34D399"
@@ -63,13 +65,15 @@
       "id": "p2_lb",
       "time": 180,
       "label": "LB 準備",
+      "icon": "🎯",
       "advance_warning_sec": 5,
       "color": "#FCD34D"
     },
     {
       "id": "tank_swap",
       "time": 200,
-      "label": "TANK SWAP",
+      "label": "挑発 + シェイク",
+      "icon": ["🔄", "🛡", "💢"],
       "role": "tank",
       "advance_warning_sec": 3,
       "color": "#FF8888"
@@ -77,7 +81,8 @@
     {
       "id": "heal_check",
       "time": 240,
-      "label": "ヒール確認",
+      "label": "アサイラム + 鼓舞",
+      "icon": ["💚", "✨"],
       "role": "healer",
       "advance_warning_sec": 4,
       "color": "#34D399"
@@ -86,19 +91,20 @@
       "id": "burst",
       "time": 300,
       "label": "全力バースト",
+      "icon": ["🔥", "💥", "⚔️"],
       "duration": 15,
       "advance_warning_sec": 5,
       "color": "#F87171"
     }
   ],
   "_demo_boss_casts": [
-    { "time": 8,   "cast_id": "0x9D32", "cast_name": "無の肥大",   "cast_time": 4.7 },
-    { "time": 25,  "cast_id": "0x9D40", "cast_name": "無の追跡",   "cast_time": 4.0 },
-    { "time": 60,  "cast_id": "0x9D32", "cast_name": "無の肥大",   "cast_time": 4.7 },
-    { "time": 90,  "cast_id": "0x9D40", "cast_name": "無の追跡",   "cast_time": 4.0 },
-    { "time": 150, "cast_id": "0x9D32", "cast_name": "無の肥大",   "cast_time": 4.7 },
-    { "time": 178, "cast_id": "0xPHASE2", "cast_name": "後半移行", "cast_time": 6.0 },
-    { "time": 220, "cast_id": "0x9D40", "cast_name": "無の追跡",   "cast_time": 4.0 },
-    { "time": 280, "cast_id": "0x9D32", "cast_name": "無の肥大",   "cast_time": 4.7 }
+    { "time": 8,   "cast_id": "0x9D32", "cast_name": "無の肥大",   "cast_time": 4.7, "icon": "💥" },
+    { "time": 25,  "cast_id": "0x9D40", "cast_name": "無の追跡",   "cast_time": 4.0, "icon": "🎯" },
+    { "time": 60,  "cast_id": "0x9D32", "cast_name": "無の肥大",   "cast_time": 4.7, "icon": "💥" },
+    { "time": 90,  "cast_id": "0x9D40", "cast_name": "無の追跡",   "cast_time": 4.0, "icon": "🎯" },
+    { "time": 150, "cast_id": "0x9D32", "cast_name": "無の肥大",   "cast_time": 4.7, "icon": "💥" },
+    { "time": 178, "cast_id": "0xPHASE2", "cast_name": "後半移行", "cast_time": 6.0, "icon": "🌙" },
+    { "time": 220, "cast_id": "0x9D40", "cast_name": "無の追跡",   "cast_time": 4.0, "icon": "🎯" },
+    { "time": 280, "cast_id": "0x9D32", "cast_name": "無の肥大",   "cast_time": 4.7, "icon": "💥" }
   ]
 }

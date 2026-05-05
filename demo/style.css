@@ -201,6 +201,94 @@ button.primary:hover {
     50% { opacity: 0.6; }
 }
 
+/* === 次に来るイベントリスト（左上） === */
+.upcoming-list {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    width: 320px;
+    max-height: calc(100% - 24px);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    pointer-events: none;
+    text-shadow: 0 0 4px rgba(0,0,0,0.9);
+}
+
+.upcoming-row {
+    display: grid;
+    grid-template-columns: auto 60px 1fr;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    background: rgba(0,0,0,0.55);
+    border-left: 3px solid var(--muted);
+    border-radius: 3px;
+    font-size: 13px;
+}
+
+.upcoming-row.imminent {
+    background: rgba(251,191,36,0.25);
+    border-left-color: #FBBF24;
+    animation: imminent-pulse 0.6s ease-in-out infinite;
+}
+
+.upcoming-row.muted-role {
+    opacity: 0.4;
+}
+
+.upcoming-row .icons {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    min-width: 36px;
+}
+
+.upcoming-row .icons .icon-emoji {
+    font-size: 22px;
+    line-height: 1;
+}
+
+.upcoming-row .icons .icon-img {
+    width: 28px;
+    height: 28px;
+    object-fit: contain;
+    border-radius: 3px;
+}
+
+.upcoming-row .countdown {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    font-size: 16px;
+    font-weight: 600;
+    color: #e2e8f0;
+}
+
+.upcoming-row.imminent .countdown {
+    color: #FBBF24;
+    font-size: 18px;
+}
+
+.upcoming-row .label {
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.upcoming-row .sub {
+    font-size: 10px;
+    color: var(--muted);
+    line-height: 1;
+}
+
+@keyframes imminent-pulse {
+    0%, 100% { box-shadow: 0 0 4px rgba(251,191,36,0.3); }
+    50% { box-shadow: 0 0 16px rgba(251,191,36,0.6); }
+}
+
 /* タイマーバー（オーバーレイ右下） */
 .timer-bars {
     position: absolute;
