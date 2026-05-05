@@ -1,4 +1,5 @@
 using Dalamud.Plugin.Services;
+using FfxivEchoes.Triggers;
 
 namespace FfxivEchoes.Recording;
 
@@ -6,17 +7,19 @@ namespace FfxivEchoes.Recording;
 /// 録画モードの状態を保持し、戦闘開始時に「このコンテンツを記録するか」を判定する。
 /// </summary>
 /// <remarks>
-/// SPEC.md §9.1.2 に従い、Auto はコンテンツ単位の auto_record 設定に従うが、
-/// M4 時点ではトリガー定義ファイルが存在しないため Auto は false 固定。
-/// M5/M8 で per-content 設定が読めるようになったら本クラスから参照する。
+/// SPEC.md §9.1.2 に従う：
+/// - ForceOn / ForceOff：手動オーバーライド
+/// - Auto：トリガー定義の <c>auto_settings.auto_record</c> を参照（M5 で実装）
 /// </remarks>
 public sealed class RecordingController
 {
     private readonly IPluginLog _log;
+    private readonly TriggerStore _triggerStore;
 
-    public RecordingController(IPluginLog log)
+    public RecordingController(IPluginLog log, TriggerStore triggerStore)
     {
         _log = log;
+        _triggerStore = triggerStore;
     }
 
     public RecordingMode Mode { get; private set; } = RecordingMode.Auto;
@@ -38,9 +41,7 @@ public sealed class RecordingController
         {
             RecordingMode.ForceOn => true,
             RecordingMode.ForceOff => false,
-            // Auto: M4 時点では per-content 設定なしのため false 固定。
-            // M5/M8 でトリガー定義の auto_settings.auto_record を参照するように差し替え予定。
-            RecordingMode.Auto => false,
+            RecordingMode.Auto => _triggerStore.GetByZone(zoneName)?.AutoSettings.AutoRecord ?? false,
             _ => false,
         };
     }
