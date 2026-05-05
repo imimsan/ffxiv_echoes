@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
+using System.Text.Json;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility;
 using FfxivEchoes.Recording;
@@ -488,6 +489,7 @@ public sealed class TriggerEditorTab : ITab
                         action.Gimmick = ArenaViewGimmicks[gIdx];
                         _dirty = true;
                     }
+                    if (ImGui.IsItemHovered()) ImGui.SetTooltip(GimmickTooltip(action.Gimmick ?? "outer_ring"));
                     // callout
                     var callout = action.Callout ?? string.Empty;
                     ImGui.SetNextItemWidth(280f * ImGuiHelpers.GlobalScale);
@@ -496,6 +498,7 @@ public sealed class TriggerEditorTab : ITab
                         action.Callout = callout;
                         _dirty = true;
                     }
+                    if (ImGui.IsItemHovered()) ImGui.SetTooltip("ミニマップ下部に表示されるテキスト（例：「中央安置」）");
                     // duration
                     var dur = (float)(action.Duration ?? 5.0);
                     ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
@@ -504,6 +507,7 @@ public sealed class TriggerEditorTab : ITab
                         action.Duration = dur <= 0 ? null : dur;
                         _dirty = true;
                     }
+                    if (ImGui.IsItemHovered()) ImGui.SetTooltip("表示秒数。キャスト時間 + α が目安");
                     // arena_radius
                     var ar = (float)(action.ArenaRadius ?? 20.0);
                     ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
@@ -512,6 +516,7 @@ public sealed class TriggerEditorTab : ITab
                         action.ArenaRadius = ar <= 0 ? null : ar;
                         _dirty = true;
                     }
+                    if (ImGui.IsItemHovered()) ImGui.SetTooltip("プレイヤー位置プロット用のアリーナ実半径（メートル）。多くの極/絶は 18-25m");
                     // cone のときだけ direction + fan_deg
                     if (action.Gimmick == "cone")
                     {
@@ -524,6 +529,7 @@ public sealed class TriggerEditorTab : ITab
                             action.Direction = ArenaViewDirections[dIdx];
                             _dirty = true;
                         }
+                        if (ImGui.IsItemHovered()) ImGui.SetTooltip("コーンが向く方位（北上で N=北、E=東 等）");
                         var fan = (float)(action.FanDeg ?? 90.0);
                         ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
                         if (ImGui.InputFloat("fan_deg##action-fan", ref fan))
@@ -531,11 +537,129 @@ public sealed class TriggerEditorTab : ITab
                             action.FanDeg = fan <= 0 ? null : fan;
                             _dirty = true;
                         }
+                        if (ImGui.IsItemHovered()) ImGui.SetTooltip("扇形の角度（度数法）。90 で 90 度の扇");
+                    }
+                    DrawSafeZoneSubEditor(action);
+                    break;
+                }
+                case "direction_call":
+                {
+                    var fmt = action.Format ?? "cardinal_jp";
+                    var fIdx = Array.IndexOf(DirectionFormats, fmt);
+                    if (fIdx < 0) fIdx = 0;
+                    ImGui.SetNextItemWidth(180f * ImGuiHelpers.GlobalScale);
+                    if (ImGui.Combo("format##action-fmt", ref fIdx, DirectionFormats, DirectionFormats.Length))
+                    {
+                        action.Format = DirectionFormats[fIdx];
+                        _dirty = true;
+                    }
+                    if (ImGui.IsItemHovered()) ImGui.SetTooltip("読み上げ表記：cardinal=「north」、cardinal_jp=「北」、clock=「12時」、relative_jp=「左前」");
+
+                    var ttsOn = action.Tts ?? true;
+                    if (ImGui.Checkbox("TTS で読み上げ##dc-tts", ref ttsOn)) { action.Tts = ttsOn; _dirty = true; }
+                    ImGui.SameLine();
+                    var ovOn = action.Overlay ?? false;
+                    if (ImGui.Checkbox("オーバーレイにも表示##dc-ov", ref ovOn)) { action.Overlay = ovOn; _dirty = true; }
+                    DrawSafeZoneSubEditor(action);
+                    break;
+                }
+                case "screen_arrow":
+                {
+                    var fromStr = action.From ?? "self";
+                    ImGui.SetNextItemWidth(280f * ImGuiHelpers.GlobalScale);
+                    if (ImGui.InputText("from##action-from", ref fromStr, 64)) { action.From = fromStr; _dirty = true; }
+                    if (ImGui.IsItemHovered()) ImGui.SetTooltip("矢印の起点。\"self\" / \"boss\" / actor 名等");
+
+                    var durSa = (float)(action.Duration ?? 5.0);
+                    ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
+                    if (ImGui.InputFloat("duration (s)##action-dur-sa", ref durSa)) { action.Duration = durSa <= 0 ? null : durSa; _dirty = true; }
+                    var color = action.Color ?? "#00FF00";
+                    ImGui.SetNextItemWidth(140f * ImGuiHelpers.GlobalScale);
+                    if (ImGui.InputText("color (#RRGGBB)##action-color-sa", ref color, 16)) { action.Color = color; _dirty = true; }
+                    DrawSafeZoneSubEditor(action);
+                    break;
+                }
+                case "field_marker":
+                {
+                    var shape = action.Shape ?? "circle";
+                    var sIdx = Array.IndexOf(FieldShapes, shape);
+                    if (sIdx < 0) sIdx = 0;
+                    ImGui.SetNextItemWidth(160f * ImGuiHelpers.GlobalScale);
+                    if (ImGui.Combo("shape##action-shape", ref sIdx, FieldShapes, FieldShapes.Length))
+                    {
+                        action.Shape = FieldShapes[sIdx];
+                        _dirty = true;
+                    }
+                    var rad = (float)(action.Radius ?? 3.0);
+                    ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
+                    if (ImGui.InputFloat("radius (m)##action-fm-rad", ref rad)) { action.Radius = rad <= 0 ? null : rad; _dirty = true; }
+                    var durFm = (float)(action.Duration ?? 5.0);
+                    ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
+                    if (ImGui.InputFloat("duration (s)##action-dur-fm", ref durFm)) { action.Duration = durFm <= 0 ? null : durFm; _dirty = true; }
+                    var colorFm = action.Color ?? "#00FF00";
+                    ImGui.SetNextItemWidth(140f * ImGuiHelpers.GlobalScale);
+                    if (ImGui.InputText("color (#RRGGBB)##action-color-fm", ref colorFm, 16)) { action.Color = colorFm; _dirty = true; }
+                    DrawSafeZoneSubEditor(action);
+                    break;
+                }
+                case "proximity_feedback":
+                {
+                    var tol = (float)(action.Tolerance ?? 3.0);
+                    ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
+                    if (ImGui.InputFloat("tolerance (m)##action-pf-tol", ref tol)) { action.Tolerance = tol <= 0 ? null : tol; _dirty = true; }
+                    if (ImGui.IsItemHovered()) ImGui.SetTooltip("安置に入った/出た判定の半径");
+
+                    var inS = action.InSound ?? string.Empty;
+                    ImGui.SetNextItemWidth(280f * ImGuiHelpers.GlobalScale);
+                    if (ImGui.InputText("in_sound##action-pf-in", ref inS, 256)) { action.InSound = inS; _dirty = true; }
+                    var outS = action.OutSound ?? string.Empty;
+                    ImGui.SetNextItemWidth(280f * ImGuiHelpers.GlobalScale);
+                    if (ImGui.InputText("out_sound##action-pf-out", ref outS, 256)) { action.OutSound = outS; _dirty = true; }
+                    var showD = action.ShowDistance ?? false;
+                    if (ImGui.Checkbox("距離をオーバーレイ表示##action-pf-show", ref showD)) { action.ShowDistance = showD; _dirty = true; }
+                    DrawSafeZoneSubEditor(action);
+                    break;
+                }
+                case "chain_trigger":
+                {
+                    var tid = action.TriggerId ?? string.Empty;
+                    ImGui.SetNextItemWidth(280f * ImGuiHelpers.GlobalScale);
+                    if (ImGui.InputText("trigger_id##action-ct-id", ref tid, 128)) { action.TriggerId = tid; _dirty = true; }
+                    if (ImGui.IsItemHovered()) ImGui.SetTooltip("連鎖発動するトリガーの id（同 zone 内のもの）");
+                    // 同ファイル内のトリガー候補
+                    if (_workingCopy is not null)
+                    {
+                        ImGui.SameLine();
+                        if (ImGui.SmallButton("選択##action-ct-pick"))
+                        {
+                            ImGui.OpenPopup("chain-trigger-pick");
+                        }
+                        if (ImGui.BeginPopup("chain-trigger-pick"))
+                        {
+                            foreach (var t in _workingCopy.Triggers)
+                            {
+                                if (string.IsNullOrEmpty(t.Id)) continue;
+                                if (ImGui.Selectable($"{t.Id}{(string.IsNullOrEmpty(t.Name) ? "" : $"  ({t.Name})")}"))
+                                {
+                                    action.TriggerId = t.Id;
+                                    _dirty = true;
+                                }
+                            }
+                            ImGui.EndPopup();
+                        }
                     }
                     break;
                 }
+                case "set_variable":
+                {
+                    // set_variable はトリガー定義側の trigger.set_variable で扱う設計のため、
+                    // アクションとして使うパスは JSON 直編集を推奨する旨を示す
+                    ImGui.TextWrapped("set_variable はトリガー定義側の trigger.set_variable で設定するのが標準です。" +
+                                      "アクションとして使う場合は JSON を直接編集してください。");
+                    break;
+                }
                 default:
-                    ImGui.TextDisabled($"({action.Type} は M8 範囲外。JSON 直接編集を推奨)");
+                    ImGui.TextDisabled($"({action.Type} は専用 UI 未実装。JSON 直接編集を推奨)");
                     break;
             }
 
@@ -946,4 +1070,183 @@ public sealed class TriggerEditorTab : ITab
     {
         "N", "NE", "E", "SE", "S", "SW", "W", "NW",
     };
+
+    private static readonly string[] DirectionFormats =
+    {
+        "cardinal", "cardinal_jp", "clock", "relative_jp", "degrees",
+    };
+
+    private static readonly string[] FieldShapes =
+    {
+        "circle", "square", "x_mark", "arrow",
+    };
+
+    private static readonly string[] SafeZoneMethods =
+    {
+        "fixed",
+        "boss_relative",
+        "marker_relative",
+        "arena_center_relative",
+        "inverse_of_telegraph",
+        "party_member_relative",
+        "find_actor_with_status",
+        "find_actor_without_status",
+        "find_actor_not_casting",
+        "find_actor_by_distance",
+        "midpoint",
+        "between_actors",
+        "line_perpendicular",
+        "telegraph_gap",
+        "intersection",
+        "stored_position",
+    };
+
+    /// <summary>arena_view の gimmick タイプごとの説明文。</summary>
+    private static string GimmickTooltip(string gimmick) => gimmick switch
+    {
+        "outer_ring" => "外周が危険、中央に安置丸を表示（無の肥大タイプ）",
+        "inner_circle" => "中央が危険、外周は通常（円形 AoE）",
+        "scatter" => "4 方向（N/E/S/W）にマーカーを表示（散開）",
+        "stack" => "中央に集合マーカー",
+        "cone" => "指定方向への扇形を危険ゾーンとして表示。direction + fan_deg を設定",
+        _ => gimmick,
+    };
+
+    /// <summary>safe_zone（SafeZoneCalculation）編集ヘルパ。method 選択 + raw JSON params。</summary>
+    private void DrawSafeZoneSubEditor(ActionDefinition action)
+    {
+        ImGui.Spacing();
+        var hasZone = action.SafeZone is not null;
+        if (ImGui.CollapsingHeader($"安置計算 (safe_zone){(hasZone ? "  ✓" : "")}##sz"))
+        {
+            ImGui.Indent(12f);
+
+            if (!hasZone)
+            {
+                if (ImGui.Button("安置計算を追加##sz-add"))
+                {
+                    action.SafeZone = new SafeZoneCalculation { Method = "fixed" };
+                    _dirty = true;
+                }
+                ImGui.TextDisabled("F4-F7 の 16 種プリセットから選んで世界座標を計算します。");
+            }
+            else
+            {
+                var sz = action.SafeZone!;
+                var method = sz.Method;
+                var mIdx = Array.IndexOf(SafeZoneMethods, method);
+                if (mIdx < 0) mIdx = 0;
+                ImGui.SetNextItemWidth(220f * ImGuiHelpers.GlobalScale);
+                if (ImGui.Combo("method##sz-method", ref mIdx, SafeZoneMethods, SafeZoneMethods.Length))
+                {
+                    sz.Method = SafeZoneMethods[mIdx];
+                    _dirty = true;
+                }
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip(SafeZoneMethodTooltip(sz.Method));
+
+                ImGui.TextDisabled("params (JSON):");
+                var paramsBuf = SerializeParams(sz);
+                ImGui.SetNextItemWidth(-1);
+                if (ImGui.InputTextMultiline("##sz-params", ref paramsBuf, 4096,
+                    new Vector2(-1, 80f * ImGuiHelpers.GlobalScale)))
+                {
+                    if (TryParseParams(paramsBuf, out var newParams, out var err))
+                    {
+                        sz.Params = newParams;
+                        _szParseError = null;
+                        _dirty = true;
+                    }
+                    else
+                    {
+                        _szParseError = err;
+                    }
+                }
+                if (!string.IsNullOrEmpty(_szParseError))
+                {
+                    ImGui.TextColored(new Vector4(1f, 0.5f, 0.5f, 1f), $"JSON エラー: {_szParseError}");
+                }
+                if (ImGui.SmallButton("削除##sz-remove"))
+                {
+                    action.SafeZone = null;
+                    _dirty = true;
+                }
+            }
+
+            ImGui.Unindent(12f);
+        }
+    }
+
+    private string? _szParseError;
+
+    private static string SafeZoneMethodTooltip(string method) => method switch
+    {
+        "fixed" => "params: { x, y, z } の固定座標",
+        "boss_relative" => "params: { offset: {x,y,z} } ボスからの相対",
+        "marker_relative" => "params: { marker: \"A\"|\"B\"|... } フィールドマーカー基準",
+        "arena_center_relative" => "params: { offset: {x,y,z} } アリーナ中心からの相対",
+        "inverse_of_telegraph" => "params: { telegraph: {shape, ...} } AoE の反対側",
+        "party_member_relative" => "params: { role: \"tank\"|..., index: 0 } PT メンバー基準",
+        "find_actor_with_status" => "params: { status_id, offset } 特定 status を持つ敵基準",
+        "find_actor_without_status" => "params: { status_id, offset } 特定 status を持たない敵基準",
+        "find_actor_not_casting" => "params: { offset } キャストしていない敵基準",
+        "find_actor_by_distance" => "params: { side: \"nearest\"|\"farthest\" }",
+        "midpoint" => "params: { actors: [name, name] } 2 アクターの中点",
+        "between_actors" => "params: { actor_a, actor_b, fraction } 2 アクター間のうち指定割合",
+        "line_perpendicular" => "params: { actors: [a,b], distance } 2 点を結ぶ線への垂線",
+        "telegraph_gap" => "params: { telegraphs: [...] } 複数 AoE の隙間",
+        "intersection" => "params: { calculations: [calc1, calc2, ...] } 複数の計算結果の AND",
+        "stored_position" => "params: { name } P4: 以前 store_position で保存した位置",
+        _ => method,
+    };
+
+    private static string SerializeParams(SafeZoneCalculation sz)
+    {
+        if (sz.Params is null || sz.Params.Count == 0)
+        {
+            return "{}";
+        }
+        try
+        {
+            return JsonSerializer.Serialize(sz.Params, new JsonSerializerOptions
+            {
+                WriteIndented = false,
+                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            });
+        }
+        catch
+        {
+            return "{}";
+        }
+    }
+
+    private static bool TryParseParams(string text, out Dictionary<string, JsonElement>? result, out string? error)
+    {
+        result = null;
+        error = null;
+        if (string.IsNullOrWhiteSpace(text) || text.Trim() == "{}")
+        {
+            return true;
+        }
+        try
+        {
+            using var doc = JsonDocument.Parse(text);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                error = "object でなければなりません";
+                return false;
+            }
+            var dict = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                dict[prop.Name] = prop.Value.Clone();
+            }
+            result = dict;
+            return true;
+        }
+        catch (JsonException ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
 }
