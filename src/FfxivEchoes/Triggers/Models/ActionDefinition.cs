@@ -104,6 +104,22 @@ public sealed class ActionDefinition
     [JsonPropertyName("trigger_id")]
     public string? TriggerId { get; set; }
 
+    // arena_view: ギミックタイプ（outer_ring / inner_circle / scatter / stack / cone）
+    [JsonPropertyName("gimmick")]
+    public string? Gimmick { get; set; }
+
+    // arena_view: 安置コール文字列
+    [JsonPropertyName("callout")]
+    public string? Callout { get; set; }
+
+    // arena_view (cone): 危険コーンの方向（N/NE/E/SE/S/SW/W/NW）
+    [JsonPropertyName("direction")]
+    public string? Direction { get; set; }
+
+    // arena_view (cone): 扇形の角度（度数法）
+    [JsonPropertyName("fan_deg")]
+    public double? FanDeg { get; set; }
+
     // 想定外フィールドを失わないための受け皿（フォーマットバージョン跨ぎの後方互換用）
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? Extras { get; set; }

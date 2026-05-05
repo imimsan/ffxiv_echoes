@@ -286,7 +286,8 @@
             "field_marker",
             "proximity_feedback",
             "set_variable",
-            "chain_trigger"
+            "chain_trigger",
+            "arena_view"
           ]
         },
         "delay": {
@@ -342,7 +343,24 @@
         "in_sound": { "type": "string" },
         "out_sound": { "type": "string" },
         "show_distance": { "type": "boolean" },
-        "trigger_id": { "type": "string", "description": "chain_trigger用、連鎖発動するトリガーID" }
+        "trigger_id": { "type": "string", "description": "chain_trigger用、連鎖発動するトリガーID" },
+        "gimmick": {
+          "type": "string",
+          "enum": ["outer_ring", "inner_circle", "scatter", "stack", "cone"],
+          "description": "arena_view 用、表示するギミックタイプ"
+        },
+        "callout": { "type": "string", "description": "arena_view 用、画面下部に表示する安置コール文字列" },
+        "direction": {
+          "type": "string",
+          "enum": ["N", "NE", "E", "SE", "S", "SW", "W", "NW"],
+          "description": "arena_view (cone) 用、危険コーンの方向"
+        },
+        "fan_deg": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 360,
+          "description": "arena_view (cone) 用、扇形の角度（度数法、デフォルト 90）"
+        }
       }
     },
     "safe_zone_calculation": {
