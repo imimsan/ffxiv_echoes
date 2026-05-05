@@ -12,6 +12,8 @@ using FfxivEchoes.Commands.Handlers;
 using FfxivEchoes.Diagnostics;
 using FfxivEchoes.Events;
 using FfxivEchoes.Recording;
+using FfxivEchoes.SafeZone;
+using FfxivEchoes.SafeZone.Presets;
 using FfxivEchoes.Triggers;
 using FfxivEchoes.Triggers.Matching;
 using FfxivEchoes.Windows;
@@ -77,6 +79,10 @@ public sealed class Plugin : IDalamudPlugin
     // ── F3: ライブHUD ────────────────────────────────────
     private readonly LiveTimelineWindow _liveTimelineWindow;
 
+    // ── F4: 安置計算プリセット ────────────────────────────
+    private readonly SafeZoneEngine _safeZoneEngine;
+    private readonly SafeZoneContextBuilder _safeZoneContextBuilder;
+
     // ── M9: オーディオデバイス ────────────────────────────
     private readonly AudioDeviceEnumerator _audioDevices;
 
@@ -137,6 +143,19 @@ public sealed class Plugin : IDalamudPlugin
         // F3: ライブタイムライン HUD
         _liveTimelineWindow = new LiveTimelineWindow(_eventBus, _combatClock, _triggerStore);
         WindowSystem.AddWindow(_liveTimelineWindow);
+
+        // F4: 安置計算プリセット（基本 6 種）
+        var safeZonePresets = new ISafeZonePreset[]
+        {
+            new FixedPreset(),
+            new BossRelativePreset(),
+            new MarkerRelativePreset(Log),
+            new ArenaCenterRelativePreset(),
+            new InverseOfTelegraphPreset(),
+            new PartyMemberRelativePreset(),
+        };
+        _safeZoneEngine = new SafeZoneEngine(safeZonePresets, Log);
+        _safeZoneContextBuilder = new SafeZoneContextBuilder(ObjectTable, PartyList);
 
         // M7: アクションディスパッチャ
         _ttsHandler = new TtsHandler(Configuration, Log);
