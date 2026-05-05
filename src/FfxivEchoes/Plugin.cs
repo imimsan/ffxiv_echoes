@@ -144,15 +144,21 @@ public sealed class Plugin : IDalamudPlugin
         _liveTimelineWindow = new LiveTimelineWindow(_eventBus, _combatClock, _triggerStore);
         WindowSystem.AddWindow(_liveTimelineWindow);
 
-        // F4: 安置計算プリセット（基本 6 種）
+        // F4 + F5: 安置計算プリセット（基本 6 種 + オブジェクト検知 4 種）
         var safeZonePresets = new ISafeZonePreset[]
         {
+            // F4
             new FixedPreset(),
             new BossRelativePreset(),
             new MarkerRelativePreset(Log),
             new ArenaCenterRelativePreset(),
             new InverseOfTelegraphPreset(),
             new PartyMemberRelativePreset(),
+            // F5
+            new FindActorWithStatusPreset(ObjectTable),
+            new FindActorWithoutStatusPreset(ObjectTable),
+            new FindActorNotCastingPreset(ObjectTable),
+            new FindActorByDistancePreset(ObjectTable),
         };
         _safeZoneEngine = new SafeZoneEngine(safeZonePresets, Log);
         _safeZoneContextBuilder = new SafeZoneContextBuilder(ObjectTable, PartyList);
