@@ -34,6 +34,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IDataManager DataManager { get; private set; } = null!;
     [PluginService] internal static IPartyList PartyList { get; private set; } = null!;
     [PluginService] internal static IPlayerState PlayerState { get; private set; } = null!;
+    [PluginService] internal static IGameGui GameGui { get; private set; } = null!;
 
     public Configuration Configuration { get; }
     public WindowSystem WindowSystem { get; } = new("FfxivEchoes");
@@ -79,9 +80,12 @@ public sealed class Plugin : IDalamudPlugin
     // ── F3: ライブHUD ────────────────────────────────────
     private readonly LiveTimelineWindow _liveTimelineWindow;
 
-    // ── F4: 安置計算プリセット ────────────────────────────
+    // ── F4-F7: 安置計算プリセット ─────────────────────────
     private readonly SafeZoneEngine _safeZoneEngine;
     private readonly SafeZoneContextBuilder _safeZoneContextBuilder;
+
+    // ── F8: 位置情報出力 ─────────────────────────────────
+    private readonly WorldOverlayWindow _worldOverlayWindow;
 
     // ── M9: オーディオデバイス ────────────────────────────
     private readonly AudioDeviceEnumerator _audioDevices;
@@ -173,15 +177,26 @@ public sealed class Plugin : IDalamudPlugin
         engineRef = _safeZoneEngine; // IntersectionPreset の遅延参照を解決
         _safeZoneContextBuilder = new SafeZoneContextBuilder(ObjectTable, PartyList);
 
-        // M7: アクションディスパッチャ
+        // F8: ワールドオーバーレイ
+        _worldOverlayWindow = new WorldOverlayWindow(GameGui, ObjectTable);
+        WindowSystem.AddWindow(_worldOverlayWindow);
+
+        // M7 + F8: アクションディスパッチャ
         _ttsHandler = new TtsHandler(Configuration, Log);
+        var wavHandler = new WavHandler(Configuration, PluginInterface, _audioDevices, Log);
         var handlers = new IActionHandler[]
         {
             _ttsHandler,
-            new WavHandler(Configuration, PluginInterface, _audioDevices, Log),
+            wavHandler,
             new ChatEchoHandler(ChatGui),
             new OverlayTextHandler(_overlayWindow),
             new TimerBarHandler(_overlayWindow),
+            // F8: 位置情報出力
+            new DirectionCallHandler(_safeZoneEngine, _safeZoneContextBuilder,
+                Configuration, _overlayWindow, _ttsHandler, ChatGui, Log),
+            new ScreenArrowHandler(_safeZoneEngine, _safeZoneContextBuilder, _worldOverlayWindow, Log),
+            new FieldMarkerHandler(_safeZoneEngine, _safeZoneContextBuilder, _worldOverlayWindow, Log),
+            new ProximityFeedbackHandler(_safeZoneEngine, _safeZoneContextBuilder, wavHandler, ChatGui, Log),
         };
         _actionDispatcher = new ActionDispatcher(_eventBus, handlers, Log);
 
@@ -228,6 +243,7 @@ public sealed class Plugin : IDalamudPlugin
         _mainWindow.Dispose();
         _overlayWindow.Dispose();
         _liveTimelineWindow.Dispose();
+        _worldOverlayWindow.Dispose();
 
         CommandManager.RemoveHandler(CommandRouter.RootCommand);
     }
