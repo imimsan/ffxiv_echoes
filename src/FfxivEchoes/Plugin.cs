@@ -10,6 +10,7 @@ using FfxivEchoes.Commands.Handlers;
 using FfxivEchoes.Diagnostics;
 using FfxivEchoes.Events;
 using FfxivEchoes.Recording;
+using FfxivEchoes.Triggers;
 using FfxivEchoes.Windows;
 using FfxivEchoes.Windows.Tabs;
 
@@ -49,6 +50,11 @@ public sealed class Plugin : IDalamudPlugin
     private readonly RecordingController _recordingController;
     private readonly BattleRecorder _battleRecorder;
 
+    // ── M5: トリガー定義 ─────────────────────────────────
+    private readonly TriggerLoader _triggerLoader;
+    private readonly TriggerStore _triggerStore;
+    private readonly TriggerWatcher _triggerWatcher;
+
     public Plugin()
     {
         Configuration = Configuration.LoadAndMigrate(PluginInterface, Log);
@@ -75,8 +81,14 @@ public sealed class Plugin : IDalamudPlugin
         _hpCapture = new HpCapture(Framework, ObjectTable, _eventBus, Log);
         _debugChatEcho = new DebugChatEcho(_eventBus, Configuration, ChatGui, _combatClock);
 
+        // M5: トリガー定義（ロガーより先に初期化：RecordingController が TriggerStore を参照する）
+        _triggerLoader = new TriggerLoader(PluginInterface.ConfigDirectory.FullName, Log);
+        _triggerStore = new TriggerStore(_triggerLoader, Log);
+        _triggerStore.Reload();
+        _triggerWatcher = new TriggerWatcher(_triggerLoader.TriggersDirectory, _triggerStore, Log);
+
         // M4: ロガー
-        _recordingController = new RecordingController(Log);
+        _recordingController = new RecordingController(Log, _triggerStore);
         _battleRecorder = new BattleRecorder(
             _eventBus, _recordingController, PluginInterface,
             PartyList, ClientState, ObjectTable, PlayerState, DataManager, Log);
@@ -100,6 +112,9 @@ public sealed class Plugin : IDalamudPlugin
 
         // ロガーを先に閉じて録画ファイルを確実にフラッシュ
         _battleRecorder.Dispose();
+
+        // トリガー監視・ストアの停止
+        _triggerWatcher.Dispose();
 
         // キャプチャ群を逆順で破棄（DebugEcho が他のキャプチャに依存していないが念のため）
         _debugChatEcho.Dispose();
@@ -138,12 +153,7 @@ public sealed class Plugin : IDalamudPlugin
 
         router.Register(new DebugCommand(Configuration, ChatGui));
         router.Register(new RecordCommand(_recordingController, _battleRecorder, ChatGui));
-        router.Register(new PendingCommand(
-            verb: "reload",
-            usage: "reload",
-            description: "トリガー定義の再読み込み",
-            plannedFor: "M5",
-            chatGui: ChatGui));
+        router.Register(new ReloadCommand(_triggerStore, ChatGui));
         router.Register(new PendingCommand(
             verb: "timeline",
             usage: "timeline <all|configured|toggle|hide>",
