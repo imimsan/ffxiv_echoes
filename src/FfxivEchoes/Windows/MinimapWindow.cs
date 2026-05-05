@@ -39,9 +39,14 @@ public sealed class MinimapWindow : Window, IDisposable
     private const uint ColCallout = 0xFF24BFFB;      // callout 黄色（amber, ABGR）
     private const uint ColCalloutShadow = 0xFF000000;
     private const uint ColPlayerSelf = 0xFF80FF80;   // 自分（明緑）
-    private const uint ColPlayerSelfRing = 0xFF60E060;
-    private const uint ColPartyMember = 0xFFCCCCCC;  // PT（薄灰）
+    private const uint ColPlayerSelfRing = 0xFFE0FFFF;  // 自分の白リング（強調）
+    private const uint ColPartyMember = 0xFFCCCCCC;  // PT 既定（薄灰）
     private const uint ColPartyMemberRing = 0xFFFFFFFF;
+    // ロール別色（ABGR 形式）— Lumina ClassJob.Role: 1=Tank, 2=MeleeDPS, 3=Ranged/Caster, 4=Healer
+    private const uint ColRoleTank = 0xFFF66B3B;     // 青 (#3B6BF6)
+    private const uint ColRoleHealer = 0xFF6BD377;   // 緑 (#77D36B)
+    private const uint ColRoleDps = 0xFF6B6BF6;      // 赤 (#F66B6B)
+    private const uint ColRoleNonCombat = 0xFFCCCCCC; // 灰
 
     private readonly List<ArenaItem> _items = new();
     private readonly object _gate = new();
@@ -334,7 +339,7 @@ public sealed class MinimapWindow : Window, IDisposable
 
         var selfPos = snapshot.SelfPosition;
 
-        // PT メンバーは小さいドット（自分は後で上書き描画するためスキップ）
+        // PT メンバーはロール別色のドット（自分は後で上書き描画するためスキップ）
         const float SelfMatchEpsilonSq = 0.05f * 0.05f;
         foreach (var member in snapshot.Party)
         {
@@ -344,18 +349,35 @@ public sealed class MinimapWindow : Window, IDisposable
             var dzSelf = memberPos.Z - selfPos.Z;
             if ((dxSelf * dxSelf + dzSelf * dzSelf) < SelfMatchEpsilonSq)
             {
-                // 自分自身はスキップ（後段で前景描画）
-                continue;
+                continue; // 自分自身は後段で前景描画
             }
+
+            uint fillColor;
+            try
+            {
+                var role = member.ClassJob.Value.Role;
+                fillColor = role switch
+                {
+                    1 => ColRoleTank,
+                    2 or 3 => ColRoleDps,
+                    4 => ColRoleHealer,
+                    _ => ColRoleNonCombat,
+                };
+            }
+            catch
+            {
+                fillColor = ColPartyMember;
+            }
+
             DrawPositionDot(draw, center, r, arenaCenter, radius, memberPos,
-                ColPartyMember, ColPartyMemberRing, 4f * scale);
+                fillColor, ColPartyMemberRing, 4f * scale);
         }
 
-        // 自分は明緑で前景
+        // 自分は明緑 + 太い白リングで前景強調
         if (selfPos != Vector3.Zero)
         {
             DrawPositionDot(draw, center, r, arenaCenter, radius, selfPos,
-                ColPlayerSelf, ColPlayerSelfRing, 5.5f * scale);
+                ColPlayerSelf, ColPlayerSelfRing, 5.5f * scale, ringThickness: 1.8f);
         }
     }
 
@@ -366,7 +388,8 @@ public sealed class MinimapWindow : Window, IDisposable
     private static void DrawPositionDot(
         ImDrawListPtr draw, Vector2 mapCenter, float mapR,
         Vector3 arenaCenter, float arenaRadius,
-        Vector3 worldPos, uint fillColor, uint ringColor, float dotR)
+        Vector3 worldPos, uint fillColor, uint ringColor, float dotR,
+        float ringThickness = 1.2f)
     {
         // FFXIV 座標：X = 東+、Z = 南+。ミニマップは北上、X 右、Y 下なので
         // mapX = cx + dx / arenaR * mapR
@@ -386,7 +409,7 @@ public sealed class MinimapWindow : Window, IDisposable
         var px = mapCenter.X + nx * mapR;
         var py = mapCenter.Y + nz * mapR;
         draw.AddCircleFilled(new Vector2(px, py), dotR, fillColor, 16);
-        draw.AddCircle(new Vector2(px, py), dotR, ringColor, 16, 1.2f);
+        draw.AddCircle(new Vector2(px, py), dotR, ringColor, 16, ringThickness);
     }
 
     private static void DrawCallout(ImDrawListPtr draw, Vector2 winPos, float size, float scale, string callout, string sub)
