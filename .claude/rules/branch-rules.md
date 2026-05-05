@@ -33,7 +33,7 @@ chore/*       ←  ドキュメント・設定・雑務など実装を伴わな�
 
 - **PR 作成は許可**：`feature/*` や `fix/*` から `develop` への PR は Claude が作成してよい。
 - **マージは禁止**：ユーザーの明示的指示があるまで PR をマージしてはならない（GitHub UI 上のマージ、`gh pr merge`、`git merge` すべて含む）。
-- **直接 push 禁止**：feature ブランチを経由せず `develop` を直接編集・push してはならない。
+- **直接編集は推奨されない**：原則 feature ブランチ経由で PR を出す。ただし、ブランチ初期化や軽微な復旧などのブートストラップ操作で `git push origin develop` が必要な場合は許可（一般的な push は `git push:*` が `ask` 扱いでプロンプトが出るので過剰な誤操作を防ぐ）。
 - **rebase / squash の選択もユーザー判断**：マージ戦略を Claude が独断で決めない。
 
 ### `feature/*` `fix/*` `chore/*` ブランチ

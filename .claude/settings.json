@@ -48,10 +48,7 @@
       "Bash(git push --force-with-lease:*)",
       "Bash(git push origin main:*)",
       "Bash(git push origin main)",
-      "Bash(git push origin develop:*)",
-      "Bash(git push origin develop)",
       "Bash(git push origin HEAD:main:*)",
-      "Bash(git push origin HEAD:develop:*)",
       "Bash(git push --delete:*)",
       "Bash(git push origin --delete:*)",
 
