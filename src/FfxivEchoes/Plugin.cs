@@ -71,6 +71,9 @@ public sealed class Plugin : IDalamudPlugin
     // ── F10: プロファイル ────────────────────────────────
     private readonly ProfileStore _profileStore;
 
+    // ── F11: インポート/エクスポート ──────────────────────
+    private readonly TriggerExportImport _triggerExportImport;
+
     // ── M6 + F2: トリガーエンジン ────────────────────────
     private readonly TargetResolver _targetResolver;
     private readonly EventMatcher _eventMatcher;
@@ -109,6 +112,9 @@ public sealed class Plugin : IDalamudPlugin
         // F10: プロファイル
         _profileStore = new ProfileStore(PluginInterface.ConfigDirectory.FullName, Log);
         _profileStore.Reload();
+
+        // F11: インポート/エクスポート
+        _triggerExportImport = new TriggerExportImport(PluginInterface, _triggerStore, Log);
 
         // M8: 録画スキャナ
         _recordingScanner = new RecordingScanner(PluginInterface, Log);
@@ -272,7 +278,7 @@ public sealed class Plugin : IDalamudPlugin
         new LiveHudTab(),
         new AudioTab(Configuration, _audioDevices),
         new ProfileTab(),
-        new ImportExportTab(),
+        new ImportExportTab(_triggerStore, _triggerExportImport),
         new GeneralSettingsTab(Configuration, PluginInterface),
     };
 
