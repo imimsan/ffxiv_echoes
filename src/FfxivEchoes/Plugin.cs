@@ -11,6 +11,7 @@ using FfxivEchoes.Diagnostics;
 using FfxivEchoes.Events;
 using FfxivEchoes.Recording;
 using FfxivEchoes.Triggers;
+using FfxivEchoes.Triggers.Matching;
 using FfxivEchoes.Windows;
 using FfxivEchoes.Windows.Tabs;
 
@@ -55,6 +56,11 @@ public sealed class Plugin : IDalamudPlugin
     private readonly TriggerStore _triggerStore;
     private readonly TriggerWatcher _triggerWatcher;
 
+    // ── M6: トリガーエンジン ─────────────────────────────
+    private readonly TargetResolver _targetResolver;
+    private readonly EventMatcher _eventMatcher;
+    private readonly TriggerEngine _triggerEngine;
+
     public Plugin()
     {
         Configuration = Configuration.LoadAndMigrate(PluginInterface, Log);
@@ -93,6 +99,11 @@ public sealed class Plugin : IDalamudPlugin
             _eventBus, _recordingController, PluginInterface,
             PartyList, ClientState, ObjectTable, PlayerState, DataManager, Log);
 
+        // M6: トリガーエンジン
+        _targetResolver = new TargetResolver(PartyList, PlayerState);
+        _eventMatcher = new EventMatcher(_targetResolver);
+        _triggerEngine = new TriggerEngine(_eventBus, _triggerStore, _eventMatcher, Log);
+
         // UI ビルダーへのフック
         PluginInterface.UiBuilder.Draw += WindowSystem.Draw;
         PluginInterface.UiBuilder.OpenConfigUi += OpenSettings;
@@ -110,7 +121,10 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenConfigUi -= OpenSettings;
         PluginInterface.UiBuilder.OpenMainUi -= OpenSettings;
 
-        // ロガーを先に閉じて録画ファイルを確実にフラッシュ
+        // トリガーエンジンを先に止めて新規 TriggerFired を発生させない
+        _triggerEngine.Dispose();
+
+        // ロガーを閉じて録画ファイルを確実にフラッシュ
         _battleRecorder.Dispose();
 
         // トリガー監視・ストアの停止

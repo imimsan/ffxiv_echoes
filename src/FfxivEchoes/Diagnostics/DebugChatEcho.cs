@@ -51,6 +51,7 @@ public sealed class DebugChatEcho : IDisposable
             StatusLostEvent x => $"Status- {x.TargetName} ← {x.StatusName}",
             StatusUpdatedEvent x => $"Status~ {x.StatusId} stacks={x.Stacks} t={x.RemainingTime:0.0}s",
             HpChangedEvent x => $"HP {x.ActorName} {x.HpPct:0.0}% ({x.CurrentHp:N0}/{x.MaxHp:N0})",
+            TriggerFiredEvent x => $"⚡ Trigger: {x.TriggerId}{(x.TriggerName is { } n ? $" ({n})" : string.Empty)}",
             _ => $"({ev.GetType().Name})",
         };
 

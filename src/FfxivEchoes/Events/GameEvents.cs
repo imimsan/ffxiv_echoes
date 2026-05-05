@@ -107,3 +107,20 @@ public sealed record HpChangedEvent(
     uint CurrentHp,
     uint MaxHp
 ) : IGameEvent;
+
+// ─── トリガー発火（M6 で発行） ─────────────────────────────────────
+
+/// <summary>
+/// マッチング済みトリガーの発火イベント。M7 のアクションディスパッチャが購読する。
+/// </summary>
+/// <param name="Zone">発火時のゾーン名</param>
+/// <param name="TriggerId">発火したトリガーの ID</param>
+/// <param name="TriggerName">トリガーの表示名（未設定なら null）</param>
+/// <param name="SourceEvent">マッチ元のイベント（cast_start などのオリジナル）</param>
+public sealed record TriggerFiredEvent(
+    DateTimeOffset Timestamp,
+    string Zone,
+    string TriggerId,
+    string? TriggerName,
+    IGameEvent SourceEvent
+) : IGameEvent;
