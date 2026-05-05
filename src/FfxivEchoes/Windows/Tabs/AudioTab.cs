@@ -1,5 +1,8 @@
+using System;
+using System.Collections.Generic;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility;
+using FfxivEchoes.Actions;
 
 namespace FfxivEchoes.Windows.Tabs;
 
@@ -9,89 +12,61 @@ public sealed class AudioTab : ITab
     public string Id => "audio";
 
     private readonly Configuration _configuration;
+    private readonly AudioDeviceEnumerator _deviceEnumerator;
+    private IReadOnlyList<AudioDeviceInfo> _cachedDevices;
+    private DateTime _devicesCachedAt;
 
-    public AudioTab(Configuration configuration)
+    public AudioTab(Configuration configuration, AudioDeviceEnumerator deviceEnumerator)
     {
         _configuration = configuration;
+        _deviceEnumerator = deviceEnumerator;
+        _cachedDevices = Array.Empty<AudioDeviceInfo>();
+        _devicesCachedAt = DateTime.MinValue;
     }
 
     public void Draw()
     {
-        ImGui.TextDisabled("M9 で本実装：実際の音はまだ鳴りません。スライダーは設定の保存のみ動作します。");
+        ImGui.TextDisabled("音量は M9 で実装済み（master × カテゴリ × アクション の三階層）。" +
+            "TTS のデバイス指定は OS 側のオーディオルーティングに依存します。");
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
 
         if (ImGui.CollapsingHeader("音量"u8, ImGuiTreeNodeFlags.DefaultOpen))
         {
-            DrawMasterVolume();
-            DrawTtsVolume();
-            DrawWavVolume();
-            DrawFeedbackVolume();
+            DrawVolume("マスター音量", () => _configuration.MasterVolume,
+                v => _configuration.MasterVolume = v);
+            DrawVolume("TTS 音量", () => _configuration.TtsVolume,
+                v => _configuration.TtsVolume = v);
+            DrawVolume("WAV 音量", () => _configuration.WavVolume,
+                v => _configuration.WavVolume = v);
+            DrawVolume("フィードバック音量", () => _configuration.FeedbackVolume,
+                v => _configuration.FeedbackVolume = v);
         }
 
         ImGui.Spacing();
         if (ImGui.CollapsingHeader("音声ボイス"u8, ImGuiTreeNodeFlags.DefaultOpen))
         {
             DrawDefaultVoice();
-            ImGui.Spacing();
-            DrawAudioDevice();
+        }
+
+        ImGui.Spacing();
+        if (ImGui.CollapsingHeader("出力デバイス（WAV）"u8, ImGuiTreeNodeFlags.DefaultOpen))
+        {
+            DrawDeviceDropdown();
         }
     }
 
-    private void DrawMasterVolume()
+    private void DrawVolume(string label, Func<float> getter, Action<float> setter)
     {
-        var v = _configuration.MasterVolume;
-        LabelColumn("マスター音量");
+        var value = getter();
+        ImGui.AlignTextToFramePadding();
+        ImGui.Text(label);
+        ImGui.SameLine(180f * ImGuiHelpers.GlobalScale);
         ImGui.SetNextItemWidth(220f * ImGuiHelpers.GlobalScale);
-        if (ImGui.SliderFloat("##master-volume"u8, ref v, 0f, 1f, "%.2f"u8))
+        if (ImGui.SliderFloat($"##vol-{label}", ref value, 0f, 1f, "%.2f"u8))
         {
-            _configuration.MasterVolume = v;
-        }
-        if (ImGui.IsItemDeactivatedAfterEdit())
-        {
-            _configuration.Save();
-        }
-    }
-
-    private void DrawTtsVolume()
-    {
-        var v = _configuration.TtsVolume;
-        LabelColumn("TTS 音量");
-        ImGui.SetNextItemWidth(220f * ImGuiHelpers.GlobalScale);
-        if (ImGui.SliderFloat("##tts-volume"u8, ref v, 0f, 1f, "%.2f"u8))
-        {
-            _configuration.TtsVolume = v;
-        }
-        if (ImGui.IsItemDeactivatedAfterEdit())
-        {
-            _configuration.Save();
-        }
-    }
-
-    private void DrawWavVolume()
-    {
-        var v = _configuration.WavVolume;
-        LabelColumn("WAV 音量");
-        ImGui.SetNextItemWidth(220f * ImGuiHelpers.GlobalScale);
-        if (ImGui.SliderFloat("##wav-volume"u8, ref v, 0f, 1f, "%.2f"u8))
-        {
-            _configuration.WavVolume = v;
-        }
-        if (ImGui.IsItemDeactivatedAfterEdit())
-        {
-            _configuration.Save();
-        }
-    }
-
-    private void DrawFeedbackVolume()
-    {
-        var v = _configuration.FeedbackVolume;
-        LabelColumn("フィードバック音量");
-        ImGui.SetNextItemWidth(220f * ImGuiHelpers.GlobalScale);
-        if (ImGui.SliderFloat("##feedback-volume"u8, ref v, 0f, 1f, "%.2f"u8))
-        {
-            _configuration.FeedbackVolume = v;
+            setter(value);
         }
         if (ImGui.IsItemDeactivatedAfterEdit())
         {
@@ -102,8 +77,10 @@ public sealed class AudioTab : ITab
     private void DrawDefaultVoice()
     {
         var voice = _configuration.DefaultVoice;
-        LabelColumn("デフォルトボイス");
-        ImGui.SetNextItemWidth(220f * ImGuiHelpers.GlobalScale);
+        ImGui.AlignTextToFramePadding();
+        ImGui.Text("デフォルトボイス");
+        ImGui.SameLine(180f * ImGuiHelpers.GlobalScale);
+        ImGui.SetNextItemWidth(280f * ImGuiHelpers.GlobalScale);
         if (ImGui.InputText("##default-voice"u8, ref voice, 64))
         {
             _configuration.DefaultVoice = voice;
@@ -112,29 +89,53 @@ public sealed class AudioTab : ITab
         {
             _configuration.Save();
         }
-        ImGui.TextDisabled("  例：ja-JP-Default。利用可能なボイス一覧の選択 UI は M9 で追加");
+        ImGui.TextDisabled("  例：「Microsoft Haruka Desktop」など。OS の SAPI ボイス名と一致させてください。");
     }
 
-    private void DrawAudioDevice()
+    private void DrawDeviceDropdown()
     {
-        var device = _configuration.AudioDevice ?? string.Empty;
-        LabelColumn("出力デバイス");
-        ImGui.SetNextItemWidth(220f * ImGuiHelpers.GlobalScale);
-        if (ImGui.InputText("##audio-device"u8, ref device, 128))
+        // デバイス列挙は重いので 5 秒キャッシュ
+        if ((DateTime.UtcNow - _devicesCachedAt).TotalSeconds > 5)
         {
-            _configuration.AudioDevice = string.IsNullOrWhiteSpace(device) ? null : device;
+            _cachedDevices = _deviceEnumerator.EnumerateRenderDevices();
+            _devicesCachedAt = DateTime.UtcNow;
         }
-        if (ImGui.IsItemDeactivatedAfterEdit())
+
+        var current = _configuration.AudioDevice ?? AudioDeviceEnumerator.SystemDefaultId;
+        var currentIndex = 0;
+        for (int i = 0; i < _cachedDevices.Count; i++)
         {
+            if (_cachedDevices[i].Id == current)
+            {
+                currentIndex = i;
+                break;
+            }
+        }
+
+        var names = new string[_cachedDevices.Count];
+        for (int i = 0; i < _cachedDevices.Count; i++)
+        {
+            names[i] = _cachedDevices[i].Name;
+        }
+
+        ImGui.AlignTextToFramePadding();
+        ImGui.Text("出力先");
+        ImGui.SameLine(180f * ImGuiHelpers.GlobalScale);
+        ImGui.SetNextItemWidth(320f * ImGuiHelpers.GlobalScale);
+        if (ImGui.Combo("##audio-device", ref currentIndex, names, names.Length))
+        {
+            _configuration.AudioDevice = _cachedDevices[currentIndex].Id == AudioDeviceEnumerator.SystemDefaultId
+                ? null
+                : _cachedDevices[currentIndex].Id;
             _configuration.Save();
         }
-        ImGui.TextDisabled("  空欄でシステム既定。デバイス一覧 UI は M9 で追加");
-    }
 
-    private static void LabelColumn(string label)
-    {
-        ImGui.AlignTextToFramePadding();
-        ImGui.Text(label);
-        ImGui.SameLine(180f * ImGuiHelpers.GlobalScale);
+        ImGui.SameLine();
+        if (ImGui.Button("再列挙"u8))
+        {
+            _devicesCachedAt = DateTime.MinValue;
+        }
+
+        ImGui.TextDisabled("  WAV 再生のみ反映。TTS は Windows のオーディオ設定に従います。");
     }
 }
