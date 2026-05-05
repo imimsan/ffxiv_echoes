@@ -50,7 +50,8 @@ public sealed class ZoneCapture : IDisposable
     private void OnTerritoryChanged(uint territoryId)
     {
         var name = ResolveTerritoryName(territoryId);
-        _log.Debug("[FfxivEchoes] ZoneChanged → {Id} {Name}", territoryId, name);
+        // 動作確認のため Information で出す（後で Debug に戻して良い）
+        _log.Information("[FfxivEchoes] ZoneChanged → {Id} {Name}", territoryId, name);
         _bus.Publish(new ZoneChangedEvent(DateTimeOffset.UtcNow, territoryId, name));
     }
 
