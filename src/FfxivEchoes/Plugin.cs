@@ -15,6 +15,7 @@ using FfxivEchoes.Profiles;
 using FfxivEchoes.Recording;
 using FfxivEchoes.SafeZone;
 using FfxivEchoes.SafeZone.Presets;
+using FfxivEchoes.Scripting;
 using FfxivEchoes.Triggers;
 using FfxivEchoes.Triggers.Matching;
 using FfxivEchoes.Variables;
@@ -77,6 +78,9 @@ public sealed class Plugin : IDalamudPlugin
 
     // ── P1+P2: 状態変数 ──────────────────────────────────
     private readonly VariableStore _variableStore;
+
+    // ── P5: カスタムスクリプト（スタブ） ──────────────────
+    private readonly ScriptManager _scriptManager;
 
     // ── M6 + F2: トリガーエンジン ────────────────────────
     private readonly TargetResolver _targetResolver;
@@ -171,6 +175,10 @@ public sealed class Plugin : IDalamudPlugin
             activeProfileGetter: () => _profileStore.Get(Configuration.ActiveProfile),
             variables: _variableStore);
 
+        // P5: カスタムスクリプト（スタブ。明示 LoadAll しない限り何もロードしない）
+        var scriptContext = new ScriptContext(_eventBus, _triggerStore, _variableStore, Log);
+        _scriptManager = new ScriptManager(PluginInterface, scriptContext, Log);
+
         // F3: ライブタイムライン HUD
         _liveTimelineWindow = new LiveTimelineWindow(_eventBus, _combatClock, _triggerStore);
         WindowSystem.AddWindow(_liveTimelineWindow);
@@ -253,6 +261,9 @@ public sealed class Plugin : IDalamudPlugin
         // アクションディスパッチャを先に止めて新規アクション実行を遮断
         _actionDispatcher.Dispose();
         _ttsHandler.Dispose();
+
+        // P5: スクリプト群を解放
+        _scriptManager.Dispose();
 
         // トリガーエンジンを止めて新規 TriggerFired を発生させない
         _triggerEngine.Dispose();
