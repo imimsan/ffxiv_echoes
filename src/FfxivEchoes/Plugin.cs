@@ -79,6 +79,9 @@ public sealed class Plugin : IDalamudPlugin
     // ── タイムラインノート（軽減等メモ） ──────────────────
     private NoteReminderService? _noteReminder;
 
+    // ── 録画ベースの予測アドバンス警告 ──────────────────
+    private PredictedCastReminderService? _predictedCastReminder;
+
     // ── P1+P2: 状態変数 ──────────────────────────────────
     private readonly VariableStore _variableStore;
 
@@ -180,8 +183,12 @@ public sealed class Plugin : IDalamudPlugin
         _noteReminder = new NoteReminderService(
             Framework, _eventBus, _triggerStore, _combatClock, PlayerState, Log);
 
-        // F3: ライブタイムライン HUD
-        _liveTimelineWindow = new LiveTimelineWindow(_eventBus, _combatClock, _triggerStore);
+        // 録画ベースの予測アドバンス警告（auto_settings.predict_advance_warning_sec で有効化）
+        _predictedCastReminder = new PredictedCastReminderService(
+            Framework, _eventBus, _triggerStore, _combatClock, _recordingScanner, Log);
+
+        // F3: ライブタイムライン HUD（録画ベースの予定キャストを未来側に描く）
+        _liveTimelineWindow = new LiveTimelineWindow(_eventBus, _combatClock, _triggerStore, _recordingScanner);
         WindowSystem.AddWindow(_liveTimelineWindow);
 
         // F4-F7: 安置計算プリセット（合計 15 種）
@@ -288,6 +295,7 @@ public sealed class Plugin : IDalamudPlugin
 
         // タイムラインノート通知を停止
         _noteReminder?.Dispose();
+        _predictedCastReminder?.Dispose();
 
         // P5: スクリプト群を解放
         _scriptManager.Dispose();

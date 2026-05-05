@@ -7,6 +7,7 @@ using Dalamud.Interface.Windowing;
 using System.Globalization;
 using FfxivEchoes.Capture;
 using FfxivEchoes.Events;
+using FfxivEchoes.Recording;
 using FfxivEchoes.Triggers;
 using FfxivEchoes.Triggers.Models;
 
@@ -31,14 +32,16 @@ public sealed class LiveTimelineWindow : Window, IDisposable
 
     private readonly CombatClock _combatClock;
     private readonly TriggerStore _store;
+    private readonly RecordingScanner _recordings;
     private readonly IDisposable _eventSub;
     private readonly List<HistoryEntry> _history = new();
+    private readonly List<PredictedCast> _predictions = new();
     private readonly object _gate = new();
 
     private string _currentZone = "Unknown";
     private DisplayMode _mode = DisplayMode.Configured;
 
-    public LiveTimelineWindow(IEventBus bus, CombatClock combatClock, TriggerStore store)
+    public LiveTimelineWindow(IEventBus bus, CombatClock combatClock, TriggerStore store, RecordingScanner recordings)
         : base("##ffxiv-echoes-live-timeline",
             ImGuiWindowFlags.NoTitleBar |
             ImGuiWindowFlags.NoResize |
@@ -49,6 +52,7 @@ public sealed class LiveTimelineWindow : Window, IDisposable
     {
         _combatClock = combatClock;
         _store = store;
+        _recordings = recordings;
 
         Size = new Vector2(Width, Height);
         SizeCondition = ImGuiCond.FirstUseEver;
@@ -77,10 +81,12 @@ public sealed class LiveTimelineWindow : Window, IDisposable
             case ZoneChangedEvent z:
                 _currentZone = z.ZoneName;
                 _history.Clear();
+                ReloadPredictions();
                 UpdateVisibility();
                 break;
             case CombatStartedEvent:
                 _history.Clear();
+                ReloadPredictions();
                 UpdateVisibility();
                 break;
             case CombatEndedEvent:
@@ -208,6 +214,35 @@ public sealed class LiveTimelineWindow : Window, IDisposable
             }
         }
 
+        // 録画ベースの予定キャスト（advance warning の主役）：
+        // 録画に出現したキャストを「次回も同じ時刻に出る」前提で未来側に薄く描く。
+        // 通過済み（minSec より過去）は描かない（履歴で出るため）。
+        var showPredicted = triggerFile?.AutoSettings.ShowPredictedCasts ?? true;
+        PredictedCast[] predictions;
+        lock (_gate)
+        {
+            predictions = showPredicted ? _predictions.ToArray() : Array.Empty<PredictedCast>();
+        }
+        foreach (var p in predictions)
+        {
+            if (p.RelativeSec < (float)nowSec - 1.0f) continue; // 既に過ぎた
+            if (p.RelativeSec < minSec || p.RelativeSec > maxSec) continue;
+            var x = pos.X + (float)((p.RelativeSec - minSec) / span) * width;
+
+            // 未来側は半透明、近づく（5 秒以内）と濃く
+            var distance = MathF.Max(0, (float)p.RelativeSec - (float)nowSec);
+            var alpha = distance < 5.0f ? 0xC8u : (distance < 15.0f ? 0x80u : 0x50u);
+            var fillColor = (alpha << 24) | 0x00A5FA60u;            // sky blue
+            var strokeColor = (alpha << 24) | 0x00FFFA60u | 0xFF000000;
+
+            // 縦の点線
+            DrawDashedVerticalLine(draw, new Vector2(x, pos.Y + 4f), pos.Y + height - 16f,
+                strokeColor, 1.5f, 4f);
+            draw.AddCircleFilled(new Vector2(x, pos.Y + 6f), 4f, fillColor, 12);
+            draw.AddText(new Vector2(x + 5f, pos.Y + 4f), strokeColor,
+                $"{p.Label} ({distance:0.0}s)");
+        }
+
         // 履歴
         HistoryEntry[] entries;
         lock (_gate)
@@ -242,6 +277,45 @@ public sealed class LiveTimelineWindow : Window, IDisposable
     }
 
     private readonly record struct HistoryEntry(double RelativeSec, string Label, uint Color);
+
+    private readonly record struct PredictedCast(double RelativeSec, string Label, int ObservedCount);
+
+    private void ReloadPredictions()
+    {
+        lock (_gate)
+        {
+            _predictions.Clear();
+            try
+            {
+                var agg = _recordings.Aggregate(_currentZone);
+                if (agg.Events.Count == 0) return;
+
+                foreach (var ev in agg.Events)
+                {
+                    if (ev.Key.Type != "cast_start") continue;
+                    var label = !string.IsNullOrEmpty(ev.Key.Name)
+                        ? ev.Key.Name
+                        : (!string.IsNullOrEmpty(ev.Key.Id) ? ev.Key.Id : "?");
+                    _predictions.Add(new PredictedCast(ev.FirstSeenSeconds, label!, ev.Count));
+                }
+            }
+            catch
+            {
+                // 読み込み失敗時は predictions は空のまま
+            }
+        }
+    }
+
+    private static void DrawDashedVerticalLine(ImDrawListPtr draw, Vector2 top, float bottomY, uint color, float thickness, float dashPx)
+    {
+        var y = top.Y;
+        while (y < bottomY)
+        {
+            var y2 = MathF.Min(y + dashPx, bottomY);
+            draw.AddLine(new Vector2(top.X, y), new Vector2(top.X, y2), color, thickness);
+            y = y2 + dashPx;
+        }
+    }
 
     private static uint ParseColor(string? color, uint fallback)
     {

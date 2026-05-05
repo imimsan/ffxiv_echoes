@@ -98,6 +98,21 @@ public sealed class AutoSettings
 
     [JsonPropertyName("show_timeline")]
     public bool ShowTimeline { get; set; } = false;
+
+    /// <summary>
+    /// 録画から予測した未来キャストに対して、何秒前に TTS / overlay で
+    /// 自動 advance warning を出すか。0 や null なら無効（デフォルト無効）。
+    /// 例: 5 にすると「キャスト開始の 5 秒前に『次：〇〇』と読み上げ」する。
+    /// </summary>
+    [JsonPropertyName("predict_advance_warning_sec")]
+    public double? PredictAdvanceWarningSec { get; set; }
+
+    /// <summary>
+    /// 予測された未来キャストをライブタイムラインに描画するかどうか（デフォルト true）。
+    /// false にすると HUD 描画コストを減らせる。
+    /// </summary>
+    [JsonPropertyName("show_predicted_casts")]
+    public bool ShowPredictedCasts { get; set; } = true;
 }
 
 public sealed class TriggerFileMetadata

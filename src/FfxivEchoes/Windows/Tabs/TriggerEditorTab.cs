@@ -839,6 +839,39 @@ public sealed class TriggerEditorTab : ITab
             _workingCopy.AutoSettings.ShowTimeline = showTl;
             _dirty = true;
         }
+        var showPredicted = _workingCopy.AutoSettings.ShowPredictedCasts;
+        if (ImGui.Checkbox("show_predicted_casts（録画ベースの予測キャストをタイムラインに表示）", ref showPredicted))
+        {
+            _workingCopy.AutoSettings.ShowPredictedCasts = showPredicted;
+            _dirty = true;
+        }
+
+        ImGui.Spacing();
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextUnformatted("予測アドバンス警告:");
+        ImGui.SameLine();
+        var warnEnabled = _workingCopy.AutoSettings.PredictAdvanceWarningSec is > 0;
+        if (ImGui.Checkbox("##predict-warn-enable", ref warnEnabled))
+        {
+            _workingCopy.AutoSettings.PredictAdvanceWarningSec = warnEnabled ? 5.0 : null;
+            _dirty = true;
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip("録画から拾った各キャストについて、開始の何秒前に「次：〇〇」と TTS で先行通知するか。\n" +
+                             "0 / OFF で無効。トリガー定義に同じ cast_id がある場合は重複通知しない。");
+        }
+        if (warnEnabled)
+        {
+            ImGui.SameLine();
+            var warnSec = (float)(_workingCopy.AutoSettings.PredictAdvanceWarningSec ?? 5.0);
+            ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
+            if (ImGui.InputFloat("秒前##predict-warn-sec", ref warnSec))
+            {
+                _workingCopy.AutoSettings.PredictAdvanceWarningSec = warnSec <= 0 ? null : warnSec;
+                _dirty = true;
+            }
+        }
 
         ImGui.Spacing();
         ImGui.Separator();
