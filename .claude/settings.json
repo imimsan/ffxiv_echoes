@@ -69,7 +69,6 @@
       "Bash(git commit -n:*)",
       "Bash(git commit --no-gpg-sign:*)",
 
-      "Bash(gh pr merge:*)",
       "Bash(gh pr close:*)",
       "Bash(gh repo delete:*)",
       "Bash(gh release delete:*)",
@@ -90,6 +89,7 @@
     "ask": [
       "Bash(gh pr create --base main:*)",
       "Bash(gh pr create -B main:*)",
+      "Bash(gh pr merge:*)",
       "Bash(git merge:*)",
       "Bash(git rebase:*)",
       "Bash(git cherry-pick:*)",
