@@ -38,6 +38,8 @@ public sealed class Plugin : IDalamudPlugin
 
     private readonly MainWindow _mainWindow;
     private readonly CommandRouter _commandRouter;
+    private readonly TabContext _tabContext = new();
+    private readonly RecordingScanner _recordingScanner;
 
     // ── M3: イベントキャプチャ層 ─────────────────────────
     private readonly IEventBus _eventBus;
@@ -72,8 +74,17 @@ public sealed class Plugin : IDalamudPlugin
     {
         Configuration = Configuration.LoadAndMigrate(PluginInterface, Log);
 
+        // M5: トリガー定義（タブが参照するので先に作成）
+        _triggerLoader = new TriggerLoader(PluginInterface.ConfigDirectory.FullName, Log);
+        _triggerStore = new TriggerStore(_triggerLoader, Log);
+        _triggerStore.Reload();
+        _triggerWatcher = new TriggerWatcher(_triggerLoader.TriggersDirectory, _triggerStore, Log);
+
+        // M8: 録画スキャナ
+        _recordingScanner = new RecordingScanner(PluginInterface, Log);
+
         // タブ／ウィンドウ
-        _mainWindow = new MainWindow(BuildTabs());
+        _mainWindow = new MainWindow(BuildTabs(), _tabContext);
         WindowSystem.AddWindow(_mainWindow);
 
         _overlayWindow = new OverlayWindow();
@@ -96,12 +107,6 @@ public sealed class Plugin : IDalamudPlugin
         _statusCapture = new StatusCapture(Framework, ObjectTable, DataManager, _eventBus, Log);
         _hpCapture = new HpCapture(Framework, ObjectTable, _eventBus, Log);
         _debugChatEcho = new DebugChatEcho(_eventBus, Configuration, ChatGui, _combatClock);
-
-        // M5: トリガー定義（ロガーより先に初期化：RecordingController が TriggerStore を参照する）
-        _triggerLoader = new TriggerLoader(PluginInterface.ConfigDirectory.FullName, Log);
-        _triggerStore = new TriggerStore(_triggerLoader, Log);
-        _triggerStore.Reload();
-        _triggerWatcher = new TriggerWatcher(_triggerLoader.TriggersDirectory, _triggerStore, Log);
 
         // M4: ロガー
         _recordingController = new RecordingController(Log, _triggerStore);
@@ -179,8 +184,8 @@ public sealed class Plugin : IDalamudPlugin
 
     private List<ITab> BuildTabs() => new()
     {
-        new ContentListTab(),
-        new TriggerEditorTab(),
+        new ContentListTab(_triggerStore, _recordingScanner, _tabContext),
+        new TriggerEditorTab(_triggerStore, _recordingScanner, _tabContext),
         new LiveHudTab(),
         new AudioTab(Configuration),
         new ProfileTab(),
