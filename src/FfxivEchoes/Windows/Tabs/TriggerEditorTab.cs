@@ -21,6 +21,7 @@ public sealed class TriggerEditorTab : ITab
     private readonly TriggerStore _triggerStore;
     private readonly RecordingScanner _recordingScanner;
     private readonly TabContext _tabContext;
+    private readonly Events.IEventBus? _eventBus;
 
     private string? _editingTriggerId;
     private TriggerFile? _workingCopy;
@@ -29,11 +30,13 @@ public sealed class TriggerEditorTab : ITab
     private readonly TimelineRenderer _timelineRenderer = new();
     private bool _aggregateAsTimeline = true;
 
-    public TriggerEditorTab(TriggerStore triggerStore, RecordingScanner scanner, TabContext context)
+    public TriggerEditorTab(TriggerStore triggerStore, RecordingScanner scanner, TabContext context,
+        Events.IEventBus? eventBus = null)
     {
         _triggerStore = triggerStore;
         _recordingScanner = scanner;
         _tabContext = context;
+        _eventBus = eventBus;
     }
 
     public void Draw()
@@ -288,6 +291,32 @@ public sealed class TriggerEditorTab : ITab
             _editingTriggerId = null;
             _dirty = true;
         }
+        ImGui.SameLine();
+        if (ImGui.Button("テスト発動"u8))
+        {
+            FirePreview(trigger);
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip("このトリガーを今すぐ発火させて、アクション動作を確認します。");
+        }
+    }
+
+    private void FirePreview(TriggerDefinition trigger)
+    {
+        if (_eventBus is null)
+        {
+            return;
+        }
+        // 偽の SourceEvent として CombatStartedEvent を使う
+        var fakeSource = new Events.CombatStartedEvent(System.DateTimeOffset.UtcNow);
+        _eventBus.Publish(new Events.TriggerFiredEvent(
+            Timestamp: System.DateTimeOffset.UtcNow,
+            Zone: _workingZone,
+            TriggerId: trigger.Id,
+            TriggerName: trigger.Name,
+            Actions: trigger.Actions,
+            SourceEvent: fakeSource));
     }
 
     private void DrawMatchEditor(TriggerDefinition trigger)
@@ -361,6 +390,22 @@ public sealed class TriggerEditorTab : ITab
                 _dirty = true;
             }
 
+            ImGui.SameLine();
+            if (ImGui.SmallButton("↑") && i > 0)
+            {
+                (trigger.Actions[i - 1], trigger.Actions[i]) = (trigger.Actions[i], trigger.Actions[i - 1]);
+                _dirty = true;
+                ImGui.PopID();
+                continue;
+            }
+            ImGui.SameLine();
+            if (ImGui.SmallButton("↓") && i < trigger.Actions.Count - 1)
+            {
+                (trigger.Actions[i + 1], trigger.Actions[i]) = (trigger.Actions[i], trigger.Actions[i + 1]);
+                _dirty = true;
+                ImGui.PopID();
+                continue;
+            }
             ImGui.SameLine();
             if (ImGui.SmallButton("削除"))
             {
