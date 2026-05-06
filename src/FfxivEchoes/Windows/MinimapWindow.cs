@@ -3,8 +3,10 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Interface.Utility;
 using Dalamud.Interface.Windowing;
+using Dalamud.Plugin.Services;
 using FfxivEchoes.SafeZone;
 
 namespace FfxivEchoes.Windows;
@@ -42,6 +44,8 @@ public sealed class MinimapWindow : Window, IDisposable
     private const uint ColPlayerSelfRing = 0xFFE0FFFF;  // 自分の白リング（強調）
     private const uint ColPartyMember = 0xFFCCCCCC;  // PT 既定（薄灰）
     private const uint ColPartyMemberRing = 0xFFFFFFFF;
+    private const uint ColEnemy = 0xFF6B6BF6;        // 他の敵（赤）
+    private const uint ColEnemyRing = 0xFFCCCCFF;
     // ロール別色（ABGR 形式）— Lumina ClassJob.Role: 1=Tank, 2=MeleeDPS, 3=Ranged/Caster, 4=Healer
     private const uint ColRoleTank = 0xFFF66B3B;     // 青 (#3B6BF6)
     private const uint ColRoleHealer = 0xFF6BD377;   // 緑 (#77D36B)
@@ -51,8 +55,9 @@ public sealed class MinimapWindow : Window, IDisposable
     private readonly List<ArenaItem> _items = new();
     private readonly object _gate = new();
     private readonly SafeZoneContextBuilder _contextBuilder;
+    private readonly IObjectTable _objectTable;
 
-    public MinimapWindow(SafeZoneContextBuilder contextBuilder)
+    public MinimapWindow(SafeZoneContextBuilder contextBuilder, IObjectTable objectTable)
         : base("##ffxiv-echoes-minimap",
             ImGuiWindowFlags.NoTitleBar |
             ImGuiWindowFlags.NoResize |
@@ -63,6 +68,7 @@ public sealed class MinimapWindow : Window, IDisposable
             ImGuiWindowFlags.NoScrollbar)
     {
         _contextBuilder = contextBuilder;
+        _objectTable = objectTable;
 
         var scale = ImGuiHelpers.GlobalScale;
         Size = new Vector2(ArenaSize + Margin * 2, ArenaSize + CalloutHeight + Margin * 2) * scale;
@@ -89,7 +95,8 @@ public sealed class MinimapWindow : Window, IDisposable
         double? fanDeg,
         double? arenaRadius,
         Vector3? safeZoneWorld = null,
-        float? safeZoneRadius = null)
+        float? safeZoneRadius = null,
+        float? directionAngleRad = null)
     {
         if (string.IsNullOrEmpty(gimmick))
         {
@@ -105,6 +112,7 @@ public sealed class MinimapWindow : Window, IDisposable
             ArenaRadius: radius,
             SafeZoneWorld: safeZoneWorld,
             SafeZoneRadius: safeZoneRadius ?? 3f,
+            DirectionAngleRad: directionAngleRad,
             ExpiresAt: DateTimeOffset.UtcNow.AddSeconds(ttl));
         lock (_gate)
         {
@@ -226,7 +234,10 @@ public sealed class MinimapWindow : Window, IDisposable
 
             case "cone":
                 {
-                    var angle = ParseDirectionAngle(item.Direction) * MathF.PI / 180f;
+                    // DirectionAngleRad（ボス向き等の動的計算結果）が来ていればそれを優先
+                    var angle = item.DirectionAngleRad is { } rad
+                        ? rad
+                        : ParseDirectionAngle(item.Direction) * MathF.PI / 180f;
                     var halfFan = (float)(item.FanDeg * Math.PI / 360.0);
                     var segments = 24;
                     var path = new List<Vector2> { center };
@@ -338,6 +349,29 @@ public sealed class MinimapWindow : Window, IDisposable
         }
 
         var selfPos = snapshot.SelfPosition;
+
+        // 他の敵 NPC（ボス以外、HP > 0）を赤いドットで描画
+        var bossId = snapshot.Boss?.GameObjectId ?? 0UL;
+        try
+        {
+            foreach (var obj in _objectTable)
+            {
+                if (obj is not IBattleNpc npc) continue;
+                if (npc.GameObjectId == bossId) continue;
+                if (npc.MaxHp == 0) continue;
+                if (!IsEnemy(npc)) continue;
+
+                var pos = new Vector3(npc.Position.X, npc.Position.Y, npc.Position.Z);
+                // アリーナ範囲外（半径 1.5 倍より遠く）はスキップ：他のフィールド敵を拾わない
+                var dx = pos.X - arenaCenter.X;
+                var dz = pos.Z - arenaCenter.Z;
+                if (dx * dx + dz * dz > radius * radius * 2.25f) continue;
+
+                DrawPositionDot(draw, center, r, arenaCenter, radius, pos,
+                    ColEnemy, ColEnemyRing, 4f * scale);
+            }
+        }
+        catch { /* ObjectTable 走査中の例外は無視 */ }
 
         // PT メンバーはロール別色のドット（自分は後で上書き描画するためスキップ）
         const float SelfMatchEpsilonSq = 0.05f * 0.05f;
@@ -467,6 +501,23 @@ public sealed class MinimapWindow : Window, IDisposable
         draw.AddText(pos, color, text);
     }
 
+    /// <summary>
+    /// IBattleNpc が敵側かどうかの簡易判定。BattleNpcKind が Enemy か、または
+    /// SubKind から判別できない場合は MaxHp > 0 で「敵対 NPC」とみなす。
+    /// </summary>
+    private static bool IsEnemy(IBattleNpc npc)
+    {
+        try
+        {
+            // 既存 Preset と同じ判定：Pet 以外 = 敵 NPC とみなす
+            return npc.BattleNpcKind != Dalamud.Game.ClientState.Objects.Enums.BattleNpcSubKind.Pet;
+        }
+        catch
+        {
+            return npc.MaxHp > 0;
+        }
+    }
+
     private static float ParseDirectionAngle(string? direction)
     {
         // SVG 座標系（Y 下向き）に合わせて、N = -90°、E = 0°、S = 90°、W = 180°
@@ -492,5 +543,6 @@ public sealed class MinimapWindow : Window, IDisposable
         float ArenaRadius,
         Vector3? SafeZoneWorld,
         float SafeZoneRadius,
+        float? DirectionAngleRad,
         DateTimeOffset ExpiresAt);
 }

@@ -119,13 +119,25 @@ public sealed class AutoTelegraphService : IDisposable
 
         // 1. ミニマップ（俯瞰アリーナ図）に確定ギミック表示
         var gimmick = AoeResolver.GuessGimmick(aoe.CastType, aoe.Radius);
+        // cone のときはソース（ボス）の rotation から実方向を計算
+        float? coneAngleRad = null;
+        if (gimmick == "cone" && src is not null)
+        {
+            // FFXIV: rotation 0 = +Z (south) 方向。ミニマップ render の atan2 系で
+            // south = π/2 になるよう変換：renderAngle = bossRot + π/2 - π/2 = bossRot
+            // と思いきや、render の cone 描画は (cos, sin) を使うため、
+            // 直接 rotation を渡すと south=0 が east になってしまう。
+            // 正しい変換: render angle = π/2 - bossRotation
+            coneAngleRad = MathF.PI / 2f - src.Rotation;
+        }
         _minimap.AddArenaView(
             gimmick: gimmick,
             callout: $"確定：{ev.CastActionName}",
             durationSec: ev.CastTime + 0.5,
             direction: gimmick == "cone" ? "N" : null,
             fanDeg: gimmick == "cone" ? 90 : null,
-            arenaRadius: 20.0);
+            arenaRadius: 20.0,
+            directionAngleRad: coneAngleRad);
 
         // 2. フィールドにも実体半径の円マーカー（show_auto_telegraphs が ON なら）
         _worldOverlay.AddMarker(

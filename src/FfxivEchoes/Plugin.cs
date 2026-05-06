@@ -242,8 +242,8 @@ public sealed class Plugin : IDalamudPlugin
         engineRef = _safeZoneEngine; // IntersectionPreset の遅延参照を解決
         _safeZoneContextBuilder = new SafeZoneContextBuilder(ObjectTable, PartyList);
 
-        // ミニマップ（プレイヤー位置プロットに SafeZoneContextBuilder が必要）
-        _minimapWindow = new MinimapWindow(_safeZoneContextBuilder);
+        // ミニマップ（プレイヤー位置プロットに SafeZoneContextBuilder + 敵描画に ObjectTable 必要）
+        _minimapWindow = new MinimapWindow(_safeZoneContextBuilder, ObjectTable);
         WindowSystem.AddWindow(_minimapWindow);
 
         // F8: ワールドオーバーレイ
