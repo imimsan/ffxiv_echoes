@@ -1094,7 +1094,7 @@ public sealed class TriggerEditorTab : ITab
         var warnEnabled = _workingCopy.AutoSettings.PredictAdvanceWarningSec is > 0;
         if (ImGui.Checkbox("##predict-warn-enable", ref warnEnabled))
         {
-            _workingCopy.AutoSettings.PredictAdvanceWarningSec = warnEnabled ? 5.0 : null;
+            _workingCopy.AutoSettings.PredictAdvanceWarningSec = warnEnabled ? 10.0 : null;
             _dirty = true;
         }
         if (ImGui.IsItemHovered())

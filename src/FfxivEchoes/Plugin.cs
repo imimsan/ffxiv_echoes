@@ -199,9 +199,7 @@ public sealed class Plugin : IDalamudPlugin
         _noteReminder = new NoteReminderService(
             Framework, _eventBus, _triggerStore, _combatClock, PlayerState, _recordingScanner, _syncOffset, Log);
 
-        // 録画ベースの予測アドバンス警告（auto_settings.predict_advance_warning_sec で有効化）
-        _predictedCastReminder = new PredictedCastReminderService(
-            Framework, _eventBus, _triggerStore, _combatClock, _recordingScanner, _syncOffset, Log);
+        // 予測アドバンス警告は _worldOverlayWindow に依存するので、後段で構築する
 
         // 自動 AoE テレグラフ（auto_settings.show_auto_telegraphs で有効化、後段で _worldOverlayWindow 構築後に再設定）
 
@@ -255,6 +253,11 @@ public sealed class Plugin : IDalamudPlugin
         // 自動 AoE テレグラフ（敵キャストを Lumina Action 形状で自動描画）
         _autoTelegraph = new AutoTelegraphService(
             _eventBus, DataManager, ObjectTable, _worldOverlayWindow, _triggerStore, Log);
+
+        // 予測アドバンス警告：TTS + 「予測中」薄いオレンジマーカー
+        _predictedCastReminder = new PredictedCastReminderService(
+            Framework, _eventBus, _triggerStore, _combatClock, _recordingScanner, _syncOffset,
+            DataManager, ObjectTable, _worldOverlayWindow, Log);
 
         // M7 + F8: アクションディスパッチャ
         _ttsHandler = new TtsHandler(Configuration, Log);

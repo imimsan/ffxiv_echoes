@@ -79,12 +79,16 @@ public sealed class AutoTelegraphService : IDisposable
             return;
         }
 
-        if (!TryResolveAoe(ev.CastActionId, out var radius, out var shape, out var inferredFromCaster))
+        var aoe = AoeResolver.Resolve(_dataManager, ev.CastActionId, _log);
+        if (aoe is null)
         {
             _log.Information("[FfxivEchoes] AutoTelegraph: skip non-AoE cast {Name} (id={Id:X4})",
                 ev.CastActionName, ev.CastActionId);
             return;
         }
+        var radius = aoe.Radius;
+        var shape = "circle";
+        var inferredFromCaster = aoe.FromCaster;
 
         Vector3? worldPos = null;
         var src = _objectTable.SearchById(ev.SourceId);
