@@ -310,6 +310,45 @@ public sealed class MinimapWindow : Window, IDisposable
                     break;
                 }
 
+            case "two_side_cleave":
+                {
+                    // 両翼攻撃：ボス向きを基準に左右両方を危険、前後を安置
+                    // facingAngle = 前方向。左右は ±90°
+                    var facing = item.DirectionAngleRad is { } rad
+                        ? rad
+                        : ParseDirectionAngle(item.Direction) * MathF.PI / 180f;
+                    var origin = item.SourceWorld is { } sw &&
+                                 TryProjectWorldToMap(center, r, item, sw, out var sp)
+                        ? sp
+                        : center;
+                    // 左右それぞれ 90 度の扇を半透明赤で塗る
+                    var halfFan = MathF.PI / 4f; // 90度扇 ÷ 2
+                    var range = r * 1.05f;
+                    var segments = 24;
+                    for (var sideIdx = 0; sideIdx < 2; sideIdx++)
+                    {
+                        var sideAngle = facing + (sideIdx == 0 ? MathF.PI / 2f : -MathF.PI / 2f);
+                        var path = new List<Vector2> { origin };
+                        for (var i = 0; i <= segments; i++)
+                        {
+                            var t = (float)i / segments;
+                            var a = sideAngle - halfFan + (halfFan * 2f) * t;
+                            path.Add(new Vector2(origin.X + MathF.Cos(a) * range,
+                                                  origin.Y + MathF.Sin(a) * range));
+                        }
+                        foreach (var p in path) draw.PathLineTo(p);
+                        draw.PathFillConvex(ColDanger);
+                    }
+                    // 前後の安置ラベル
+                    var safeFront = new Vector2(origin.X + MathF.Cos(facing) * r * 0.7f,
+                                                 origin.Y + MathF.Sin(facing) * r * 0.7f);
+                    var safeBack = new Vector2(origin.X - MathF.Cos(facing) * r * 0.7f,
+                                                origin.Y - MathF.Sin(facing) * r * 0.7f);
+                    AddCenteredText(draw, safeFront, "SAFE", ColSafeLine, 1.0f);
+                    AddCenteredText(draw, safeBack, "SAFE", ColSafeLine, 1.0f);
+                    break;
+                }
+
             case "attack":
                 DrawDashedCircle(draw, center, r * 0.28f, ColScatterLine, 2.5f, 18);
                 draw.AddCircleFilled(center, r * 0.12f, ColScatter, 24);

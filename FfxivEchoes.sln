@@ -5,6 +5,8 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FfxivEchoes", "src\FfxivEchoes\FfxivEchoes.csproj", "{908E2798-2373-46A8-B1FE-A26DB7F4F4E7}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FfxivEchoes.Tests", "src\FfxivEchoes.Tests\FfxivEchoes.Tests.csproj", "{FDA4F196-16A1-4E57-9910-73D27ECEF095}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -15,6 +17,10 @@ Global
 		{908E2798-2373-46A8-B1FE-A26DB7F4F4E7}.Debug|x64.Build.0 = Debug|x64
 		{908E2798-2373-46A8-B1FE-A26DB7F4F4E7}.Release|x64.ActiveCfg = Release|x64
 		{908E2798-2373-46A8-B1FE-A26DB7F4F4E7}.Release|x64.Build.0 = Release|x64
+		{FDA4F196-16A1-4E57-9910-73D27ECEF095}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{FDA4F196-16A1-4E57-9910-73D27ECEF095}.Debug|x64.Build.0 = Debug|Any CPU
+		{FDA4F196-16A1-4E57-9910-73D27ECEF095}.Release|x64.ActiveCfg = Release|Any CPU
+		{FDA4F196-16A1-4E57-9910-73D27ECEF095}.Release|x64.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

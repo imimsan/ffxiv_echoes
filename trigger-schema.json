@@ -33,6 +33,31 @@
           "type": "boolean",
           "description": "突入時にライブタイムラインを表示",
           "default": false
+        },
+        "predict_advance_warning_sec": {
+          "type": "number",
+          "description": "seconds before learned timeline events to make automatic advance warning; null disables",
+          "minimum": 0
+        },
+        "show_predicted_casts": {
+          "type": "boolean",
+          "description": "show recorded predictions on the timeline",
+          "default": true
+        },
+        "show_auto_telegraphs": {
+          "type": "boolean",
+          "description": "show inferred enemy AoE telegraphs",
+          "default": false
+        },
+        "show_all_enemy_casts": {
+          "type": "boolean",
+          "description": "show non-AoE enemy casts as lightweight pulses",
+          "default": false
+        },
+        "show_auto_attacks": {
+          "type": "boolean",
+          "description": "show auto attacks and instant actions as lightweight pulses",
+          "default": false
         }
       }
     },
@@ -45,6 +70,15 @@
         "author": { "type": "string" },
         "notes": { "type": "string" }
       }
+    },
+    "active_strategy_profile_id": {
+      "type": "string",
+      "description": "Active party strategy profile id"
+    },
+    "strategy_profiles": {
+      "type": "array",
+      "description": "Party-specific strategy profiles, spreads, and mechanic handling plans",
+      "items": { "$ref": "#/definitions/strategy_profile" }
     },
     "sync_points": {
       "type": "array",
@@ -78,6 +112,11 @@
       "description": "トリガー定義の配列",
       "items": { "$ref": "#/definitions/trigger" }
     },
+    "notes": {
+      "type": "array",
+      "description": "Timeline notes shown independently from trigger actions",
+      "items": { "$ref": "#/definitions/timeline_note" }
+    },
     "ignored_events": {
       "type": "array",
       "description": "無視済みイベント（トリガー化不要として明示的にマークされたもの）",
@@ -94,6 +133,119 @@
     }
   },
   "definitions": {
+    "strategy_profile": {
+      "type": "object",
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "enabled": { "type": "boolean", "default": true },
+        "description": { "type": "string" },
+        "arena_radius": { "type": "number", "minimum": 1 },
+        "spread_positions": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/strategy_position" }
+        },
+        "mechanics": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/mechanic_strategy" }
+        }
+      }
+    },
+    "strategy_position": {
+      "type": "object",
+      "required": ["slot", "x", "z"],
+      "properties": {
+        "slot": { "type": "string" },
+        "label": { "type": "string" },
+        "role": { "type": "string" },
+        "job": { "type": "string" },
+        "x": { "type": "number" },
+        "z": { "type": "number" },
+        "color": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "note": { "type": "string" }
+      }
+    },
+    "mechanic_strategy": {
+      "type": "object",
+      "required": ["id", "label"],
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "enabled": { "type": "boolean", "default": true },
+        "time": { "type": "number" },
+        "duration": { "type": "number" },
+        "attached_to": { "$ref": "#/definitions/match_condition" },
+        "advance_warning_sec": { "type": "number" },
+        "role": { "type": "string" },
+        "job": { "type": "string" },
+        "warning_text": { "type": "string" },
+        "callout": { "type": "string" },
+        "gimmick": {
+          "type": "string",
+          "enum": ["outer_ring", "inner_circle", "scatter", "stack", "cone"]
+        },
+        "safe_zone": { "$ref": "#/definitions/safe_zone_calculation" },
+        "positions": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "color": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "source_event_type": { "type": "string" },
+        "observed_count": { "type": "integer", "minimum": 0 },
+        "occurrence_seen_count": { "type": "integer", "minimum": 0 },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "time_jitter_seconds": { "type": "number", "minimum": 0 }
+      }
+    },
+    "timeline_note": {
+      "type": "object",
+      "required": ["id", "label"],
+      "properties": {
+        "id": { "type": "string" },
+        "time": { "type": "number" },
+        "label": { "type": "string" },
+        "duration": { "type": "number" },
+        "role": { "type": "string" },
+        "job": { "type": "string" },
+        "color": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "attached_to": { "$ref": "#/definitions/match_condition" },
+        "icon": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "array", "items": { "type": "string" } }
+          ]
+        },
+        "advance_warning_sec": { "type": "number" },
+        "warning_text": { "type": "string" }
+      }
+    },
+    "match_condition": {
+      "type": "object",
+      "properties": {
+        "cast_id": { "type": "string" },
+        "cast_name": { "type": "string" },
+        "status_id": { "type": "integer" },
+        "status_name": { "type": "string" },
+        "action_id": { "type": "string" },
+        "action_name": { "type": "string" },
+        "source": { "type": "string" },
+        "source_id": { "type": "integer" },
+        "target": { "$ref": "#/definitions/target" },
+        "duration_range": {
+          "type": "object",
+          "properties": {
+            "min": { "type": "number" },
+            "max": { "type": "number" }
+          }
+        },
+        "stacks": {},
+        "hp_pct": {},
+        "actor": { "type": "string" },
+        "time": { "type": "number" },
+        "tolerance": { "type": "number", "default": 2.0 }
+      }
+    },
     "trigger": {
       "type": "object",
       "required": ["id", "type", "actions"],
@@ -287,6 +439,7 @@
             "proximity_feedback",
             "set_variable",
             "chain_trigger",
+            "store_position",
             "arena_view"
           ]
         },
@@ -365,6 +518,12 @@
           "type": "number",
           "minimum": 1,
           "description": "arena_view 用、ミニマップ全体に対応するアリーナ半径（メートル、デフォルト 20）。プレイヤー位置プロットに使用"
+        },
+        "strategy_profile_id": { "type": "string" },
+        "mechanic_id": { "type": "string" },
+        "strategy_positions": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/strategy_position" }
         }
       }
     },

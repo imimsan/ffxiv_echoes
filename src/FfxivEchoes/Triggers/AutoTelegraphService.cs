@@ -37,6 +37,12 @@ public sealed class AutoTelegraphService : IDisposable
 
     private string _currentZone = "Unknown";
 
+    // 同時多発キャストの重複表示防止：cast_id ごとに最後の発火時刻を覚えて
+    // 0.5 秒以内の連続発火はスキップする（ヒートウィングは boss + 翼 ×2 で
+    // 同じ AoE が 3 回送られてくるため）
+    private readonly Dictionary<uint, DateTimeOffset> _lastDrawnAt = new();
+    private const double DedupWindowSeconds = 0.5;
+
     public AutoTelegraphService(
         IEventBus bus,
         IDataManager dataManager,
@@ -82,6 +88,17 @@ public sealed class AutoTelegraphService : IDisposable
             _log.Information("[FfxivEchoes] AutoTelegraph: skip friendly source ({Name})", ev.SourceName);
             return;
         }
+
+        // 同時多発の dedup：同じ cast_id が短時間に連続発火した場合は最初の 1 回だけ
+        var now = ev.Timestamp;
+        if (_lastDrawnAt.TryGetValue(ev.CastActionId, out var prev) &&
+            (now - prev).TotalSeconds < DedupWindowSeconds)
+        {
+            _log.Debug("[FfxivEchoes] AutoTelegraph: skip duplicate cast id={Id:X4} within {Sec}s",
+                ev.CastActionId, DedupWindowSeconds);
+            return;
+        }
+        _lastDrawnAt[ev.CastActionId] = now;
 
         if (file.AutoSettings.EnableTriggers)
         {
