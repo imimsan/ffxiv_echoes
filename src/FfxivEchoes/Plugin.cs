@@ -91,6 +91,10 @@ public sealed class Plugin : IDalamudPlugin
     // ── トリガー自動生成 ──────────────────────────────────
     private TriggerAutoGenerator? _autoGenerator;
 
+    // ── 学習辞書 + 同時発火検知 ──────────────────────────
+    private SafeCallDictionary? _safeCallDictionary;
+    private MultiCastDetector? _multiCastDetector;
+
     // ── P1+P2: 状態変数 ──────────────────────────────────
     private readonly VariableStore _variableStore;
 
@@ -194,6 +198,21 @@ public sealed class Plugin : IDalamudPlugin
 
         // トリガー自動生成（録画 + Lumina から作る）
         _autoGenerator = new TriggerAutoGenerator(DataManager, Log);
+
+        // 学習辞書 + 同時発火検知（AutoSafeCallPlanner 経由で参照される）
+        _safeCallDictionary = new SafeCallDictionary(PluginInterface.ConfigDirectory.FullName, Log);
+        AutoSafeCallPlanner.Dictionary = _safeCallDictionary;
+        _multiCastDetector = new MultiCastDetector();
+        // 録画解析 → 同時発火グループを学習辞書に書き戻す（バックグラウンド）
+        // 戦闘終了時にも実行されるが、起動時にも 1 回実行
+        try
+        {
+            LearnFromRecordings();
+        }
+        catch (System.Exception ex)
+        {
+            Log.Warning(ex, "[FfxivEchoes] 起動時の同時発火学習に失敗");
+        }
 
         // タイムラインノート：advance_warning_sec で先行通知
         _noteReminder = new NoteReminderService(
@@ -364,6 +383,57 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     private void OnCommand(string command, string args) => _commandRouter.Dispatch(args);
+
+    /// <summary>
+    /// 録画 aggregate を全ゾーンで分析して、同時発火グループを SafeCallDictionary に
+    /// 学習結果として書き戻す。プラグイン起動時 + 戦闘終了時に呼ぶ。
+    /// </summary>
+    private void LearnFromRecordings()
+    {
+        if (_multiCastDetector is null || _safeCallDictionary is null) return;
+
+        var zones = _recordingScanner.ListZonesWithRecordings();
+        var totalLearned = 0;
+        foreach (var zone in zones)
+        {
+            try
+            {
+                var agg = _recordingScanner.Aggregate(zone);
+                var groups = _multiCastDetector.Detect(agg);
+                foreach (var group in groups)
+                {
+                    if (group.CastIds.Count < 2) continue;
+                    if (group.Confidence < 0.7) continue;
+                    // グループ内の各 cast_id を two_side_cleave 候補として登録
+                    // （翼系・対称攻撃が同時発火するパターンを暫定的にこれに分類）
+                    foreach (var castId in group.CastIds)
+                    {
+                        // 既存の override がある場合は上書きしない
+                        if (_safeCallDictionary.AllOverrides().ContainsKey(castId)) continue;
+                        _safeCallDictionary.Upsert(castId, new SafeCallDictionary.DictionaryEntry
+                        {
+                            Gimmick = "two_side_cleave",
+                            Callout = "前後安置（同時発火検出）",
+                            Tts = "前後安置",
+                            FanDeg = 180,
+                            Source = "multi_cast_detected",
+                            Confidence = group.Confidence,
+                        });
+                        totalLearned++;
+                    }
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Log.Warning(ex, "[FfxivEchoes] zone={Zone} の同時発火学習に失敗", zone);
+            }
+        }
+        if (totalLearned > 0)
+        {
+            Log.Information("[FfxivEchoes] 学習辞書に同時発火グループ {N} 件を追加",
+                totalLearned);
+        }
+    }
 
     /// <summary>SPEC.md §13.3「<c>/myplugin → 設定画面を開く</c>」に対応するエントリ。</summary>
     private void OpenSettings() => _mainWindow.Open(MainWindow.DefaultTabId);

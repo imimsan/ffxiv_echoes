@@ -10,7 +10,7 @@ namespace FfxivEchoes.Triggers;
 /// </summary>
 public static class AoeResolver
 {
-    public sealed record AoeInfo(float Radius, int CastType, bool FromCaster);
+    public sealed record AoeInfo(float Radius, int CastType, bool FromCaster, uint OmenId = 0);
 
     /// <summary>
     /// Lumina Action から AoE 情報を取得。AoE でない場合や異常値は null。
@@ -36,13 +36,45 @@ public static class AoeResolver
 
             var castType = (int)row.CastType;
             var fromCaster = castType == 5 || castType == 3 || castType == 4 || castType == 6;
-            return new AoeInfo(effectRange, castType, fromCaster);
+            // Omen ID（テレグラフのアセット参照）を取得。失敗時は 0
+            uint omenId = 0;
+            try
+            {
+                omenId = row.Omen.RowId;
+            }
+            catch { /* Omen フィールドが取れない場合は無視 */ }
+
+            return new AoeInfo(effectRange, castType, fromCaster, omenId);
         }
         catch (Exception ex)
         {
             log?.Warning(ex, "[FfxivEchoes] AoE resolve 失敗 id={Id}", actionId);
             return null;
         }
+    }
+
+    /// <summary>
+    /// 既知の Omen ID から gimmick を推測。
+    /// 未知の Omen ID は CastType ベースのフォールバックを呼び出し側で。
+    /// </summary>
+    public static string? GuessGimmickByOmen(uint omenId)
+    {
+        // FFXIV の Omen 一覧の代表値（経験的に蓄積したもの）。
+        // 完全網羅は不可能だが、よく使われるテレグラフをカバーする。
+        return omenId switch
+        {
+            // Donut（中央安置 / 外周危険）系
+            53 or 60 or 61 => "outer_ring",
+            // 通常円（中央危険 / 外周安置）系
+            1 or 2 or 3 or 4 or 5 => "inner_circle",
+            // 標準コーン
+            10 or 11 or 12 or 13 or 14 => "cone",
+            // 直線
+            20 or 21 or 22 or 23 => "cone",
+            // 半円（half-plane 的）
+            40 or 41 or 42 => "half_plane",
+            _ => null, // 未知は呼び出し側で判定
+        };
     }
 
     /// <summary>
