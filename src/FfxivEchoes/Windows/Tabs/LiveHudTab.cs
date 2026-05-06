@@ -28,6 +28,7 @@ public sealed class LiveHudTab : ITab, IDisposable
 
     // フィルタ状態
     private bool _showCast = true;
+    private bool _showAction = true;
     private bool _showStatus = false;
     private bool _showHp = false;
     private bool _showObject = false;
@@ -84,6 +85,7 @@ public sealed class LiveHudTab : ITab, IDisposable
         ImGui.Spacing();
         ImGui.TextDisabled("フィルタ：");
         ImGui.SameLine(); ImGui.Checkbox("Cast", ref _showCast);
+        ImGui.SameLine(); ImGui.Checkbox("Action/AA", ref _showAction);
         ImGui.SameLine(); ImGui.Checkbox("Status", ref _showStatus);
         ImGui.SameLine(); ImGui.Checkbox("HP", ref _showHp);
         ImGui.SameLine(); ImGui.Checkbox("Object", ref _showObject);
@@ -142,6 +144,7 @@ public sealed class LiveHudTab : ITab, IDisposable
     private bool IsKindEnabled(string kind) => kind switch
     {
         "cast" => _showCast,
+        "action" => _showAction,
         "status" => _showStatus,
         "hp" => _showHp,
         "object" => _showObject,
@@ -159,6 +162,7 @@ public sealed class LiveHudTab : ITab, IDisposable
         CastStartedEvent x => ("cast", $"キャスト開始 [{x.CastActionId:X4}] {x.SourceName} → {x.CastActionName} ({x.CastTime:0.0}s)", new Vector4(0.6f, 0.85f, 1f, 1f)),
         CastCompletedEvent x => ("cast", $"キャスト完了 [{x.CastActionId:X4}] {x.SourceName} → {x.CastActionName}", new Vector4(0.5f, 0.7f, 0.9f, 1f)),
         CastCanceledEvent x => ("cast", $"キャスト中断 [{x.CastActionId:X4}] {x.SourceName} → {x.CastActionName}", new Vector4(0.5f, 0.6f, 0.7f, 1f)),
+        ActionUsedEvent x => ("action", $"アクション{(x.IsAutoAttack ? "(AA)" : "")} [{x.ActionId:X4}] {x.SourceName} → {x.ActionName}", new Vector4(0.95f, 0.95f, 0.7f, 1f)),
         StatusGainedEvent x => ("status", $"Status+ [{x.StatusId}] {x.TargetName} ← {x.StatusName}", new Vector4(0.7f, 0.95f, 0.7f, 1f)),
         StatusLostEvent x => ("status", $"Status- [{x.StatusId}] {x.TargetName} ← {x.StatusName}", new Vector4(0.6f, 0.7f, 0.6f, 1f)),
         StatusUpdatedEvent x => ("status", $"Status~ [{x.StatusId}] stacks={x.Stacks} t={x.RemainingTime:0.0}s", new Vector4(0.6f, 0.85f, 0.6f, 1f)),

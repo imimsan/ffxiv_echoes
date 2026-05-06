@@ -143,52 +143,56 @@ public sealed class MinimapWindow : Window, IDisposable
     {
         var now = DateTimeOffset.UtcNow;
 
-        ArenaItem? top = null;
+        // すべての active items を Priority desc, ExpiresAt asc でソート
+        ArenaItem[] activeSorted;
         lock (_gate)
         {
             _items.RemoveAll(it => it.ExpiresAt <= now);
-            // 残り時間が短い（先に解決する）ギミックを優先表示
-            for (var i = 0; i < _items.Count; i++)
-            {
-                if (top is null ||
-                    _items[i].Priority > top.Value.Priority ||
-                    (_items[i].Priority == top.Value.Priority && _items[i].ExpiresAt < top.Value.ExpiresAt))
-                {
-                    top = _items[i];
-                }
-            }
+            activeSorted = _items
+                .OrderByDescending(it => it.Priority)
+                .ThenBy(it => it.ExpiresAt)
+                .Take(3)  // 最大 3 件まで同時表示（古い・低優先度は省略）
+                .ToArray();
         }
 
-        if (top is null)
+        if (activeSorted.Length == 0)
         {
             IsOpen = false;
             return;
         }
 
-        var item = top.Value;
         var draw = ImGui.GetWindowDrawList();
-        var pos = ImGui.GetCursorScreenPos();
         var scale = ImGuiHelpers.GlobalScale;
-        var size = ArenaSize * scale;
-        var center = new Vector2(pos.X + size * 0.5f, pos.Y + size * 0.5f);
-        var r = size * 0.5f - 4f * scale;
 
-        DrawArena(draw, center, r);
-        DrawGimmickBody(draw, center, r, item);
-        DrawSafeZoneOverlay(draw, center, r, scale, item);
-        DrawStrategyPositions(draw, center, r, scale, item);
-        DrawBoss(draw, center, r, scale, item);
-        DrawPlayerPositions(draw, center, r, scale, item);
+        // 1 枚目: フルサイズ。2-3 枚目: 半分サイズで並べる
+        for (var idx = 0; idx < activeSorted.Length; idx++)
+        {
+            var item = activeSorted[idx];
+            var tilePos = ImGui.GetCursorScreenPos();
+            // 最初は full、それ以降は 60%
+            var tileScale = idx == 0 ? 1.0f : 0.6f;
+            var size = ArenaSize * scale * tileScale;
+            var center = new Vector2(tilePos.X + size * 0.5f, tilePos.Y + size * 0.5f);
+            var r = size * 0.5f - 4f * scale;
 
-        // 描画領域を確保（ImGui のレイアウトを進める）
-        ImGui.Dummy(new Vector2(size, size));
+            DrawArena(draw, center, r);
+            DrawGimmickBody(draw, center, r, item);
+            DrawSafeZoneOverlay(draw, center, r, scale * tileScale, item);
+            DrawStrategyPositions(draw, center, r, scale * tileScale, item);
+            DrawBoss(draw, center, r, scale * tileScale, item);
+            DrawPlayerPositions(draw, center, r, scale * tileScale, item);
 
-        // Callout
-        var remaining = (item.ExpiresAt - now).TotalSeconds;
-        var calloutText = item.Callout;
-        var subText = $"{Math.Max(0, remaining):0.0}s";
-        DrawCallout(draw, pos, size, scale, calloutText, subText);
-        ImGui.Dummy(new Vector2(size, CalloutHeight * scale));
+            ImGui.Dummy(new Vector2(size, size));
+
+            var remaining = (item.ExpiresAt - now).TotalSeconds;
+            var calloutText = idx == 0
+                ? item.Callout
+                : $"次→ {item.Callout}";
+            var subText = $"{Math.Max(0, remaining):0.0}s";
+            DrawCallout(draw, tilePos, size, scale * tileScale, calloutText, subText);
+            ImGui.Dummy(new Vector2(size, CalloutHeight * scale * tileScale));
+            ImGui.Spacing();
+        }
     }
 
     // ── 描画ヘルパ ─────────────────────────────────────────────────

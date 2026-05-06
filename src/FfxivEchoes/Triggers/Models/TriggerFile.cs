@@ -254,10 +254,10 @@ public sealed class AutoSettings
     public bool ShowAutoTelegraphs { get; set; } = false;
 
     [JsonPropertyName("show_all_enemy_casts")]
-    public bool ShowAllEnemyCasts { get; set; } = false;
+    public bool ShowAllEnemyCasts { get; set; } = true;
 
     [JsonPropertyName("show_auto_attacks")]
-    public bool ShowAutoAttacks { get; set; } = false;
+    public bool ShowAutoAttacks { get; set; } = true;
 }
 
 public sealed class TriggerFileMetadata
