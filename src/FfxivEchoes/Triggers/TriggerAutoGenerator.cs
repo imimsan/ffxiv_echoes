@@ -1,23 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using Dalamud.Plugin.Services;
 using FfxivEchoes.Recording;
 using FfxivEchoes.Triggers.Models;
-using LuminaAction = Lumina.Excel.Sheets.Action;
+using FfxivEchoes.Windows;
 
 namespace FfxivEchoes.Triggers;
 
-/// <summary>
-/// 録画 aggregate と Lumina Action データから、AoE 形状を自動判定して
-/// トリガー定義を一括生成する。
-/// </summary>
-/// <remarks>
-/// 各 cast_start に対して以下を生成：
-/// - TTS でキャスト名を読み上げ
-/// - 推定された AoE 形状に応じた arena_view または field_marker
-/// PT 内のキャスト（プレイヤー由来）は生成対象外。
-/// 既に同じ cast_id を扱うトリガーがあるものはスキップ。
-/// </remarks>
 public sealed class TriggerAutoGenerator
 {
     private readonly IDataManager _dataManager;
@@ -29,11 +19,9 @@ public sealed class TriggerAutoGenerator
         _log = log;
     }
 
-    /// <summary>
-    /// 録画 aggregate からトリガーを自動生成する。
-    /// 既存トリガー（existing）と重複する cast_id はスキップ。
-    /// </summary>
-    public GenerationResult Generate(AggregatedEvents agg, IReadOnlyList<TriggerDefinition> existing,
+    public GenerationResult Generate(
+        AggregatedEvents agg,
+        IReadOnlyList<TriggerDefinition> existing,
         IReadOnlyList<string>? partyMembers = null)
     {
         var existingCastIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -44,10 +32,11 @@ public sealed class TriggerAutoGenerator
                 existingCastIds.Add(cid);
             }
         }
+
         var partySet = partyMembers is null
             ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             : new HashSet<string>(partyMembers, StringComparer.OrdinalIgnoreCase);
-
+        var generatedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var generated = new List<TriggerDefinition>();
         var skipped = new List<string>();
 
@@ -56,20 +45,18 @@ public sealed class TriggerAutoGenerator
             if (ev.Key.Type != "cast_start") continue;
             if (string.IsNullOrEmpty(ev.Key.Id)) continue;
 
-            // PT メンバー（自分含む）由来のキャストはスキップ
             if (!string.IsNullOrEmpty(ev.Key.Source) && partySet.Contains(ev.Key.Source))
             {
                 continue;
             }
 
-            // 既存トリガーと重複ならスキップ
             if (existingCastIds.Contains(ev.Key.Id))
             {
-                skipped.Add($"{ev.Key.Name ?? ev.Key.Id}（既存）");
+                skipped.Add($"{ev.Key.Name ?? ev.Key.Id} (existing)");
                 continue;
             }
 
-            var trigger = BuildTrigger(ev);
+            var trigger = BuildTrigger(ev, generatedIds);
             if (trigger is not null)
             {
                 generated.Add(trigger);
@@ -79,9 +66,9 @@ public sealed class TriggerAutoGenerator
         return new GenerationResult(generated, skipped);
     }
 
-    private TriggerDefinition? BuildTrigger(AggregatedEvent ev)
+    private TriggerDefinition? BuildTrigger(AggregatedEvent ev, ISet<string> generatedIds)
     {
-        if (!TryParseCastId(ev.Key.Id!, out var actionId))
+        if (!AoeResolver.TryParseCastId(ev.Key.Id!, out var actionId))
         {
             return null;
         }
@@ -89,8 +76,8 @@ public sealed class TriggerAutoGenerator
         var castName = ev.Key.Name ?? ev.Key.Id ?? "?";
         var trigger = new TriggerDefinition
         {
-            Id = $"auto_cast_{actionId:x}",
-            Name = $"{castName}（自動生成）",
+            Id = MakeUniqueId(actionId, ev, generatedIds),
+            Name = $"{castName} (auto)",
             Enabled = true,
             Type = "cast_start",
             Match = new MatchCondition
@@ -101,124 +88,64 @@ public sealed class TriggerAutoGenerator
             },
         };
 
-        // 必ず TTS を入れる
         trigger.Actions.Add(new ActionDefinition { Type = "tts", Text = castName });
 
-        // Lumina から AoE 情報取得
-        var aoe = ResolveAoeFromLumina(actionId);
-        if (aoe.HasValue)
+        var knownSafeCall = AutoSafeCallPlanner.CreateKnown(actionId, castName);
+        var aoe = AoeResolver.Resolve(_dataManager, actionId, _log);
+        var safeCall = knownSafeCall ?? (aoe is null ? null : AutoSafeCallPlanner.Create(aoe, castName));
+        if (safeCall is not null)
         {
-            var (radius, castType, fromCaster) = aoe.Value;
-
-            // CastType に応じてビジュアルを追加
-            switch (castType)
+            trigger.Actions.Add(new ActionDefinition
             {
-                case 2: // Circle (target-centered)
-                case 5: // PB on caster
-                    trigger.Actions.Add(new ActionDefinition
-                    {
-                        Type = "field_marker",
-                        Shape = "circle",
-                        Radius = radius,
-                        Duration = 5.0,
-                        Color = "#FF6464",
-                        SafeZone = new SafeZoneCalculation
-                        {
-                            Method = fromCaster ? "boss_relative" : "boss_relative",
-                        },
-                    });
-                    // 大きい AoE なら「外周回避」とみなして arena_view も追加
-                    if (radius >= 25f)
-                    {
-                        trigger.Actions.Add(new ActionDefinition
-                        {
-                            Type = "arena_view",
-                            Gimmick = "outer_ring",
-                            Callout = $"中央安置：{castName}",
-                            Duration = 5.0,
-                            ArenaRadius = 20.0,
-                        });
-                    }
-                    break;
-                case 6: // Donut
-                    trigger.Actions.Add(new ActionDefinition
-                    {
-                        Type = "arena_view",
-                        Gimmick = "inner_circle",
-                        Callout = $"外周安置：{castName}",
-                        Duration = 5.0,
-                        ArenaRadius = 20.0,
-                    });
-                    break;
-                case 3: // Cone
-                    trigger.Actions.Add(new ActionDefinition
-                    {
-                        Type = "arena_view",
-                        Gimmick = "cone",
-                        Direction = "N",
-                        FanDeg = 90,
-                        Callout = $"扇形回避：{castName}",
-                        Duration = 5.0,
-                        ArenaRadius = 20.0,
-                    });
-                    break;
-                case 4: // Line
-                    trigger.Actions.Add(new ActionDefinition
-                    {
-                        Type = "arena_view",
-                        Gimmick = "cone",
-                        Direction = "N",
-                        FanDeg = 30,
-                        Callout = $"直線回避：{castName}",
-                        Duration = 5.0,
-                        ArenaRadius = 20.0,
-                    });
-                    break;
-                default:
-                    // 形状不明：TTS のみ（auto-visual で中央テキスト付くので最低限見える）
-                    break;
-            }
+                Type = "arena_view",
+                Gimmick = safeCall.Gimmick,
+                Direction = ArenaProjection.UsesFacing(safeCall.Gimmick) ? "N" : null,
+                FanDeg = safeCall.FanDeg,
+                Callout = safeCall.Callout,
+                Duration = 5.0,
+                ArenaRadius = 20.0,
+            });
         }
 
         return trigger;
     }
 
-    /// <summary>
-    /// Lumina Action から (EffectRange, CastType, fromCaster) を取得。
-    /// EffectRange=0 や AoE タイプでなければ null。
-    /// </summary>
-    private (float Radius, int CastType, bool FromCaster)? ResolveAoeFromLumina(uint actionId)
+    private static string MakeUniqueId(uint actionId, AggregatedEvent ev, ISet<string> used)
     {
-        try
+        var baseId = $"auto_cast_{actionId:x}";
+        if (used.Add(baseId))
         {
-            var sheet = _dataManager.GetExcelSheet<LuminaAction>();
-            if (!sheet.TryGetRow(actionId, out var row))
-            {
-                return null;
-            }
-            var effectRange = (float)row.EffectRange;
-            if (effectRange <= 0) return null;
-            var castType = (int)row.CastType;
-            // 5=PB / 3=cone / 4=line はキャスター中心
-            var fromCaster = castType == 5 || castType == 3 || castType == 4 || castType == 6;
-            return (effectRange, castType, fromCaster);
+            return baseId;
         }
-        catch (Exception ex)
+
+        var suffix = SanitizeId(ev.Key.Source ?? ev.Key.Name ?? "source");
+        var candidate = $"{baseId}_{suffix}";
+        var index = 2;
+        while (!used.Add(candidate))
         {
-            _log.Warning(ex, "[FfxivEchoes] AutoGenerator: Lumina lookup 失敗 (id={Id})", actionId);
-            return null;
+            candidate = $"{baseId}_{suffix}_{index++}";
         }
+
+        return candidate;
     }
 
-    private static bool TryParseCastId(string spec, out uint id)
+    private static string SanitizeId(string value)
     {
-        id = 0;
-        if (string.IsNullOrEmpty(spec)) return false;
-        var s = spec;
-        if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) s = s[2..];
-        if (s.StartsWith("#")) s = s[1..];
-        return uint.TryParse(s, System.Globalization.NumberStyles.HexNumber,
-            System.Globalization.CultureInfo.InvariantCulture, out id);
+        var sb = new StringBuilder(value.Length);
+        foreach (var ch in value)
+        {
+            if (char.IsAsciiLetterOrDigit(ch))
+            {
+                sb.Append(char.ToLowerInvariant(ch));
+            }
+            else if (sb.Length == 0 || sb[^1] != '_')
+            {
+                sb.Append('_');
+            }
+        }
+
+        var result = sb.ToString().Trim('_');
+        return string.IsNullOrEmpty(result) ? "source" : result;
     }
 
     public sealed record GenerationResult(

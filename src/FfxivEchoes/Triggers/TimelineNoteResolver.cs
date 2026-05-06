@@ -54,18 +54,56 @@ public static class TimelineNoteResolver
             wantId = match.ActionId;
             wantName = match.ActionName;
         }
+        else if (!string.IsNullOrEmpty(match.Actor))
+        {
+            wantName = match.Actor;
+        }
 
-        if (wantType is null) return null;
+        if (wantType is null && wantName is null) return null;
 
         foreach (var ev in recordingAgg.Events)
         {
-            if (!string.Equals(ev.Key.Type, wantType, StringComparison.OrdinalIgnoreCase)) continue;
+            if (wantType is not null && !string.Equals(ev.Key.Type, wantType, StringComparison.OrdinalIgnoreCase)) continue;
+            if (wantType is null && ev.Key.Type is not ("object_appear" or "object_disappear" or "hp_change"))
+            {
+                continue;
+            }
             if (!string.IsNullOrEmpty(wantId) && !string.Equals(ev.Key.Id, wantId, StringComparison.OrdinalIgnoreCase))
                 continue;
-            if (!string.IsNullOrEmpty(wantName) && !string.Equals(ev.Key.Name, wantName, StringComparison.OrdinalIgnoreCase))
+            if (!string.IsNullOrEmpty(wantName) &&
+                !string.Equals(ev.Key.Name, wantName, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(ev.Key.Source, wantName, StringComparison.OrdinalIgnoreCase))
                 continue;
-            return ev.FirstSeenSeconds;
+            return ResolveOccurrenceTime(ev, note.Time);
         }
         return null;
+    }
+
+    private static double ResolveOccurrenceTime(AggregatedEvent ev, double hintTime)
+    {
+        var times = RecordingPredictionPlanner.GetObservedTimes(ev);
+        if (times.Count == 0)
+        {
+            return ev.FirstSeenSeconds;
+        }
+
+        if (hintTime <= 0 || times.Count == 1)
+        {
+            return times[0];
+        }
+
+        var best = times[0];
+        var bestDistance = Math.Abs(times[0] - hintTime);
+        for (var i = 1; i < times.Count; i++)
+        {
+            var distance = Math.Abs(times[i] - hintTime);
+            if (distance < bestDistance)
+            {
+                best = times[i];
+                bestDistance = distance;
+            }
+        }
+
+        return best;
     }
 }

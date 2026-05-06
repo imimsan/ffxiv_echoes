@@ -169,13 +169,15 @@ public sealed class BattleRecorder : IDisposable
             if (isSelf)
             {
                 seenSelf = true;
-                name = "自分";
+                name = localPlayer?.Name.TextValue ?? name;
             }
             party.Add(new PartyMemberInfo(
                 Name: name,
                 Job: job.Abbreviation.ToString(),
                 Role: ResolveRoleName(job),
-                SubRole: null));
+                SubRole: null,
+                ObjectId: unchecked((uint)member.EntityId),
+                IsSelf: isSelf));
         }
 
         if (!seenSelf && localPlayer is not null)
@@ -190,10 +192,12 @@ public sealed class BattleRecorder : IDisposable
     {
         var job = localPlayer.ClassJob.Value;
         return new PartyMemberInfo(
-            Name: "自分",
+            Name: localPlayer.Name.TextValue,
             Job: job.Abbreviation.ToString(),
             Role: ResolveRoleName(job),
-            SubRole: null);
+            SubRole: null,
+            ObjectId: unchecked((uint)localPlayer.GameObjectId),
+            IsSelf: true);
     }
 
     private static string ResolveRoleName(ClassJob job)

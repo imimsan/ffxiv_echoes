@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Dalamud.Plugin.Services;
 using FfxivEchoes.Capture;
 using FfxivEchoes.Events;
@@ -98,6 +99,42 @@ public sealed class NoteReminderService : IDisposable
                 }
                 _pending.Add(new PendingNote(note.Id, fireTime, note));
             }
+
+            var strategyProfile = StrategyPlanResolver.SelectActiveProfile(file);
+            if (strategyProfile is not null)
+            {
+                foreach (var mechanic in strategyProfile.Mechanics)
+                {
+                    if (!mechanic.Enabled || mechanic.AdvanceWarningSec is not { } warn || warn <= 0)
+                    {
+                        continue;
+                    }
+
+                    var note = StrategyPlanResolver.BuildTimelineNote(strategyProfile, mechanic);
+                    if (!MatchesPlayer(note))
+                    {
+                        continue;
+                    }
+
+                    var resolved = TimelineNoteResolver.ResolveTime(note, agg);
+                    if (resolved is null)
+                    {
+                        continue;
+                    }
+
+                    var fireTime = resolved.Value - warn;
+                    if (fireTime < 0)
+                    {
+                        fireTime = 0;
+                    }
+
+                    _pending.Add(new PendingNote(
+                        note.Id,
+                        fireTime,
+                        note,
+                        StrategyPlanResolver.BuildReminderActions(strategyProfile, mechanic)));
+                }
+            }
         }
         _log.Debug("[FfxivEchoes] NoteReminder: {Count} 件をスケジュール", _pending.Count);
     }
@@ -168,7 +205,7 @@ public sealed class NoteReminderService : IDisposable
         {
             try
             {
-                FireNote(p.Note);
+                FireNote(p);
             }
             catch (Exception ex)
             {
@@ -177,10 +214,12 @@ public sealed class NoteReminderService : IDisposable
         }
     }
 
-    private void FireNote(TimelineNote note)
+    private void FireNote(PendingNote pending)
     {
+        var note = pending.Note;
         var text = string.IsNullOrEmpty(note.WarningText) ? note.Label : note.WarningText;
-        if (string.IsNullOrEmpty(text))
+        var customActions = pending.Actions?.ToList();
+        if (customActions is null && string.IsNullOrEmpty(text))
         {
             return;
         }
@@ -191,6 +230,10 @@ public sealed class NoteReminderService : IDisposable
         {
             new() { Type = "tts", Text = text },
         };
+        if (customActions is not null)
+        {
+            actions = customActions;
+        }
         _bus.Publish(new TriggerFiredEvent(
             Timestamp: DateTimeOffset.UtcNow,
             Zone: _currentZone,
@@ -200,5 +243,9 @@ public sealed class NoteReminderService : IDisposable
             SourceEvent: new CombatStartedEvent(DateTimeOffset.UtcNow)));
     }
 
-    private readonly record struct PendingNote(string NoteId, double FireAtRelSec, TimelineNote Note);
+    private readonly record struct PendingNote(
+        string NoteId,
+        double FireAtRelSec,
+        TimelineNote Note,
+        IReadOnlyList<Models.ActionDefinition>? Actions = null);
 }

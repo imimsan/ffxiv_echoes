@@ -68,6 +68,16 @@ public sealed record CastCanceledEvent(
     string CastActionName
 ) : IGameEvent;
 
+public sealed record ActionUsedEvent(
+    DateTimeOffset Timestamp,
+    uint SourceId,
+    string SourceName,
+    uint ActionId,
+    string ActionName,
+    uint? TargetId,
+    bool IsAutoAttack
+) : IGameEvent;
+
 // ─── ステータス（バフ／デバフ） ──────────────────────────────────────
 
 public sealed record StatusGainedEvent(

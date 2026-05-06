@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Game.ClientState.Objects.Types;
@@ -8,6 +9,7 @@ using Dalamud.Interface.Utility;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using FfxivEchoes.SafeZone;
+using FfxivEchoes.Triggers.Models;
 
 namespace FfxivEchoes.Windows;
 
@@ -96,7 +98,10 @@ public sealed class MinimapWindow : Window, IDisposable
         double? arenaRadius,
         Vector3? safeZoneWorld = null,
         float? safeZoneRadius = null,
-        float? directionAngleRad = null)
+        float? directionAngleRad = null,
+        Vector3? sourceWorld = null,
+        IReadOnlyList<StrategyPosition>? strategyPositions = null,
+        float? aoeRadius = null)
     {
         if (string.IsNullOrEmpty(gimmick))
         {
@@ -107,12 +112,16 @@ public sealed class MinimapWindow : Window, IDisposable
         var item = new ArenaItem(
             Gimmick: gimmick.ToLowerInvariant(),
             Callout: callout ?? string.Empty,
+            Priority: ArenaViewPriority.GetDisplayPriority(gimmick),
             Direction: direction,
             FanDeg: fanDeg ?? 90.0,
             ArenaRadius: radius,
             SafeZoneWorld: safeZoneWorld,
             SafeZoneRadius: safeZoneRadius ?? 3f,
             DirectionAngleRad: directionAngleRad,
+            SourceWorld: sourceWorld,
+            StrategyPositions: strategyPositions?.ToArray() ?? Array.Empty<StrategyPosition>(),
+            AoeRadius: aoeRadius,
             ExpiresAt: DateTimeOffset.UtcNow.AddSeconds(ttl));
         lock (_gate)
         {
@@ -141,7 +150,9 @@ public sealed class MinimapWindow : Window, IDisposable
             // 残り時間が短い（先に解決する）ギミックを優先表示
             for (var i = 0; i < _items.Count; i++)
             {
-                if (top is null || _items[i].ExpiresAt < top.Value.ExpiresAt)
+                if (top is null ||
+                    _items[i].Priority > top.Value.Priority ||
+                    (_items[i].Priority == top.Value.Priority && _items[i].ExpiresAt < top.Value.ExpiresAt))
                 {
                     top = _items[i];
                 }
@@ -165,7 +176,8 @@ public sealed class MinimapWindow : Window, IDisposable
         DrawArena(draw, center, r);
         DrawGimmickBody(draw, center, r, item);
         DrawSafeZoneOverlay(draw, center, r, scale, item);
-        DrawBoss(draw, center, scale, item);
+        DrawStrategyPositions(draw, center, r, scale, item);
+        DrawBoss(draw, center, r, scale, item);
         DrawPlayerPositions(draw, center, r, scale, item);
 
         // 描画領域を確保（ImGui のレイアウトを進める）
@@ -187,7 +199,7 @@ public sealed class MinimapWindow : Window, IDisposable
         draw.AddCircle(center, r, ColBorder, 64, 1.5f);
     }
 
-    private static void DrawGimmickBody(ImDrawListPtr draw, Vector2 center, float r, ArenaItem item)
+    private void DrawGimmickBody(ImDrawListPtr draw, Vector2 center, float r, ArenaItem item)
     {
         switch (item.Gimmick)
         {
@@ -200,12 +212,22 @@ public sealed class MinimapWindow : Window, IDisposable
                 break;
 
             case "inner_circle":
-                // 中央が危険、外周安置
-                draw.AddCircleFilled(center, r * 0.55f, ColDanger, 48);
-                draw.AddCircle(center, r * 0.55f, ColDangerLine, 48, 2f);
-                AddCenteredText(draw, center, "!", ColText, 1.6f);
-                AddCenteredText(draw, center + new Vector2(0, r * 0.78f), "外周安置", ColSafeLine, 0.95f);
-                break;
+                {
+                    // 中央が危険、外周安置。ソース位置に AoE を実半径で描画。
+                    var origin = item.SourceWorld is { } sw &&
+                                 TryProjectWorldToMap(center, r, item, sw, out var sp)
+                        ? sp
+                        : center;
+                    var aoeR = item.AoeRadius is { } aoeM && aoeM > 0
+                        ? ArenaProjection.WorldRadiusToMap(aoeM, item.ArenaRadius, r)
+                        : r * 0.55f;
+                    if (aoeR < 6f) aoeR = 6f;
+                    draw.AddCircleFilled(origin, aoeR, ColDanger, 48);
+                    draw.AddCircle(origin, aoeR, ColDangerLine, 48, 2f);
+                    AddCenteredText(draw, origin, "!", ColText, 1.4f);
+                    AddCenteredText(draw, center + new Vector2(0, r * 0.85f), "外周回避", ColSafeLine, 0.9f);
+                    break;
+                }
 
             case "scatter":
                 {
@@ -227,10 +249,20 @@ public sealed class MinimapWindow : Window, IDisposable
                 }
 
             case "stack":
-                draw.AddCircleFilled(center, r * 0.42f, ColScatter, 48);
-                DrawDashedCircle(draw, center, r * 0.42f, ColScatterLine, 2.5f, 20);
-                AddCenteredText(draw, center + new Vector2(0, r * 0.62f), "STACK", ColScatterLine, 1.0f);
-                break;
+                {
+                    var origin = item.SourceWorld is { } sw &&
+                                 TryProjectWorldToMap(center, r, item, sw, out var sp)
+                        ? sp
+                        : center;
+                    var aoeR = item.AoeRadius is { } aoeM && aoeM > 0
+                        ? ArenaProjection.WorldRadiusToMap(aoeM, item.ArenaRadius, r)
+                        : r * 0.42f;
+                    if (aoeR < 8f) aoeR = 8f;
+                    draw.AddCircleFilled(origin, aoeR, ColScatter, 48);
+                    DrawDashedCircle(draw, origin, aoeR, ColScatterLine, 2.5f, 20);
+                    AddCenteredText(draw, origin + new Vector2(0, aoeR + 8f), "STACK", ColScatterLine, 1.0f);
+                    break;
+                }
 
             case "cone":
                 {
@@ -240,12 +272,18 @@ public sealed class MinimapWindow : Window, IDisposable
                         : ParseDirectionAngle(item.Direction) * MathF.PI / 180f;
                     var halfFan = (float)(item.FanDeg * Math.PI / 360.0);
                     var segments = 24;
-                    var path = new List<Vector2> { center };
+                    var origin = ArenaProjection.ShouldAnchorGimmickToSource(item.Gimmick) &&
+                                 item.SourceWorld is { } sourceWorld &&
+                                 TryProjectWorldToMap(center, r, item, sourceWorld, out var sourcePoint)
+                        ? sourcePoint
+                        : center;
+                    var range = r * ArenaProjection.ConeRangeScale(item.FanDeg);
+                    var path = new List<Vector2> { origin };
                     for (var i = 0; i <= segments; i++)
                     {
                         var t = (float)i / segments;
                         var a = angle - halfFan + (halfFan * 2f) * t;
-                        path.Add(new Vector2(center.X + MathF.Cos(a) * r, center.Y + MathF.Sin(a) * r));
+                        path.Add(new Vector2(origin.X + MathF.Cos(a) * range, origin.Y + MathF.Sin(a) * range));
                     }
                     foreach (var p in path)
                     {
@@ -257,11 +295,26 @@ public sealed class MinimapWindow : Window, IDisposable
                     {
                         var t = (float)i / segments;
                         var a = angle - halfFan + (halfFan * 2f) * t;
-                        draw.PathLineTo(new Vector2(center.X + MathF.Cos(a) * r, center.Y + MathF.Sin(a) * r));
+                        draw.PathLineTo(new Vector2(origin.X + MathF.Cos(a) * range, origin.Y + MathF.Sin(a) * range));
                     }
                     draw.PathStroke(ColDangerLine, ImDrawFlags.None, 1.5f);
                     break;
                 }
+
+            case "half_plane":
+                {
+                    var angle = item.DirectionAngleRad is { } rad
+                        ? rad
+                        : ParseDirectionAngle(item.Direction) * MathF.PI / 180f;
+                    DrawHalfPlane(draw, center, r, angle);
+                    break;
+                }
+
+            case "attack":
+                DrawDashedCircle(draw, center, r * 0.28f, ColScatterLine, 2.5f, 18);
+                draw.AddCircleFilled(center, r * 0.12f, ColScatter, 24);
+                AddCenteredText(draw, center, "!", ColText, 1.2f);
+                break;
 
             default:
                 AddCenteredText(draw, center, $"unknown: {item.Gimmick}", ColText, 0.9f);
@@ -269,12 +322,50 @@ public sealed class MinimapWindow : Window, IDisposable
         }
     }
 
-    private static void DrawBoss(ImDrawListPtr draw, Vector2 center, float scale, ArenaItem item)
+    private void DrawBoss(ImDrawListPtr draw, Vector2 center, float mapR, float scale, ArenaItem item)
     {
+        var bossCenter = item.SourceWorld is { } sourceWorld &&
+                         TryProjectWorldToMap(center, mapR, item, sourceWorld, out var sourcePoint)
+            ? sourcePoint
+            : center;
         var bossR = 6f * scale;
         var color = item.Gimmick == "scatter" ? ColBossDanger : ColBoss;
-        draw.AddCircleFilled(center, bossR, color, 16);
-        draw.AddCircle(center, bossR, ColText, 16, 1.5f);
+        draw.AddCircleFilled(bossCenter, bossR, color, 16);
+        draw.AddCircle(bossCenter, bossR, ColText, 16, 1.5f);
+        if (item.DirectionAngleRad is { } angle)
+        {
+            var nose = new Vector2(
+                bossCenter.X + MathF.Cos(angle) * bossR * 1.9f,
+                bossCenter.Y + MathF.Sin(angle) * bossR * 1.9f);
+            draw.AddLine(bossCenter, nose, ColText, 2.0f);
+        }
+    }
+
+    private static void DrawHalfPlane(ImDrawListPtr draw, Vector2 center, float r, float angle)
+    {
+        const int Segments = 36;
+        var dangerRadius = r * 1.02f;
+
+        draw.PathLineTo(center);
+        for (var i = 0; i <= Segments; i++)
+        {
+            var t = (float)i / Segments;
+            var a = angle - MathF.PI / 2f + MathF.PI * t;
+            draw.PathLineTo(new Vector2(
+                center.X + MathF.Cos(a) * dangerRadius,
+                center.Y + MathF.Sin(a) * dangerRadius));
+        }
+        draw.PathFillConvex(ColDanger);
+
+        var tangent = angle + MathF.PI / 2f;
+        var aSide = new Vector2(center.X + MathF.Cos(tangent) * r, center.Y + MathF.Sin(tangent) * r);
+        var bSide = new Vector2(center.X - MathF.Cos(tangent) * r, center.Y - MathF.Sin(tangent) * r);
+        draw.AddLine(aSide, bSide, ColDangerLine, 2.5f);
+
+        var safeCenter = new Vector2(
+            center.X - MathF.Cos(angle) * r * 0.58f,
+            center.Y - MathF.Sin(angle) * r * 0.58f);
+        AddCenteredText(draw, safeCenter, "SAFE", ColSafeLine, 0.95f);
     }
 
     /// <summary>
@@ -325,6 +416,68 @@ public sealed class MinimapWindow : Window, IDisposable
         draw.AddLine(new Vector2(px, py - crossR), new Vector2(px, py + crossR), ColSafeLine, 1.5f);
     }
 
+    private bool TryProjectWorldToMap(
+        Vector2 mapCenter,
+        float mapR,
+        ArenaItem item,
+        Vector3 worldPos,
+        out Vector2 mapPos)
+    {
+        mapPos = mapCenter;
+        if (item.ArenaRadius <= 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            var snapshot = _contextBuilder.Build();
+            mapPos = ArenaProjection.ProjectWorldToMap(
+                mapCenter,
+                mapR,
+                snapshot.ArenaCenter,
+                item.ArenaRadius,
+                worldPos);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static void DrawStrategyPositions(ImDrawListPtr draw, Vector2 mapCenter, float mapR, float scale, ArenaItem item)
+    {
+        if (item.StrategyPositions.Count == 0 || item.ArenaRadius <= 0)
+        {
+            return;
+        }
+
+        foreach (var position in item.StrategyPositions)
+        {
+            var nx = (float)(position.X / item.ArenaRadius);
+            var nz = (float)(position.Z / item.ArenaRadius);
+            var dist = MathF.Sqrt(nx * nx + nz * nz);
+            if (dist > 1.0f)
+            {
+                var clamp = 0.97f / dist;
+                nx *= clamp;
+                nz *= clamp;
+            }
+
+            var point = new Vector2(mapCenter.X + nx * mapR, mapCenter.Y + nz * mapR);
+            var color = ParseColor(position.Color, ColScatterLine);
+            var fill = (color & 0x00FFFFFF) | 0x90000000;
+            draw.AddCircleFilled(point, 7f * scale, fill, 18);
+            draw.AddCircle(point, 7f * scale, color, 18, 1.8f);
+            var label = position.Label ?? position.Slot;
+            if (!string.IsNullOrEmpty(label))
+            {
+                AddCenteredText(draw, point, label, ColText, 0.75f);
+            }
+        }
+    }
+
     /// <summary>
     /// 自分と PT メンバーの世界座標をミニマップ座標に変換してドットで描画する。
     /// </summary>
@@ -349,15 +502,38 @@ public sealed class MinimapWindow : Window, IDisposable
         }
 
         var selfPos = snapshot.SelfPosition;
+        var bossIds = new HashSet<ulong>();
+        foreach (var bossNpc in snapshot.Bosses)
+        {
+            bossIds.Add(bossNpc.GameObjectId);
+        }
+
+        var primaryBossId = snapshot.Boss?.GameObjectId ?? 0UL;
+        foreach (var bossNpc in snapshot.Bosses)
+        {
+            if (bossNpc.GameObjectId == primaryBossId)
+            {
+                continue;
+            }
+
+            var bossPos = new Vector3(bossNpc.Position.X, bossNpc.Position.Y, bossNpc.Position.Z);
+            DrawPositionDot(draw, center, r, arenaCenter, radius, bossPos,
+                ColBoss, ColText, 5.5f * scale, ringThickness: 1.6f);
+        }
+
+        if (item.SourceWorld is { } sourceWorld)
+        {
+            DrawPositionDot(draw, center, r, arenaCenter, radius, sourceWorld,
+                ColScatterLine, ColText, 7.0f * scale, ringThickness: 2.0f);
+        }
 
         // 他の敵 NPC（ボス以外、HP > 0）を赤いドットで描画
-        var bossId = snapshot.Boss?.GameObjectId ?? 0UL;
         try
         {
             foreach (var obj in _objectTable)
             {
                 if (obj is not IBattleNpc npc) continue;
-                if (npc.GameObjectId == bossId) continue;
+                if (bossIds.Contains(npc.GameObjectId)) continue;
                 if (npc.MaxHp == 0) continue;
                 if (!IsEnemy(npc)) continue;
 
@@ -501,6 +677,31 @@ public sealed class MinimapWindow : Window, IDisposable
         draw.AddText(pos, color, text);
     }
 
+    private static uint ParseColor(string? hex, uint fallback)
+    {
+        if (string.IsNullOrWhiteSpace(hex))
+        {
+            return fallback;
+        }
+
+        var s = hex.Trim();
+        if (s.StartsWith("#", StringComparison.Ordinal))
+        {
+            s = s[1..];
+        }
+
+        if (s.Length != 6 ||
+            !uint.TryParse(s, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var rgb))
+        {
+            return fallback;
+        }
+
+        var r = (rgb >> 16) & 0xFF;
+        var g = (rgb >> 8) & 0xFF;
+        var b = rgb & 0xFF;
+        return 0xFF000000 | (b << 16) | (g << 8) | r;
+    }
+
     /// <summary>
     /// IBattleNpc が敵側かどうかの簡易判定。BattleNpcKind が Enemy か、または
     /// SubKind から判別できない場合は MaxHp > 0 で「敵対 NPC」とみなす。
@@ -538,11 +739,15 @@ public sealed class MinimapWindow : Window, IDisposable
     private readonly record struct ArenaItem(
         string Gimmick,
         string Callout,
+        int Priority,
         string? Direction,
         double FanDeg,
         float ArenaRadius,
         Vector3? SafeZoneWorld,
         float SafeZoneRadius,
         float? DirectionAngleRad,
+        Vector3? SourceWorld,
+        IReadOnlyList<StrategyPosition> StrategyPositions,
+        float? AoeRadius,
         DateTimeOffset ExpiresAt);
 }

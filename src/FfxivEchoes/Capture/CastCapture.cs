@@ -112,7 +112,8 @@ public sealed class CastCapture : IDisposable
             }
             else
             {
-                _states[key] = CastState.Idle(sourceId, sourceName);
+                var instantActionId = UpdateInstantAction(actor, sourceId, sourceName, actionId, totalCast, 0);
+                _states[key] = CastState.Idle(sourceId, sourceName, instantActionId);
             }
             return;
         }
@@ -143,7 +144,7 @@ public sealed class CastCapture : IDisposable
                     DateTimeOffset.UtcNow, prev.SourceId, prev.SourceName,
                     prev.CastActionId, prev.CastActionName));
             }
-            _states[key] = CastState.Idle(sourceId, sourceName);
+            _states[key] = CastState.Idle(sourceId, sourceName, 0);
             return;
         }
 
@@ -165,6 +166,18 @@ public sealed class CastCapture : IDisposable
         if (nowCasting)
         {
             _states[key] = prev with { LastCurrentCastTime = currentCast };
+            return;
+        }
+
+        var lastInstantActionId = UpdateInstantAction(actor, sourceId, sourceName, actionId, totalCast, prev.LastInstantActionId);
+        if (lastInstantActionId != prev.LastInstantActionId)
+        {
+            _states[key] = prev with
+            {
+                SourceId = sourceId,
+                SourceName = sourceName,
+                LastInstantActionId = lastInstantActionId,
+            };
         }
     }
 
@@ -204,6 +217,36 @@ public sealed class CastCapture : IDisposable
         return fallback;
     }
 
+    private uint UpdateInstantAction(
+        IBattleNpc actor,
+        uint sourceId,
+        string sourceName,
+        uint actionId,
+        float totalCast,
+        uint previousInstantActionId)
+    {
+        if (actionId == 0 || totalCast > 0.05f)
+        {
+            return 0;
+        }
+
+        if (previousInstantActionId == actionId)
+        {
+            return previousInstantActionId;
+        }
+
+        var name = ResolveActionName(actionId);
+        _bus.Publish(new ActionUsedEvent(
+            DateTimeOffset.UtcNow,
+            sourceId,
+            sourceName,
+            actionId,
+            name,
+            ResolveTargetId(actor),
+            IsAutoAttack: true));
+        return actionId;
+    }
+
     private readonly record struct CastState(
         bool IsCasting,
         uint SourceId,
@@ -211,13 +254,14 @@ public sealed class CastCapture : IDisposable
         uint CastActionId,
         string CastActionName,
         float TotalCastTime,
-        float LastCurrentCastTime)
+        float LastCurrentCastTime,
+        uint LastInstantActionId)
     {
-        public static CastState Idle(uint sourceId, string sourceName) =>
-            new(false, sourceId, sourceName, 0, string.Empty, 0f, 0f);
+        public static CastState Idle(uint sourceId, string sourceName, uint lastInstantActionId = 0) =>
+            new(false, sourceId, sourceName, 0, string.Empty, 0f, 0f, lastInstantActionId);
 
         public static CastState Casting(uint sourceId, string sourceName, uint actionId, string actionName,
             float total, float current) =>
-            new(true, sourceId, sourceName, actionId, actionName, total, current);
+            new(true, sourceId, sourceName, actionId, actionName, total, current, 0);
     }
 }

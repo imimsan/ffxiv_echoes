@@ -104,12 +104,15 @@ public sealed class SyncOffsetTracker : IDisposable
 
         var actualRel = nowRel.Value;
         // 1. SyncPoint で明示されている cast_id にマッチするか
-        foreach (var sp in file.SyncPoints)
+        if (TryFindBestSyncPointOffset(
+                file.SyncPoints,
+                actualRel,
+                CurrentOffsetSec,
+                ev.CastActionId,
+                out var syncOffset,
+                out var syncLabel))
         {
-            if (sp.Type != "cast_start") continue;
-            if (string.IsNullOrEmpty(sp.CastId)) continue;
-            if (!CastIdEquals(sp.CastId, ev.CastActionId)) continue;
-            ApplyOffset(actualRel - sp.ExpectedTime, $"sync:{sp.Id}");
+            ApplyOffset(syncOffset, syncLabel, allowLargeJump: false);
             return;
         }
 
@@ -122,18 +125,21 @@ public sealed class SyncOffsetTracker : IDisposable
             if (string.IsNullOrEmpty(aggEv.Key.Id)) continue;
             if (!CastIdEquals(aggEv.Key.Id, ev.CastActionId)) continue;
             // 同じキャストでも複数回出るので、最も近い予測値を使う
-            var expected = aggEv.FirstSeenSeconds;
-            ApplyOffset(actualRel - expected, $"rec:{ev.CastActionName}");
+            var expected = RecordingPredictionPlanner.FindClosestObservedTime(
+                aggEv,
+                actualRel,
+                CurrentOffsetSec);
+            ApplyOffset(actualRel - expected, $"rec:{ev.CastActionName}", allowLargeJump: true);
             return;
         }
     }
 
-    private void ApplyOffset(double newOffset, string label)
+    private void ApplyOffset(double newOffset, string label, bool allowLargeJump)
     {
         // 急激なジャンプは誤検知扱いで無視（最初の同期で大きい値はそのまま採用）
         lock (_gate)
         {
-            if (_lastUpdatedAt != default && Math.Abs(newOffset - _offsetSec) > MaxAcceptableJumpSec)
+            if (!ShouldAcceptOffsetJump(_lastUpdatedAt != default, _offsetSec, newOffset, allowLargeJump))
             {
                 _log.Debug("[FfxivEchoes] Sync offset 拒否（jump 過大）：current={Cur:0.00} new={New:0.00}",
                     _offsetSec, newOffset);
@@ -148,7 +154,61 @@ public sealed class SyncOffsetTracker : IDisposable
         }
     }
 
+    public static bool ShouldAcceptOffsetJump(
+        bool hasPreviousSync,
+        double currentOffsetSec,
+        double newOffsetSec,
+        bool allowLargeJump)
+    {
+        return allowLargeJump ||
+               !hasPreviousSync ||
+               Math.Abs(newOffsetSec - currentOffsetSec) <= MaxAcceptableJumpSec;
+    }
+
     /// <summary>"0x189E" 形式の文字列と uint を比較（"0x" / "#" prefix 許容）。</summary>
+    public static bool TryFindBestSyncPointOffset(
+        IEnumerable<SyncPoint> syncPoints,
+        double actualRelSec,
+        double currentOffsetSec,
+        uint actualCastId,
+        out double newOffsetSec,
+        out string label)
+    {
+        SyncPoint? best = null;
+        var bestDistance = double.MaxValue;
+
+        foreach (var sp in syncPoints)
+        {
+            if (sp.Type != "cast_start") continue;
+            if (string.IsNullOrEmpty(sp.CastId)) continue;
+            if (!CastIdEquals(sp.CastId, actualCastId)) continue;
+
+            var predictedActual = sp.ExpectedTime + currentOffsetSec;
+            var distance = Math.Abs(actualRelSec - predictedActual);
+            if (distance > Math.Max(0, sp.Tolerance))
+            {
+                continue;
+            }
+
+            if (distance < bestDistance)
+            {
+                best = sp;
+                bestDistance = distance;
+            }
+        }
+
+        if (best is null)
+        {
+            newOffsetSec = 0;
+            label = string.Empty;
+            return false;
+        }
+
+        newOffsetSec = actualRelSec - best.ExpectedTime;
+        label = $"sync:{best.Id}";
+        return true;
+    }
+
     private static bool CastIdEquals(string spec, uint actualId)
     {
         if (string.IsNullOrEmpty(spec)) return false;

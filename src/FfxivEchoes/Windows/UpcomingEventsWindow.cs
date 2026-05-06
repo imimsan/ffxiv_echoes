@@ -29,6 +29,9 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
     private readonly RecordingScanner _recordings;
     private readonly SyncOffsetTracker _syncOffset;
     private readonly IDisposable _eventSub;
+    private readonly object _cacheGate = new();
+    private readonly List<UpcomingTemplate> _cachedTemplates = new();
+    private bool _cacheDirty = true;
 
     private string _currentZone = "Unknown";
     private bool _inCombat;
@@ -67,16 +70,36 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
         {
             case ZoneChangedEvent z:
                 _currentZone = string.IsNullOrEmpty(z.ZoneName) ? "Unknown" : z.ZoneName;
+                InvalidateCache();
                 UpdateVisibility();
                 break;
             case CombatStartedEvent:
                 _inCombat = true;
+                InvalidateCache();
                 UpdateVisibility();
                 break;
             case CombatEndedEvent:
                 _inCombat = false;
                 IsOpen = false;
+                ClearCache();
                 break;
+        }
+    }
+
+    private void InvalidateCache()
+    {
+        lock (_cacheGate)
+        {
+            _cacheDirty = true;
+        }
+    }
+
+    private void ClearCache()
+    {
+        lock (_cacheGate)
+        {
+            _cachedTemplates.Clear();
+            _cacheDirty = true;
         }
     }
 
@@ -161,6 +184,109 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
 
     private List<UpcomingItem> CollectUpcoming(double nowRel)
     {
+        EnsureCache();
+
+        UpcomingTemplate[] templates;
+        lock (_cacheGate)
+        {
+            templates = _cachedTemplates.ToArray();
+        }
+
+        var list = new List<UpcomingItem>();
+        var offset = _syncOffset.CurrentOffsetSec;
+        foreach (var template in templates)
+        {
+            var t = template.RelativeTime + offset;
+            if (t < nowRel - 1.0) continue;
+            list.Add(new UpcomingItem(
+                Time: t,
+                Icon: template.Icon,
+                Label: template.Label,
+                Sub: template.Sub,
+                Color: template.Color));
+        }
+
+        list.Sort((a, b) => a.Time.CompareTo(b.Time));
+        return list.Take(MaxItems).ToList();
+    }
+
+    private void EnsureCache()
+    {
+        lock (_cacheGate)
+        {
+            if (!_cacheDirty)
+            {
+                return;
+            }
+
+            _cacheDirty = false;
+        }
+
+        var built = BuildUpcomingTemplates();
+
+        lock (_cacheGate)
+        {
+            _cachedTemplates.Clear();
+            _cachedTemplates.AddRange(built);
+        }
+    }
+
+    private List<UpcomingTemplate> BuildUpcomingTemplates()
+    {
+        var list = new List<UpcomingTemplate>();
+        AggregatedEvents? agg = null;
+
+        try
+        {
+            agg = _recordings.Aggregate(_currentZone);
+        }
+        catch
+        {
+            // Recording files can be mid-write during combat. Keep the HUD alive.
+        }
+
+        if (agg is not null)
+        {
+            var partyMembers = new HashSet<string>(
+                _recordings.ListPartyMembers(_currentZone),
+                StringComparer.OrdinalIgnoreCase);
+            var predictions = RecordingPredictionPlanner.BuildTimelinePredictions(agg, partyMembers: partyMembers);
+
+            foreach (var prediction in predictions)
+            {
+                var label = prediction.Label;
+                list.Add(new UpcomingTemplate(
+                    RelativeTime: prediction.RelativeSeconds,
+                    Icon: GuessIconForCast(label),
+                    Label: label,
+                    Sub: FormatPredictionSub(prediction),
+                    Color: 0xFFFAA560));
+            }
+        }
+
+        var file = _store.GetByZone(_currentZone);
+        if (file is not null)
+        {
+            foreach (var note in file.Notes.Concat(StrategyPlanResolver.BuildTimelineNotes(file)))
+            {
+                var resolved = TimelineNoteResolver.ResolveTime(note, agg);
+                if (resolved is null) continue;
+                var icon = note.Icons.FirstOrDefault() ?? "東";
+                list.Add(new UpcomingTemplate(
+                    RelativeTime: resolved.Value,
+                    Icon: icon,
+                    Label: note.Label,
+                    Sub: note.Role is { Length: > 0 } r ? $"role: {r}" : "note",
+                    Color: 0xFF34D34Du));
+            }
+        }
+
+        list.Sort((a, b) => a.RelativeTime.CompareTo(b.RelativeTime));
+        return list;
+    }
+
+    private List<UpcomingItem> CollectUpcomingSlow(double nowRel)
+    {
         var list = new List<UpcomingItem>();
         var offset = _syncOffset.CurrentOffsetSec;
 
@@ -168,17 +294,19 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
         try
         {
             var agg = _recordings.Aggregate(_currentZone);
-            foreach (var ev in agg.Events)
+            var partyMembers = new HashSet<string>(_recordings.ListPartyMembers(_currentZone),
+                StringComparer.OrdinalIgnoreCase);
+            var predictions = RecordingPredictionPlanner.BuildTimelinePredictions(agg, partyMembers: partyMembers);
+            foreach (var prediction in predictions)
             {
-                if (ev.Key.Type != "cast_start") continue;
-                var t = ev.FirstSeenSeconds + offset;
+                var t = prediction.RelativeSeconds + offset;
                 if (t < nowRel - 1.0) continue;
-                var label = ev.Key.Name ?? ev.Key.Id ?? "?";
+                var label = prediction.Label;
                 list.Add(new UpcomingItem(
                     Time: t,
                     Icon: GuessIconForCast(label),
                     Label: label,
-                    Sub: $"cast_id={ev.Key.Id ?? "—"}",
+                    Sub: FormatPredictionSub(prediction),
                     Color: 0xFFFAA560));
             }
         }
@@ -191,7 +319,7 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
             AggregatedEvents? aggForNotes = null;
             try { aggForNotes = _recordings.Aggregate(_currentZone); } catch { }
 
-            foreach (var note in file.Notes)
+            foreach (var note in file.Notes.Concat(StrategyPlanResolver.BuildTimelineNotes(file)))
             {
                 var resolved = TimelineNoteResolver.ResolveTime(note, aggForNotes);
                 if (resolved is null) continue;
@@ -225,6 +353,16 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
         return "⚡";
     }
 
+    private static string FormatPredictionSub(RecordingTimelinePrediction prediction)
+    {
+        var percent = Math.Clamp((int)Math.Round(prediction.Confidence * 100.0), 0, 100);
+        var jitter = prediction.TimeJitterSeconds >= 0.5
+            ? $" / +/-{prediction.TimeJitterSeconds:0.0}s"
+            : string.Empty;
+        var id = string.IsNullOrEmpty(prediction.Id) ? prediction.EventType : $"{prediction.EventType}:{prediction.Id}";
+        return $"{id} / {percent}%{jitter}";
+    }
+
     private static string Truncate(string s, int maxChars)
     {
         if (string.IsNullOrEmpty(s) || s.Length <= maxChars) return s;
@@ -233,6 +371,13 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
 
     private readonly record struct UpcomingItem(
         double Time,
+        string Icon,
+        string Label,
+        string Sub,
+        uint Color);
+
+    private readonly record struct UpcomingTemplate(
+        double RelativeTime,
         string Icon,
         string Label,
         string Sub,

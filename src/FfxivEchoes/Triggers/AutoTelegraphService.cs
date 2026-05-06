@@ -28,9 +28,11 @@ public sealed class AutoTelegraphService : IDisposable
     private readonly WorldOverlayWindow _worldOverlay;
     private readonly MinimapWindow _minimap;
     private readonly TriggerStore _store;
+    private readonly IEventBus _bus;
     private readonly IPluginLog _log;
 
     private readonly IDisposable _castStartSub;
+    private readonly IDisposable _actionSub;
     private readonly IDisposable _zoneSub;
 
     private string _currentZone = "Unknown";
@@ -44,6 +46,7 @@ public sealed class AutoTelegraphService : IDisposable
         TriggerStore store,
         IPluginLog log)
     {
+        _bus = bus;
         _dataManager = dataManager;
         _objectTable = objectTable;
         _worldOverlay = worldOverlay;
@@ -52,6 +55,7 @@ public sealed class AutoTelegraphService : IDisposable
         _log = log;
 
         _castStartSub = bus.Subscribe<CastStartedEvent>(OnCastStart);
+        _actionSub = bus.Subscribe<ActionUsedEvent>(OnActionUsed);
         _zoneSub = bus.Subscribe<ZoneChangedEvent>(z =>
             _currentZone = string.IsNullOrEmpty(z.ZoneName) ? "Unknown" : z.ZoneName);
     }
@@ -59,6 +63,7 @@ public sealed class AutoTelegraphService : IDisposable
     public void Dispose()
     {
         _castStartSub.Dispose();
+        _actionSub.Dispose();
         _zoneSub.Dispose();
     }
 
@@ -70,35 +75,84 @@ public sealed class AutoTelegraphService : IDisposable
             _log.Information("[FfxivEchoes] AutoTelegraph: skip (zone={Zone}, no file)", _currentZone);
             return;
         }
-        if (!file.AutoSettings.ShowAutoTelegraphs)
-        {
-            _log.Information("[FfxivEchoes] AutoTelegraph: skip (show_auto_telegraphs=false)");
-            return;
-        }
 
-        if (IsFriendlyActor(ev.SourceId))
+        var isFriendly = IsFriendlyActor(ev.SourceId);
+        if (isFriendly)
         {
             _log.Information("[FfxivEchoes] AutoTelegraph: skip friendly source ({Name})", ev.SourceName);
             return;
         }
 
-        var aoe = AoeResolver.Resolve(_dataManager, ev.CastActionId, _log);
-        if (aoe is null)
+        if (file.AutoSettings.EnableTriggers)
         {
-            _log.Information("[FfxivEchoes] AutoTelegraph: skip non-AoE cast {Name} (id={Id:X4})",
-                ev.CastActionName, ev.CastActionId);
+            var strategy = StrategyPlanResolver.FindMechanicForCast(file, ev.CastActionId, ev.CastActionName);
+            if (strategy.Profile is not null && strategy.Mechanic is not null)
+            {
+                var actions = StrategyPlanResolver.BuildReminderActions(strategy.Profile, strategy.Mechanic);
+                if (actions.Count > 0)
+                {
+                    _bus.Publish(new TriggerFiredEvent(
+                        Timestamp: DateTimeOffset.UtcNow,
+                        Zone: _currentZone,
+                        TriggerId: $"__strategy_{strategy.Profile.Id}_{strategy.Mechanic.Id}",
+                        TriggerName: strategy.Mechanic.Label,
+                        Actions: actions,
+                        SourceEvent: ev));
+                    return;
+                }
+            }
+        }
+
+        var aoe = AoeResolver.Resolve(_dataManager, ev.CastActionId, _log);
+        var namedSafeCall = AutoSafeCallPlanner.CreateKnown(ev.CastActionId, ev.CastActionName);
+        var decision = AttackDisplayPolicy.Decide(
+            file.AutoSettings,
+            new AttackDisplayRequest(
+                IsFriendly: false,
+                HasAoe: aoe is not null || namedSafeCall is not null,
+                IsAutoAttack: false,
+                IsCast: true));
+        if (decision == AttackDisplayDecision.None)
+        {
+            _log.Information("[FfxivEchoes] AutoTelegraph: skip cast {Name} (decision=none)", ev.CastActionName);
             return;
         }
-        var radius = aoe.Radius;
+
+        var src = _objectTable.SearchById(ev.SourceId);
+        var sourceWorld = src is null
+            ? (Vector3?)null
+            : new Vector3(src.Position.X, src.Position.Y, src.Position.Z);
+
+        if (aoe is null && namedSafeCall is null)
+        {
+            DrawAttackPulse(ev.CastActionName, ev.CastTime, sourceWorld, "詠唱");
+            return;
+        }
+
+        if (aoe is null && namedSafeCall is not null)
+        {
+            var knownFacingAngleRad = ArenaProjection.UsesFacing(namedSafeCall.Gimmick) && src is not null
+                ? ArenaProjection.RotationToMapAngleRad(src.Rotation)
+                : (float?)null;
+
+            _minimap.AddArenaView(
+                gimmick: namedSafeCall.Gimmick,
+                callout: namedSafeCall.Callout,
+                durationSec: ev.CastTime + 0.5,
+                direction: ArenaProjection.UsesFacing(namedSafeCall.Gimmick) ? "N" : null,
+                fanDeg: namedSafeCall.FanDeg,
+                arenaRadius: 20.0,
+                directionAngleRad: knownFacingAngleRad,
+                sourceWorld: sourceWorld);
+            PublishAutoSafeCall(ev, namedSafeCall);
+            return;
+        }
+
+        var radius = aoe!.Radius;
         var shape = "circle";
         var inferredFromCaster = aoe.FromCaster;
 
-        Vector3? worldPos = null;
-        var src = _objectTable.SearchById(ev.SourceId);
-        if (src is not null)
-        {
-            worldPos = new Vector3(src.Position.X, src.Position.Y, src.Position.Z);
-        }
+        var worldPos = sourceWorld;
         if (!inferredFromCaster && ev.TargetId is { } tid && tid != 0)
         {
             var target = _objectTable.SearchById(tid);
@@ -117,35 +171,100 @@ public sealed class AutoTelegraphService : IDisposable
         _log.Information("[FfxivEchoes] AutoTelegraph: 描画 cast={Name} radius={R}m shape={S} pos=({X:0.0},{Z:0.0})",
             ev.CastActionName, radius, shape, worldPos.Value.X, worldPos.Value.Z);
 
-        // 1. ミニマップ（俯瞰アリーナ図）に確定ギミック表示
-        var gimmick = AoeResolver.GuessGimmick(aoe.CastType, aoe.Radius);
-        // cone のときはソース（ボス）の rotation から実方向を計算
-        float? coneAngleRad = null;
-        if (gimmick == "cone" && src is not null)
+        // 1. ミニマップ（俯瞰アリーナ図）に確定/推定ギミック表示
+        var safeCall = namedSafeCall ?? AutoSafeCallPlanner.Create(aoe, ev.CastActionName);
+        // cone / half_plane はソース（ボス）の rotation から実方向を計算
+        float? facingAngleRad = null;
+        if (ArenaProjection.UsesFacing(safeCall?.Gimmick) && src is not null)
         {
             // FFXIV: rotation 0 = +Z (south) 方向。ミニマップ render の atan2 系で
             // south = π/2 になるよう変換：renderAngle = bossRot + π/2 - π/2 = bossRot
             // と思いきや、render の cone 描画は (cos, sin) を使うため、
             // 直接 rotation を渡すと south=0 が east になってしまう。
             // 正しい変換: render angle = π/2 - bossRotation
-            coneAngleRad = MathF.PI / 2f - src.Rotation;
+            facingAngleRad = ArenaProjection.RotationToMapAngleRad(src.Rotation);
         }
-        _minimap.AddArenaView(
-            gimmick: gimmick,
-            callout: $"確定：{ev.CastActionName}",
-            durationSec: ev.CastTime + 0.5,
-            direction: gimmick == "cone" ? "N" : null,
-            fanDeg: gimmick == "cone" ? 90 : null,
-            arenaRadius: 20.0,
-            directionAngleRad: coneAngleRad);
+        if (safeCall is not null)
+        {
+            // sourceWorld には「AoE が実際に発動する場所」を渡す。
+            // - キャスター中心 (CastType=5/3/4/6) → ボス位置
+            // - ターゲット中心 (CastType=2) → ターゲット位置（worldPos が既にそれ）
+            _minimap.AddArenaView(
+                gimmick: safeCall.Gimmick,
+                callout: safeCall.Callout,
+                durationSec: ev.CastTime + 0.5,
+                direction: ArenaProjection.UsesFacing(safeCall.Gimmick) ? "N" : null,
+                fanDeg: safeCall.FanDeg,
+                arenaRadius: 20.0,
+                directionAngleRad: facingAngleRad,
+                sourceWorld: worldPos,
+                aoeRadius: aoe?.Radius);
+        }
 
-        // 2. フィールドにも実体半径の円マーカー（show_auto_telegraphs が ON なら）
-        _worldOverlay.AddMarker(
-            worldPos: worldPos.Value,
-            shape: shape,
-            radius: radius,
-            colorHex: "#FF6464",
-            durationSec: ev.CastTime + 0.5);
+        if (safeCall is not null)
+        {
+            PublishAutoSafeCall(ev, safeCall);
+        }
+    }
+
+    private void OnActionUsed(ActionUsedEvent ev)
+    {
+        var file = _store.GetByZone(_currentZone);
+        if (file is null)
+        {
+            return;
+        }
+
+        var isFriendly = IsFriendlyActor(ev.SourceId);
+        var decision = AttackDisplayPolicy.Decide(
+            file.AutoSettings,
+            new AttackDisplayRequest(
+                IsFriendly: isFriendly,
+                HasAoe: false,
+                IsAutoAttack: ev.IsAutoAttack,
+                IsCast: false));
+        if (decision == AttackDisplayDecision.None)
+        {
+            return;
+        }
+
+        var src = _objectTable.SearchById(ev.SourceId);
+        var sourceWorld = src is null
+            ? (Vector3?)null
+            : new Vector3(src.Position.X, src.Position.Y, src.Position.Z);
+        DrawAttackPulse(ev.ActionName, 1.8, sourceWorld, ev.IsAutoAttack ? "AA" : "Action");
+    }
+
+    private void DrawAttackPulse(string label, double durationSec, Vector3? sourceWorld, string prefix)
+    {
+        _minimap.AddArenaView(
+            gimmick: "attack",
+            callout: $"{prefix}: {label}",
+            durationSec: Math.Max(1.0, durationSec),
+            direction: null,
+            fanDeg: null,
+            arenaRadius: 20.0,
+            sourceWorld: sourceWorld);
+    }
+
+    private void PublishAutoSafeCall(CastStartedEvent ev, AutoSafeCall safeCall)
+    {
+        var actions = new List<ActionDefinition>
+        {
+            new()
+            {
+                Type = "tts",
+                Text = safeCall.TtsText,
+            },
+        };
+
+        _bus.Publish(new TriggerFiredEvent(
+            Timestamp: DateTimeOffset.UtcNow,
+            Zone: _currentZone,
+            TriggerId: $"__auto_safe_call_{ev.CastActionId:X}_{ev.SourceId}",
+            TriggerName: safeCall.IsEstimate ? $"推定安置：{ev.CastActionName}" : $"安置：{ev.CastActionName}",
+            Actions: actions,
+            SourceEvent: ev));
     }
 
     private bool IsFriendlyActor(uint id)

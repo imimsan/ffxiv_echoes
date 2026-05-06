@@ -21,6 +21,12 @@ public sealed class TriggerFile
     [JsonPropertyName("metadata")]
     public TriggerFileMetadata? Metadata { get; set; }
 
+    [JsonPropertyName("active_strategy_profile_id")]
+    public string? ActiveStrategyProfileId { get; set; }
+
+    [JsonPropertyName("strategy_profiles")]
+    public List<StrategyProfile> StrategyProfiles { get; set; } = new();
+
     [JsonPropertyName("sync_points")]
     public List<SyncPoint> SyncPoints { get; set; } = new();
 
@@ -36,6 +42,120 @@ public sealed class TriggerFile
     /// </summary>
     [JsonPropertyName("notes")]
     public List<TimelineNote> Notes { get; set; } = new();
+}
+
+public sealed class StrategyProfile
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; } = true;
+
+    [JsonPropertyName("description")]
+    public string? Description { get; set; }
+
+    [JsonPropertyName("arena_radius")]
+    public double? ArenaRadius { get; set; }
+
+    [JsonPropertyName("spread_positions")]
+    public List<StrategyPosition> SpreadPositions { get; set; } = new();
+
+    [JsonPropertyName("mechanics")]
+    public List<MechanicStrategy> Mechanics { get; set; } = new();
+}
+
+public sealed class StrategyPosition
+{
+    [JsonPropertyName("slot")]
+    public string Slot { get; set; } = string.Empty;
+
+    [JsonPropertyName("label")]
+    public string? Label { get; set; }
+
+    [JsonPropertyName("role")]
+    public string? Role { get; set; }
+
+    [JsonPropertyName("job")]
+    public string? Job { get; set; }
+
+    [JsonPropertyName("x")]
+    public double X { get; set; }
+
+    [JsonPropertyName("z")]
+    public double Z { get; set; }
+
+    [JsonPropertyName("color")]
+    public string? Color { get; set; }
+
+    [JsonPropertyName("note")]
+    public string? Note { get; set; }
+}
+
+public sealed class MechanicStrategy
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("label")]
+    public string Label { get; set; } = string.Empty;
+
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; } = true;
+
+    [JsonPropertyName("time")]
+    public double? Time { get; set; }
+
+    [JsonPropertyName("duration")]
+    public double? Duration { get; set; }
+
+    [JsonPropertyName("attached_to")]
+    public MatchCondition? AttachedTo { get; set; }
+
+    [JsonPropertyName("advance_warning_sec")]
+    public double? AdvanceWarningSec { get; set; }
+
+    [JsonPropertyName("role")]
+    public string? Role { get; set; }
+
+    [JsonPropertyName("job")]
+    public string? Job { get; set; }
+
+    [JsonPropertyName("warning_text")]
+    public string? WarningText { get; set; }
+
+    [JsonPropertyName("callout")]
+    public string? Callout { get; set; }
+
+    [JsonPropertyName("gimmick")]
+    public string? Gimmick { get; set; }
+
+    [JsonPropertyName("safe_zone")]
+    public SafeZoneCalculation? SafeZone { get; set; }
+
+    [JsonPropertyName("positions")]
+    public List<string> Positions { get; set; } = new();
+
+    [JsonPropertyName("color")]
+    public string? Color { get; set; }
+
+    [JsonPropertyName("source_event_type")]
+    public string? SourceEventType { get; set; }
+
+    [JsonPropertyName("observed_count")]
+    public int? ObservedCount { get; set; }
+
+    [JsonPropertyName("occurrence_seen_count")]
+    public int? OccurrenceSeenCount { get; set; }
+
+    [JsonPropertyName("confidence")]
+    public double? Confidence { get; set; }
+
+    [JsonPropertyName("time_jitter_seconds")]
+    public double? TimeJitterSeconds { get; set; }
 }
 
 /// <summary>
@@ -99,6 +219,8 @@ public sealed class TimelineNote
 
 public sealed class AutoSettings
 {
+    public const double DefaultPredictAdvanceWarningSec = 12.0;
+
     [JsonPropertyName("enable_triggers")]
     public bool EnableTriggers { get; set; } = false;
 
@@ -114,7 +236,7 @@ public sealed class AutoSettings
     /// 例: 5 にすると「キャスト開始の 5 秒前に『次：〇〇』と読み上げ」する。
     /// </summary>
     [JsonPropertyName("predict_advance_warning_sec")]
-    public double? PredictAdvanceWarningSec { get; set; }
+    public double? PredictAdvanceWarningSec { get; set; } = DefaultPredictAdvanceWarningSec;
 
     /// <summary>
     /// 予測された未来キャストをライブタイムラインに描画するかどうか（デフォルト true）。
@@ -130,6 +252,12 @@ public sealed class AutoSettings
     /// </summary>
     [JsonPropertyName("show_auto_telegraphs")]
     public bool ShowAutoTelegraphs { get; set; } = false;
+
+    [JsonPropertyName("show_all_enemy_casts")]
+    public bool ShowAllEnemyCasts { get; set; } = false;
+
+    [JsonPropertyName("show_auto_attacks")]
+    public bool ShowAutoAttacks { get; set; } = false;
 }
 
 public sealed class TriggerFileMetadata

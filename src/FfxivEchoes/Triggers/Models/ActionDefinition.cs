@@ -124,6 +124,15 @@ public sealed class ActionDefinition
     [JsonPropertyName("arena_radius")]
     public double? ArenaRadius { get; set; }
 
+    [JsonPropertyName("strategy_profile_id")]
+    public string? StrategyProfileId { get; set; }
+
+    [JsonPropertyName("mechanic_id")]
+    public string? MechanicId { get; set; }
+
+    [JsonPropertyName("strategy_positions")]
+    public List<StrategyPosition>? StrategyPositions { get; set; }
+
     // 想定外フィールドを失わないための受け皿（フォーマットバージョン跨ぎの後方互換用）
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? Extras { get; set; }

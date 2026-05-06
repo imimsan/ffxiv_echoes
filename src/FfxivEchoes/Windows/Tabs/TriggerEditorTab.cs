@@ -35,6 +35,8 @@ public sealed class TriggerEditorTab : ITab
     private bool _hideStatusEvents = false;
     private int _attachNoteIndex = -1;
     private TriggerAutoGenerator.GenerationResult? _pendingAutoGen;
+    private string? _attachStrategyProfileId;
+    private string? _attachStrategyMechanicId;
 
     public TriggerEditorTab(TriggerStore triggerStore, RecordingScanner scanner, TabContext context,
         Events.IEventBus? eventBus = null, TriggerAutoGenerator? autoGenerator = null)
@@ -60,13 +62,21 @@ public sealed class TriggerEditorTab : ITab
         {
             LoadWorkingCopy(zone);
         }
+        if (_workingCopy is null && _tabContext.PendingCreateFromRecording)
+        {
+            _workingCopy = CreateStarterFile(zone, fromRecording: true);
+            _workingZone = zone;
+            _tabContext.PendingCreateFromRecording = false;
+            _dirty = true;
+        }
         if (_workingCopy is null)
         {
             ImGui.TextWrapped($"ゾーン \"{zone}\" のトリガー定義は未作成です。下のボタンで新規作成できます。");
             if (ImGui.Button("新規作成"))
             {
-                _workingCopy = new TriggerFile { Zone = zone };
+                _workingCopy = CreateStarterFile(zone, _tabContext.PendingCreateFromRecording);
                 _workingZone = zone;
+                _tabContext.PendingCreateFromRecording = false;
                 _dirty = true;
             }
             return;
@@ -92,6 +102,11 @@ public sealed class TriggerEditorTab : ITab
                 DrawFileSettingsPanel();
                 ImGui.EndTabItem();
             }
+            if (ImGui.BeginTabItem("攻略登録"))
+            {
+                DrawStrategyPanel();
+                ImGui.EndTabItem();
+            }
             if (ImGui.BeginTabItem("ノート"))
             {
                 DrawNotesPanel();
@@ -115,6 +130,61 @@ public sealed class TriggerEditorTab : ITab
         _workingZone = zone;
         _editingTriggerId = null;
         _dirty = false;
+    }
+
+    private static TriggerFile CreateStarterFile(string zone, bool fromRecording)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var file = new TriggerFile
+        {
+            Zone = zone,
+            ActiveStrategyProfileId = "default",
+            Metadata = new TriggerFileMetadata
+            {
+                CreatedAt = now,
+                LastModified = now,
+                Notes = fromRecording
+                    ? "Created from recordings. Keep recording pulls to improve the learned timeline."
+                    : "Created manually.",
+            },
+        };
+
+        file.AutoSettings.EnableTriggers = true;
+        file.AutoSettings.AutoRecord = fromRecording;
+        file.AutoSettings.ShowTimeline = true;
+        file.AutoSettings.ShowPredictedCasts = true;
+        file.AutoSettings.ShowAutoTelegraphs = fromRecording;
+        file.AutoSettings.ShowAllEnemyCasts = false;
+        file.AutoSettings.ShowAutoAttacks = false;
+        file.AutoSettings.PredictAdvanceWarningSec = AutoSettings.DefaultPredictAdvanceWarningSec;
+        file.StrategyProfiles.Add(CreateDefaultStrategyProfile("default", "Default party strategy"));
+        return file;
+    }
+
+    private static StrategyProfile CreateDefaultStrategyProfile(string id, string name)
+    {
+        return new StrategyProfile
+        {
+            Id = id,
+            Name = name,
+            ArenaRadius = 20.0,
+            SpreadPositions = CreateEightWaySpreadPositions(),
+        };
+    }
+
+    private static List<StrategyPosition> CreateEightWaySpreadPositions()
+    {
+        return new List<StrategyPosition>
+        {
+            new() { Slot = "MT", Label = "MT", Role = "tank", X = 0, Z = -14, Color = "#60A5FA" },
+            new() { Slot = "ST", Label = "ST", Role = "tank", X = 0, Z = 14, Color = "#60A5FA" },
+            new() { Slot = "H1", Label = "H1", Role = "healer", X = -14, Z = 0, Color = "#34D399" },
+            new() { Slot = "H2", Label = "H2", Role = "healer", X = 14, Z = 0, Color = "#34D399" },
+            new() { Slot = "D1", Label = "D1", Role = "dps", X = -10, Z = -10, Color = "#F87171" },
+            new() { Slot = "D2", Label = "D2", Role = "dps", X = 10, Z = -10, Color = "#F87171" },
+            new() { Slot = "D3", Label = "D3", Role = "dps", X = -10, Z = 10, Color = "#FBBF24" },
+            new() { Slot = "D4", Label = "D4", Role = "dps", X = 10, Z = 10, Color = "#FBBF24" },
+        };
     }
 
     private void DrawHeader(string zone)
@@ -939,11 +1009,16 @@ public sealed class TriggerEditorTab : ITab
                 {
                     CreateTriggerFromKey(selected);
                 }
+                ImGui.SameLine();
+                if (ImGui.Button("攻略ギミックに追加"))
+                {
+                    CreateStrategyMechanicFromKey(selected);
+                }
             }
             return;
         }
 
-        if (ImGui.BeginTable("##aggregate-table", 6,
+        if (ImGui.BeginTable("##aggregate-table", 7,
             ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp |
             ImGuiTableFlags.Resizable | ImGuiTableFlags.ScrollY))
         {
@@ -953,6 +1028,7 @@ public sealed class TriggerEditorTab : ITab
             ImGui.TableSetupColumn("発動者/対象", ImGuiTableColumnFlags.WidthStretch, 1.5f);
             ImGui.TableSetupColumn("観測回数", ImGuiTableColumnFlags.WidthFixed, 80f * ImGuiHelpers.GlobalScale);
             ImGui.TableSetupColumn("初回時刻", ImGuiTableColumnFlags.WidthFixed, 90f * ImGuiHelpers.GlobalScale);
+            ImGui.TableSetupColumn("攻略", ImGuiTableColumnFlags.WidthFixed, 86f * ImGuiHelpers.GlobalScale);
             ImGui.TableHeadersRow();
 
             foreach (var ev in filteredEvents)
@@ -964,6 +1040,11 @@ public sealed class TriggerEditorTab : ITab
                 ImGui.TableNextColumn(); ImGui.TextUnformatted(ev.Key.Source ?? ev.Key.Target ?? "—");
                 ImGui.TableNextColumn(); ImGui.TextUnformatted($"{ev.Count}");
                 ImGui.TableNextColumn(); ImGui.TextUnformatted($"{ev.FirstSeenSeconds:0.0}s");
+                ImGui.TableNextColumn();
+                if (ImGui.SmallButton($"追加##strategy-{ev.Key.Type}-{ev.Key.Id}-{ev.FirstSeenSeconds:0.0}"))
+                {
+                    CreateStrategyMechanicFromEvent(ev);
+                }
             }
 
             ImGui.EndTable();
@@ -1003,11 +1084,112 @@ public sealed class TriggerEditorTab : ITab
         _tabContext.PendingFocusTab = null; // 集計タブに留まる
     }
 
+    private void CreateStrategyMechanicFromKey(EventKey key)
+    {
+        if (_workingCopy is null)
+        {
+            return;
+        }
+
+        var ev = _recordingScanner.Aggregate(_workingZone).Events.FirstOrDefault(e => e.Key.Equals(key));
+        if (ev is not null)
+        {
+            CreateStrategyMechanicFromEvent(ev);
+            return;
+        }
+
+        var profile = EnsureActiveStrategyProfile();
+        var id = UniqueMechanicId(profile, SuggestMechanicPrefix(key));
+        var prediction = new RecordingTimelinePrediction(
+            EventType: key.Type,
+            RelativeSeconds: 0,
+            Label: key.Name ?? key.Id ?? key.Type,
+            Id: key.Id ?? string.Empty,
+            Source: key.Source,
+            Target: key.Target,
+            ObservedCount: 1,
+            OccurrenceIndex: 0,
+            OccurrenceSeenCount: 1,
+            Confidence: 1.0,
+            TimeJitterSeconds: 0);
+        profile.Mechanics.Add(StrategyPlanResolver.CreateMechanicDraft(prediction, id));
+        _dirty = true;
+    }
+
+    private void CreateStrategyMechanicFromEvent(AggregatedEvent ev)
+    {
+        var profile = EnsureActiveStrategyProfile();
+        var agg = _recordingScanner.Aggregate(_workingZone);
+        var battleCount = Math.Max(1, agg.BattleCount);
+        var occurrences = RecordingPredictionPlanner.GetOccurrences(ev);
+        var prefix = SuggestMechanicPrefix(ev.Key);
+        foreach (var occurrence in occurrences)
+        {
+            var id = UniqueMechanicId(profile, prefix);
+            var baseLabel = ev.Key.Name ?? ev.Key.Id ?? ev.Key.Type;
+            var prediction = new RecordingTimelinePrediction(
+                EventType: ev.Key.Type,
+                RelativeSeconds: occurrence.RepresentativeTimeSeconds,
+                Label: occurrences.Count > 1 ? $"{baseLabel} #{occurrence.Index + 1}" : baseLabel,
+                Id: ev.Key.Id ?? string.Empty,
+                Source: ev.Key.Source,
+                Target: ev.Key.Target,
+                ObservedCount: ev.Count,
+                OccurrenceIndex: occurrence.Index,
+                OccurrenceSeenCount: occurrence.SeenCount,
+                Confidence: Math.Clamp((double)occurrence.SeenCount / battleCount, 0.0, 1.0),
+                TimeJitterSeconds: CalculateEventJitter(occurrence.ObservedTimesSeconds));
+            profile.Mechanics.Add(StrategyPlanResolver.CreateMechanicDraft(prediction, id));
+        }
+        _dirty = true;
+    }
+
+    private StrategyProfile EnsureActiveStrategyProfile()
+    {
+        if (_workingCopy is null)
+        {
+            throw new InvalidOperationException("No working trigger file.");
+        }
+
+        var profile = StrategyPlanResolver.SelectActiveProfile(_workingCopy);
+        if (profile is not null)
+        {
+            return profile;
+        }
+
+        profile = CreateDefaultStrategyProfile("default", "Default party strategy");
+        _workingCopy.StrategyProfiles.Add(profile);
+        _workingCopy.ActiveStrategyProfileId = profile.Id;
+        return profile;
+    }
+
+    private static string SuggestMechanicPrefix(EventKey key)
+    {
+        var raw = key.Name ?? key.Id ?? key.Type;
+        var normalized = new string(raw
+            .ToLowerInvariant()
+            .Select(ch => char.IsLetterOrDigit(ch) ? ch : '_')
+            .ToArray()).Trim('_');
+        return string.IsNullOrWhiteSpace(normalized) ? "mechanic" : normalized;
+    }
+
+    private static double CalculateEventJitter(IReadOnlyList<double> times)
+    {
+        if (times.Count <= 1)
+        {
+            return 0;
+        }
+
+        return times.Max() - times.Min();
+    }
+
     private static string SuggestId(EventKey key) => key.Type switch
     {
         "cast_start" or "cast_complete" or "cast_cancel" => $"cast_{key.Id ?? key.Name ?? "x"}".ToLowerInvariant().Replace(" ", "_"),
+        "action_used" => $"action_{key.Id ?? key.Name ?? "x"}".ToLowerInvariant().Replace(" ", "_"),
         "status_gain" or "status_lose" or "status_update" => $"status_{key.Id ?? key.Name ?? "x"}".ToLowerInvariant().Replace(" ", "_"),
         "hp_change" => $"hp_{key.Source ?? "actor"}",
+        "object_appear" or "object_disappear" => $"object_{key.Id ?? key.Name ?? "x"}".ToLowerInvariant().Replace(" ", "_"),
         _ => key.Type,
     };
 
@@ -1036,11 +1218,581 @@ public sealed class TriggerEditorTab : ITab
                     m.Target = new TargetSpec(new List<string> { key.Target });
                 }
                 break;
+            case "action_used":
+                m.ActionId = key.Id;
+                m.ActionName = key.Name;
+                m.Source = key.Source;
+                break;
             case "hp_change":
                 m.Actor = key.Source;
                 break;
+            case "object_appear":
+            case "object_disappear":
+                m.Actor = key.Name ?? key.Source;
+                break;
         }
         return m;
+    }
+
+    private void DrawStrategyPanel()
+    {
+        if (_workingCopy is null)
+        {
+            return;
+        }
+
+        ImGui.TextWrapped("Party-specific strategy profiles are saved in this trigger file. Use them for group-specific spreads, callouts, safe zones, and minimap markers.");
+        ImGui.Spacing();
+
+        if (_workingCopy.StrategyProfiles.Count == 0)
+        {
+            if (ImGui.Button("Add default profile"))
+            {
+                _workingCopy.StrategyProfiles.Add(CreateDefaultStrategyProfile("default", "Default party strategy"));
+                _workingCopy.ActiveStrategyProfileId = "default";
+                _dirty = true;
+            }
+            return;
+        }
+
+        DrawStrategyProfileSelector();
+        var profile = StrategyPlanResolver.SelectActiveProfile(_workingCopy) ?? _workingCopy.StrategyProfiles[0];
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        DrawStrategyProfileEditor(profile);
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        DrawStrategyPositionsEditor(profile);
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        DrawMechanicStrategiesEditor(profile);
+        DrawStrategyAttachPopup();
+    }
+
+    private void DrawStrategyProfileSelector()
+    {
+        if (_workingCopy is null)
+        {
+            return;
+        }
+
+        var profiles = _workingCopy.StrategyProfiles;
+        var labels = profiles
+            .Select(p => string.IsNullOrWhiteSpace(p.Name) ? p.Id : $"{p.Name} ({p.Id})")
+            .ToArray();
+        var selectedIndex = Math.Max(0, profiles.FindIndex(p =>
+            string.Equals(p.Id, _workingCopy.ActiveStrategyProfileId, StringComparison.OrdinalIgnoreCase)));
+
+        ImGui.SetNextItemWidth(360f * ImGuiHelpers.GlobalScale);
+        if (ImGui.Combo("Active strategy profile", ref selectedIndex, labels, labels.Length))
+        {
+            _workingCopy.ActiveStrategyProfileId = profiles[selectedIndex].Id;
+            _dirty = true;
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("Add profile"))
+        {
+            var id = UniqueStrategyId("profile");
+            var profile = CreateDefaultStrategyProfile(id, $"Strategy {profiles.Count + 1}");
+            profiles.Add(profile);
+            _workingCopy.ActiveStrategyProfileId = profile.Id;
+            _dirty = true;
+        }
+    }
+
+    private void DrawStrategyProfileEditor(StrategyProfile profile)
+    {
+        ImGui.TextUnformatted("Profile");
+        var enabled = profile.Enabled;
+        if (ImGui.Checkbox("Enabled##strategy-profile-enabled", ref enabled))
+        {
+            profile.Enabled = enabled;
+            _dirty = true;
+        }
+
+        var id = profile.Id;
+        ImGui.SetNextItemWidth(220f * ImGuiHelpers.GlobalScale);
+        if (ImGui.InputText("Id##strategy-profile-id", ref id, 64))
+        {
+            var oldId = profile.Id;
+            profile.Id = string.IsNullOrWhiteSpace(id) ? oldId : id.Trim();
+            if (_workingCopy?.ActiveStrategyProfileId == oldId)
+            {
+                _workingCopy.ActiveStrategyProfileId = profile.Id;
+            }
+            _dirty = true;
+        }
+
+        var name = profile.Name;
+        ImGui.SetNextItemWidth(320f * ImGuiHelpers.GlobalScale);
+        if (ImGui.InputText("Name##strategy-profile-name", ref name, 128))
+        {
+            profile.Name = name;
+            _dirty = true;
+        }
+
+        var radius = (float)(profile.ArenaRadius ?? 20.0);
+        ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
+        if (ImGui.InputFloat("Arena radius##strategy-arena-radius", ref radius, 0.5f, 1.0f, "%.1f"))
+        {
+            profile.ArenaRadius = radius <= 0 ? null : radius;
+            _dirty = true;
+        }
+
+        var description = profile.Description ?? string.Empty;
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.InputTextMultiline("Description##strategy-description", ref description, 1024,
+                new Vector2(-1, 60f * ImGuiHelpers.GlobalScale)))
+        {
+            profile.Description = string.IsNullOrWhiteSpace(description) ? null : description;
+            _dirty = true;
+        }
+    }
+
+    private void DrawStrategyPositionsEditor(StrategyProfile profile)
+    {
+        ImGui.TextUnformatted("Spread positions");
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Add position"))
+        {
+            profile.SpreadPositions.Add(new StrategyPosition
+            {
+                Slot = $"P{profile.SpreadPositions.Count + 1}",
+                Label = $"P{profile.SpreadPositions.Count + 1}",
+                Color = "#F472B6",
+            });
+            _dirty = true;
+        }
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Fill 8-way missing"))
+        {
+            foreach (var pos in CreateEightWaySpreadPositions())
+            {
+                if (profile.SpreadPositions.Any(p => string.Equals(p.Slot, pos.Slot, StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+                profile.SpreadPositions.Add(pos);
+            }
+            _dirty = true;
+        }
+
+        if (!ImGui.BeginTable("##strategy-positions-table", 9,
+                ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.Resizable))
+        {
+            return;
+        }
+
+        ImGui.TableSetupColumn("Slot", ImGuiTableColumnFlags.WidthFixed, 56f * ImGuiHelpers.GlobalScale);
+        ImGui.TableSetupColumn("Label", ImGuiTableColumnFlags.WidthFixed, 70f * ImGuiHelpers.GlobalScale);
+        ImGui.TableSetupColumn("Role", ImGuiTableColumnFlags.WidthFixed, 82f * ImGuiHelpers.GlobalScale);
+        ImGui.TableSetupColumn("Job", ImGuiTableColumnFlags.WidthFixed, 56f * ImGuiHelpers.GlobalScale);
+        ImGui.TableSetupColumn("X", ImGuiTableColumnFlags.WidthFixed, 70f * ImGuiHelpers.GlobalScale);
+        ImGui.TableSetupColumn("Z", ImGuiTableColumnFlags.WidthFixed, 70f * ImGuiHelpers.GlobalScale);
+        ImGui.TableSetupColumn("Color", ImGuiTableColumnFlags.WidthFixed, 88f * ImGuiHelpers.GlobalScale);
+        ImGui.TableSetupColumn("Note", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed, 68f * ImGuiHelpers.GlobalScale);
+        ImGui.TableHeadersRow();
+
+        for (var i = 0; i < profile.SpreadPositions.Count; i++)
+        {
+            var pos = profile.SpreadPositions[i];
+            ImGui.PushID($"strategy-pos-{i}");
+            ImGui.TableNextRow();
+
+            ImGui.TableNextColumn();
+            var slot = pos.Slot;
+            ImGui.SetNextItemWidth(-1);
+            if (ImGui.InputText("##slot", ref slot, 32))
+            {
+                pos.Slot = slot;
+                _dirty = true;
+            }
+
+            ImGui.TableNextColumn();
+            var label = pos.Label ?? string.Empty;
+            ImGui.SetNextItemWidth(-1);
+            if (ImGui.InputText("##label", ref label, 32))
+            {
+                pos.Label = string.IsNullOrWhiteSpace(label) ? null : label;
+                _dirty = true;
+            }
+
+            ImGui.TableNextColumn();
+            var role = pos.Role ?? string.Empty;
+            ImGui.SetNextItemWidth(-1);
+            if (ImGui.InputText("##role", ref role, 32))
+            {
+                pos.Role = string.IsNullOrWhiteSpace(role) ? null : role;
+                _dirty = true;
+            }
+
+            ImGui.TableNextColumn();
+            var job = pos.Job ?? string.Empty;
+            ImGui.SetNextItemWidth(-1);
+            if (ImGui.InputText("##job", ref job, 16))
+            {
+                pos.Job = string.IsNullOrWhiteSpace(job) ? null : job;
+                _dirty = true;
+            }
+
+            ImGui.TableNextColumn();
+            var x = (float)pos.X;
+            ImGui.SetNextItemWidth(-1);
+            if (ImGui.InputFloat("##x", ref x, 0.5f, 1f, "%.1f"))
+            {
+                pos.X = x;
+                _dirty = true;
+            }
+
+            ImGui.TableNextColumn();
+            var z = (float)pos.Z;
+            ImGui.SetNextItemWidth(-1);
+            if (ImGui.InputFloat("##z", ref z, 0.5f, 1f, "%.1f"))
+            {
+                pos.Z = z;
+                _dirty = true;
+            }
+
+            ImGui.TableNextColumn();
+            var color = pos.Color ?? string.Empty;
+            ImGui.SetNextItemWidth(-1);
+            if (ImGui.InputText("##color", ref color, 16))
+            {
+                pos.Color = string.IsNullOrWhiteSpace(color) ? null : color;
+                _dirty = true;
+            }
+
+            ImGui.TableNextColumn();
+            var note = pos.Note ?? string.Empty;
+            ImGui.SetNextItemWidth(-1);
+            if (ImGui.InputText("##note", ref note, 128))
+            {
+                pos.Note = string.IsNullOrWhiteSpace(note) ? null : note;
+                _dirty = true;
+            }
+
+            ImGui.TableNextColumn();
+            if (ImGui.SmallButton("Delete"))
+            {
+                profile.SpreadPositions.RemoveAt(i);
+                _dirty = true;
+                ImGui.PopID();
+                break;
+            }
+
+            ImGui.PopID();
+        }
+
+        ImGui.EndTable();
+    }
+
+    private void DrawMechanicStrategiesEditor(StrategyProfile profile)
+    {
+        ImGui.TextUnformatted("Mechanics");
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Add mechanic"))
+        {
+            var id = UniqueMechanicId(profile, "mechanic");
+            profile.Mechanics.Add(new MechanicStrategy
+            {
+                Id = id,
+                Label = $"Mechanic {profile.Mechanics.Count + 1}",
+                Time = 0,
+                AdvanceWarningSec = 5,
+                Gimmick = "scatter",
+                Color = "#F472B6",
+            });
+            _dirty = true;
+        }
+
+        if (profile.Mechanics.Count == 0)
+        {
+            ImGui.TextDisabled("Add mechanics here when your party uses custom spreads, stacks, bait order, or safe calls.");
+            return;
+        }
+
+        for (var i = 0; i < profile.Mechanics.Count; i++)
+        {
+            var mechanic = profile.Mechanics[i];
+            ImGui.PushID($"strategy-mechanic-{i}");
+            var title = string.IsNullOrWhiteSpace(mechanic.Label) ? mechanic.Id : mechanic.Label;
+            if (ImGui.CollapsingHeader($"{title}##strategy-mechanic-header", ImGuiTreeNodeFlags.DefaultOpen))
+            {
+                DrawMechanicStrategyEditor(profile, mechanic, i);
+            }
+            ImGui.PopID();
+        }
+    }
+
+    private void DrawMechanicStrategyEditor(StrategyProfile profile, MechanicStrategy mechanic, int index)
+    {
+        var enabled = mechanic.Enabled;
+        if (ImGui.Checkbox("Enabled##mechanic-enabled", ref enabled))
+        {
+            mechanic.Enabled = enabled;
+            _dirty = true;
+        }
+
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Delete mechanic"))
+        {
+            profile.Mechanics.RemoveAt(index);
+            _dirty = true;
+            return;
+        }
+
+        var id = mechanic.Id;
+        ImGui.SetNextItemWidth(220f * ImGuiHelpers.GlobalScale);
+        if (ImGui.InputText("Id##mechanic-id", ref id, 64))
+        {
+            mechanic.Id = string.IsNullOrWhiteSpace(id) ? mechanic.Id : id.Trim();
+            _dirty = true;
+        }
+
+        var label = mechanic.Label;
+        ImGui.SetNextItemWidth(320f * ImGuiHelpers.GlobalScale);
+        if (ImGui.InputText("Label##mechanic-label", ref label, 128))
+        {
+            mechanic.Label = label;
+            _dirty = true;
+        }
+
+        var time = (float)(mechanic.Time ?? 0);
+        ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
+        if (ImGui.InputFloat("Time (s)##mechanic-time", ref time, 0.5f, 1f, "%.1f"))
+        {
+            mechanic.Time = time <= 0 ? null : time;
+            _dirty = true;
+        }
+
+        ImGui.SameLine();
+        var duration = (float)(mechanic.Duration ?? 0);
+        ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
+        if (ImGui.InputFloat("Duration##mechanic-duration", ref duration, 0.5f, 1f, "%.1f"))
+        {
+            mechanic.Duration = duration <= 0 ? null : duration;
+            _dirty = true;
+        }
+
+        ImGui.SameLine();
+        var warn = (float)(mechanic.AdvanceWarningSec ?? 0);
+        ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
+        if (ImGui.InputFloat("Warn##mechanic-warn", ref warn, 0.5f, 1f, "%.1f"))
+        {
+            mechanic.AdvanceWarningSec = warn <= 0 ? null : warn;
+            _dirty = true;
+        }
+
+        DrawMechanicAttachEditor(profile, mechanic);
+        DrawMechanicEvidence(mechanic);
+
+        var role = mechanic.Role ?? string.Empty;
+        ImGui.SetNextItemWidth(160f * ImGuiHelpers.GlobalScale);
+        if (ImGui.InputText("Role filter##mechanic-role", ref role, 32))
+        {
+            mechanic.Role = string.IsNullOrWhiteSpace(role) ? null : role;
+            _dirty = true;
+        }
+
+        ImGui.SameLine();
+        var job = mechanic.Job ?? string.Empty;
+        ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
+        if (ImGui.InputText("Job filter##mechanic-job", ref job, 16))
+        {
+            mechanic.Job = string.IsNullOrWhiteSpace(job) ? null : job;
+            _dirty = true;
+        }
+
+        var callout = mechanic.Callout ?? string.Empty;
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.InputText("Callout##mechanic-callout", ref callout, 256))
+        {
+            mechanic.Callout = string.IsNullOrWhiteSpace(callout) ? null : callout;
+            _dirty = true;
+        }
+
+        var warning = mechanic.WarningText ?? string.Empty;
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.InputText("Warning text##mechanic-warning", ref warning, 256))
+        {
+            mechanic.WarningText = string.IsNullOrWhiteSpace(warning) ? null : warning;
+            _dirty = true;
+        }
+
+        var gimmick = mechanic.Gimmick ?? "scatter";
+        var gimmickIndex = Array.IndexOf(ArenaViewGimmicks, gimmick);
+        if (gimmickIndex < 0)
+        {
+            gimmickIndex = 0;
+        }
+        ImGui.SetNextItemWidth(220f * ImGuiHelpers.GlobalScale);
+        if (ImGui.Combo("Minimap gimmick##mechanic-gimmick", ref gimmickIndex, ArenaViewGimmicks, ArenaViewGimmicks.Length))
+        {
+            mechanic.Gimmick = ArenaViewGimmicks[gimmickIndex];
+            _dirty = true;
+        }
+
+        ImGui.SameLine();
+        var color = mechanic.Color ?? string.Empty;
+        ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
+        if (ImGui.InputText("Color##mechanic-color", ref color, 16))
+        {
+            mechanic.Color = string.IsNullOrWhiteSpace(color) ? null : color;
+            _dirty = true;
+        }
+
+        var positions = string.Join(", ", mechanic.Positions);
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.InputText("Positions CSV##mechanic-positions", ref positions, 256))
+        {
+            mechanic.Positions = positions
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            _dirty = true;
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip("Leave empty to use all spread positions, or enter slots like MT,H1,D1.");
+        }
+
+        var safeZoneAction = new ActionDefinition { SafeZone = mechanic.SafeZone };
+        DrawSafeZoneSubEditor(safeZoneAction);
+        mechanic.SafeZone = safeZoneAction.SafeZone;
+    }
+
+    private void DrawMechanicAttachEditor(StrategyProfile profile, MechanicStrategy mechanic)
+    {
+        var attached = mechanic.AttachedTo?.CastName ?? mechanic.AttachedTo?.CastId ?? "(timeline time)";
+        ImGui.TextDisabled($"Attached: {attached}");
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Attach observed cast"))
+        {
+            _attachStrategyProfileId = profile.Id;
+            _attachStrategyMechanicId = mechanic.Id;
+            ImGui.OpenPopup("strategy-attach-popup");
+        }
+        ImGui.SameLine();
+        if (mechanic.AttachedTo is not null && ImGui.SmallButton("Clear attach"))
+        {
+            mechanic.AttachedTo = null;
+            _dirty = true;
+        }
+    }
+
+    private static void DrawMechanicEvidence(MechanicStrategy mechanic)
+    {
+        if (mechanic.ObservedCount is null &&
+            mechanic.Confidence is null &&
+            mechanic.TimeJitterSeconds is null)
+        {
+            return;
+        }
+
+        var confidence = mechanic.Confidence is { } c ? $"{c:P0}" : "-";
+        var seen = mechanic.OccurrenceSeenCount is { } occurrenceSeen
+            ? $"{occurrenceSeen}/{mechanic.ObservedCount ?? occurrenceSeen}"
+            : $"{mechanic.ObservedCount ?? 0}";
+        var jitter = mechanic.TimeJitterSeconds is { } j ? $"{j:0.0}s" : "-";
+        ImGui.TextDisabled($"Learned: {mechanic.SourceEventType ?? "event"} / seen {seen} / confidence {confidence} / jitter {jitter}");
+    }
+
+    private void DrawStrategyAttachPopup()
+    {
+        ImGui.SetNextWindowSize(new Vector2(560f * ImGuiHelpers.GlobalScale, 420f * ImGuiHelpers.GlobalScale));
+        if (!ImGui.BeginPopup("strategy-attach-popup"))
+        {
+            return;
+        }
+
+        if (_workingCopy is null ||
+            string.IsNullOrEmpty(_attachStrategyProfileId) ||
+            string.IsNullOrEmpty(_attachStrategyMechanicId))
+        {
+            ImGui.EndPopup();
+            return;
+        }
+
+        var profile = _workingCopy.StrategyProfiles.FirstOrDefault(p =>
+            string.Equals(p.Id, _attachStrategyProfileId, StringComparison.OrdinalIgnoreCase));
+        var mechanic = profile?.Mechanics.FirstOrDefault(m =>
+            string.Equals(m.Id, _attachStrategyMechanicId, StringComparison.OrdinalIgnoreCase));
+        if (profile is null || mechanic is null)
+        {
+            ImGui.EndPopup();
+            return;
+        }
+
+        ImGui.TextWrapped("Choose an observed cast from recordings. The mechanic will follow that cast timing on future pulls.");
+        ImGui.Spacing();
+
+        var agg = _recordingScanner.Aggregate(_workingZone);
+        var filtered = ApplyEventFilters(agg);
+        if (ImGui.BeginChild("##strategy-attach-list", new Vector2(-1, 320f * ImGuiHelpers.GlobalScale), true))
+        {
+            foreach (var ev in filtered)
+            {
+                if (ev.Key.Type != "cast_start")
+                {
+                    continue;
+                }
+
+                var label = $"[{ev.FirstSeenSeconds:0.0}s]  {ev.Key.Name ?? "?"}  ({ev.Key.Id ?? "-"})  x{ev.Count}";
+                if (ImGui.Selectable(label))
+                {
+                    mechanic.AttachedTo = new MatchCondition
+                    {
+                        CastId = ev.Key.Id,
+                        CastName = ev.Key.Name,
+                    };
+                    mechanic.Time = ev.FirstSeenSeconds;
+                    _dirty = true;
+                    ImGui.CloseCurrentPopup();
+                }
+            }
+        }
+        ImGui.EndChild();
+
+        if (ImGui.Button("Cancel##strategy-attach-cancel"))
+        {
+            ImGui.CloseCurrentPopup();
+        }
+
+        ImGui.EndPopup();
+    }
+
+    private string UniqueStrategyId(string prefix)
+    {
+        if (_workingCopy is null)
+        {
+            return prefix;
+        }
+
+        var index = _workingCopy.StrategyProfiles.Count + 1;
+        string id;
+        do
+        {
+            id = $"{prefix}_{index++}";
+        }
+        while (_workingCopy.StrategyProfiles.Any(p => string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase)));
+        return id;
+    }
+
+    private static string UniqueMechanicId(StrategyProfile profile, string prefix)
+    {
+        var index = profile.Mechanics.Count + 1;
+        string id;
+        do
+        {
+            id = $"{prefix}_{index++}";
+        }
+        while (profile.Mechanics.Any(m => string.Equals(m.Id, id, StringComparison.OrdinalIgnoreCase)));
+        return id;
     }
 
     private void DrawFileSettingsPanel()
@@ -1087,6 +1839,24 @@ public sealed class TriggerEditorTab : ITab
                              "PT 内のプレイヤーキャストは無視。");
         }
 
+        var showAllEnemyCasts = _workingCopy.AutoSettings.ShowAllEnemyCasts;
+        if (ImGui.Checkbox("show_all_enemy_casts（AoE不明の敵キャストもミニマップに表示）", ref showAllEnemyCasts))
+        {
+            _workingCopy.AutoSettings.ShowAllEnemyCasts = showAllEnemyCasts;
+            _dirty = true;
+        }
+
+        var showAutoAttacks = _workingCopy.AutoSettings.ShowAutoAttacks;
+        if (ImGui.Checkbox("show_auto_attacks（AA/即時アクションを表示）", ref showAutoAttacks))
+        {
+            _workingCopy.AutoSettings.ShowAutoAttacks = showAutoAttacks;
+            _dirty = true;
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip("AA は Dalamud 側で action id が観測できた場合だけ表示します。うるさい場合は OFF 推奨です。");
+        }
+
         ImGui.Spacing();
         ImGui.AlignTextToFramePadding();
         ImGui.TextUnformatted("予測アドバンス警告:");
@@ -1094,7 +1864,7 @@ public sealed class TriggerEditorTab : ITab
         var warnEnabled = _workingCopy.AutoSettings.PredictAdvanceWarningSec is > 0;
         if (ImGui.Checkbox("##predict-warn-enable", ref warnEnabled))
         {
-            _workingCopy.AutoSettings.PredictAdvanceWarningSec = warnEnabled ? 10.0 : null;
+            _workingCopy.AutoSettings.PredictAdvanceWarningSec = warnEnabled ? AutoSettings.DefaultPredictAdvanceWarningSec : null;
             _dirty = true;
         }
         if (ImGui.IsItemHovered())
@@ -1105,7 +1875,7 @@ public sealed class TriggerEditorTab : ITab
         if (warnEnabled)
         {
             ImGui.SameLine();
-            var warnSec = (float)(_workingCopy.AutoSettings.PredictAdvanceWarningSec ?? 5.0);
+            var warnSec = (float)(_workingCopy.AutoSettings.PredictAdvanceWarningSec ?? AutoSettings.DefaultPredictAdvanceWarningSec);
             ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
             if (ImGui.InputFloat("秒前##predict-warn-sec", ref warnSec))
             {

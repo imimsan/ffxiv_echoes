@@ -76,7 +76,7 @@ public sealed class ContentListTab : ITab
             ImGui.TableSetupColumn("ゾーン", ImGuiTableColumnFlags.WidthStretch, 3.0f);
             ImGui.TableSetupColumn("トリガー数", ImGuiTableColumnFlags.WidthFixed, 90f * ImGuiHelpers.GlobalScale);
             ImGui.TableSetupColumn("録画", ImGuiTableColumnFlags.WidthFixed, 80f * ImGuiHelpers.GlobalScale);
-            ImGui.TableSetupColumn("操作", ImGuiTableColumnFlags.WidthFixed, 200f * ImGuiHelpers.GlobalScale);
+            ImGui.TableSetupColumn("操作", ImGuiTableColumnFlags.WidthFixed, 220f * ImGuiHelpers.GlobalScale);
             ImGui.TableHeadersRow();
 
             foreach (var zone in allZones.OrderBy(z => z, StringComparer.OrdinalIgnoreCase))
@@ -95,7 +95,7 @@ public sealed class ContentListTab : ITab
                 }
                 else
                 {
-                    ImGui.TextDisabled("—");
+                    ImGui.TextDisabled("未作成");
                 }
 
                 ImGui.TableNextColumn();
@@ -110,9 +110,13 @@ public sealed class ContentListTab : ITab
                 }
 
                 ImGui.TableNextColumn();
-                if (ImGui.Button($"編集##{zone}"))
+                var editButtonLabel = triggerFile is null && recordings.Count > 0
+                    ? $"録画から作る##{zone}"
+                    : $"編集##{zone}";
+                if (ImGui.Button(editButtonLabel))
                 {
                     _tabContext.SelectedZone = zone;
+                    _tabContext.PendingCreateFromRecording = triggerFile is null && recordings.Count > 0;
                     _tabContext.PendingFocusTab = "trigger-editor";
                 }
                 ImGui.SameLine();

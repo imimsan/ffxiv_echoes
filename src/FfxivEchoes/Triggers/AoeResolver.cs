@@ -53,12 +53,10 @@ public static class AoeResolver
     {
         return castType switch
         {
-            // ターゲット中心円：基本は内側赤＝中央 AoE （inner_circle）
-            // ただし範囲が大きく（≧15m）アリーナ全域を覆うなら外周回避（中央安置）扱い
-            2 => effectRange >= 15f ? "outer_ring" : "inner_circle",
-            // キャスター中心 PB AoE：同様に大きさで切替
-            5 => effectRange >= 15f ? "outer_ring" : "inner_circle",
-            // Donut（中央安置 / 外周危険）→ 視覚的には outer_ring（外周赤・中央緑）
+            // ターゲット/キャスター中心円: 中央が危険で外周が安置。
+            2 => "inner_circle",
+            5 => "inner_circle",
+            // Donut: 外周が危険で内側が安置。
             6 => "outer_ring",
             // Cone / Line：cone gimmick（demo の扇形コーンと同じ）
             3 => "cone",

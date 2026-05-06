@@ -56,6 +56,7 @@ public sealed class DebugChatEcho : IDisposable
             CastStartedEvent x => $"キャスト開始 {x.SourceName} → {x.CastActionName} ({x.CastTime:0.0}s)",
             CastCompletedEvent x => $"キャスト完了 {x.SourceName} → {x.CastActionName}",
             CastCanceledEvent x => $"キャスト中断 {x.SourceName} → {x.CastActionName}",
+            ActionUsedEvent x => $"Action {x.SourceName} -> {x.ActionName}" + (x.IsAutoAttack ? " (AA)" : string.Empty),
             StatusGainedEvent x => $"Status+ {x.TargetName} ← {x.StatusName}"
                 + (x.Stacks > 0 ? $" x{x.Stacks}" : string.Empty)
                 + (x.RemainingTime > 0 ? $" ({x.RemainingTime:0.0}s)" : string.Empty),

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility;
@@ -38,6 +39,7 @@ public sealed class LiveTimelineWindow : Window, IDisposable
     private readonly IDisposable _eventSub;
     private readonly List<HistoryEntry> _history = new();
     private readonly List<PredictedCast> _predictions = new();
+    private readonly List<TimelineNoteRender> _timelineNotes = new();
     private readonly object _gate = new();
 
     private string _currentZone = "Unknown";
@@ -191,36 +193,34 @@ public sealed class LiveTimelineWindow : Window, IDisposable
                 draw.AddText(new Vector2(x + 4f, pos.Y + 10f), 0xFF4ADE80, sp.Id);
             }
 
-            // タイムラインノート（軽減/LB 等のメモ）。AttachedTo 解決のため録画 agg を取得。
-            Recording.AggregatedEvents? aggForNotes = null;
-            try { aggForNotes = _recordings.Aggregate(_currentZone); } catch { }
-
-            foreach (var note in triggerFile.Notes)
+            // Timeline notes are resolved when predictions are reloaded.
+            TimelineNoteRender[] timelineNotes;
+            lock (_gate)
             {
-                var noteTime = TimelineNoteResolver.ResolveTime(note, aggForNotes);
-                if (noteTime is null) continue;
-                // AttachedTo / Time に同期オフセットを加算
-                var t = noteTime.Value + _syncOffset.CurrentOffsetSec;
+                timelineNotes = _timelineNotes.ToArray();
+            }
+
+            foreach (var note in timelineNotes)
+            {
+                var t = note.RelativeSec + _syncOffset.CurrentOffsetSec;
                 if (t < minSec || t > maxSec)
                 {
                     continue;
                 }
-                var noteColor = ParseColor(note.Color, 0xFFFCD34D);
+
                 var x = pos.X + (float)((t - minSec) / span) * width;
                 draw.AddLine(new Vector2(x, pos.Y + height / 2f), new Vector2(x, pos.Y + height - 14f),
-                    noteColor, 2f);
+                    note.Color, 2f);
 
                 if (note.Duration is { } dur && dur > 0)
                 {
                     var x2 = pos.X + (float)((t + dur - minSec) / span) * width;
                     var barTop = pos.Y + height - 32f;
-                    var barColor = (noteColor & 0x00FFFFFF) | 0x40000000;
+                    var barColor = (note.Color & 0x00FFFFFF) | 0x40000000;
                     draw.AddRectFilled(new Vector2(x, barTop), new Vector2(x2, barTop + 6f), barColor);
                 }
 
-                var label = string.IsNullOrEmpty(note.Label) ? note.Id : note.Label;
-                if (note.AttachedTo is not null) label = "📌 " + label; // 紐付けノートは目印
-                draw.AddText(new Vector2(x + 4f, pos.Y + height / 2f), noteColor, label);
+                draw.AddText(new Vector2(x + 4f, pos.Y + height / 2f), note.Color, note.Label);
             }
         }
 
@@ -247,7 +247,9 @@ public sealed class LiveTimelineWindow : Window, IDisposable
             var x = pos.X + (float)((effectiveSec - minSec) / span) * width;
 
             var distance = MathF.Max(0, (float)effectiveSec - (float)nowSec);
-            var alpha = distance < 5.0f ? 0xE0u : (distance < 15.0f ? 0xA0u : 0x70u);
+            var distanceAlpha = distance < 5.0f ? 0xE0u : (distance < 15.0f ? 0xA0u : 0x70u);
+            var confidenceAlpha = (uint)Math.Clamp((int)MathF.Round((float)p.Confidence * 0xE0), 0x50, 0xE0);
+            var alpha = Math.Min(distanceAlpha, confidenceAlpha);
             var fillColor = (alpha << 24) | 0x00A5FA60u;
             var strokeColor = (alpha << 24) | 0x00FFFA60u;
 
@@ -261,7 +263,7 @@ public sealed class LiveTimelineWindow : Window, IDisposable
             draw.AddCircleFilled(new Vector2(x, y + 6f), 3.5f, fillColor, 12);
 
             // ラベル（背景付きピル）
-            var label = $"{Truncate(p.Label, MaxLabelChars)} {distance:0.0}s";
+            var label = $"{Truncate(p.Label, MaxLabelChars)} {distance:0.0}s {FormatConfidence(p)}";
             DrawPillLabel(draw, new Vector2(x + 6f, y), label, fillColor, strokeColor, alpha);
         }
 
@@ -307,32 +309,100 @@ public sealed class LiveTimelineWindow : Window, IDisposable
 
     private readonly record struct HistoryEntry(double RelativeSec, string Label, uint Color);
 
-    private readonly record struct PredictedCast(double RelativeSec, string Label, int ObservedCount);
+    private readonly record struct PredictedCast(
+        string EventType,
+        double RelativeSec,
+        string Label,
+        int ObservedCount,
+        double Confidence,
+        double TimeJitterSeconds);
+
+    private readonly record struct TimelineNoteRender(
+        double RelativeSec,
+        double? Duration,
+        string Label,
+        uint Color);
 
     private void ReloadPredictions()
     {
+        AggregatedEvents? agg = null;
+        try
+        {
+            agg = _recordings.Aggregate(_currentZone);
+        }
+        catch
+        {
+            // Recording files can be mid-write while combat starts.
+        }
+
+        var partyMembers = new HashSet<string>(
+            _recordings.ListPartyMembers(_currentZone),
+            StringComparer.OrdinalIgnoreCase);
+        var predictions = agg is null
+            ? Array.Empty<RecordingTimelinePrediction>()
+            : RecordingPredictionPlanner.BuildTimelinePredictions(agg, partyMembers: partyMembers).ToArray();
+        var notes = BuildTimelineNoteRenders(_store.GetByZone(_currentZone), agg);
+
         lock (_gate)
         {
             _predictions.Clear();
-            try
+            foreach (var prediction in predictions)
             {
-                var agg = _recordings.Aggregate(_currentZone);
-                if (agg.Events.Count == 0) return;
+                _predictions.Add(new PredictedCast(
+                    prediction.EventType,
+                    prediction.RelativeSeconds,
+                    prediction.Label,
+                    prediction.ObservedCount,
+                    prediction.Confidence,
+                    prediction.TimeJitterSeconds));
+            }
 
-                foreach (var ev in agg.Events)
-                {
-                    if (ev.Key.Type != "cast_start") continue;
-                    var label = !string.IsNullOrEmpty(ev.Key.Name)
-                        ? ev.Key.Name
-                        : (!string.IsNullOrEmpty(ev.Key.Id) ? ev.Key.Id : "?");
-                    _predictions.Add(new PredictedCast(ev.FirstSeenSeconds, label!, ev.Count));
-                }
-            }
-            catch
-            {
-                // 読み込み失敗時は predictions は空のまま
-            }
+            _timelineNotes.Clear();
+            _timelineNotes.AddRange(notes);
         }
+    }
+
+    private static List<TimelineNoteRender> BuildTimelineNoteRenders(TriggerFile? file, AggregatedEvents? agg)
+    {
+        var list = new List<TimelineNoteRender>();
+        if (file is null)
+        {
+            return list;
+        }
+
+        foreach (var note in file.Notes.Concat(StrategyPlanResolver.BuildTimelineNotes(file)))
+        {
+            var noteTime = TimelineNoteResolver.ResolveTime(note, agg);
+            if (noteTime is null)
+            {
+                continue;
+            }
+
+            var label = string.IsNullOrEmpty(note.Label) ? note.Id : note.Label;
+            if (note.AttachedTo is not null)
+            {
+                label = "東 " + label;
+            }
+
+            list.Add(new TimelineNoteRender(
+                RelativeSec: noteTime.Value,
+                Duration: note.Duration,
+                Label: label,
+                Color: ParseColor(note.Color, 0xFFFCD34D)));
+        }
+
+        return list;
+    }
+
+    private static string FormatConfidence(PredictedCast prediction)
+    {
+        var percent = Math.Clamp((int)Math.Round(prediction.Confidence * 100.0), 0, 100);
+        if (prediction.TimeJitterSeconds >= 0.5)
+        {
+            return $"{percent}% +/-{prediction.TimeJitterSeconds:0.0}s";
+        }
+
+        return $"{percent}%";
     }
 
     private static void DrawDashedVerticalLine(ImDrawListPtr draw, Vector2 top, float bottomY, uint color, float thickness, float dashPx)

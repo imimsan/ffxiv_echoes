@@ -40,6 +40,14 @@ public static class EventSerializer
                 writer.WriteString("name", member.Name);
                 writer.WriteString("job", member.Job);
                 writer.WriteString("role", member.Role);
+                if (member.ObjectId is { } objectId)
+                {
+                    writer.WriteNumber("object_id", objectId);
+                }
+                if (member.IsSelf)
+                {
+                    writer.WriteBoolean("is_self", true);
+                }
                 if (!string.IsNullOrEmpty(member.SubRole))
                 {
                     writer.WriteString("subrole", member.SubRole);
@@ -112,6 +120,23 @@ public static class EventSerializer
                     writer.WriteString("cast_name", x.CastActionName);
                     break;
 
+                case ActionUsedEvent x:
+                    writer.WriteString("type", "action_used");
+                    writer.WriteString("source", x.SourceName);
+                    writer.WriteNumber("source_id", x.SourceId);
+                    writer.WriteString("action_id", FormatHexId(x.ActionId));
+                    writer.WriteString("action_name", x.ActionName);
+                    writer.WriteBoolean("auto_attack", x.IsAutoAttack);
+                    if (x.TargetId.HasValue)
+                    {
+                        writer.WriteNumber("target_id", x.TargetId.Value);
+                    }
+                    else
+                    {
+                        writer.WriteNull("target");
+                    }
+                    break;
+
                 case StatusGainedEvent x:
                     writer.WriteString("type", "status_gain");
                     if (x.SourceId != 0)
@@ -148,6 +173,24 @@ public static class EventSerializer
                     writer.WriteNumber("hp_pct", Math.Round(x.HpPct, 2));
                     writer.WriteNumber("hp", x.CurrentHp);
                     writer.WriteNumber("hp_max", x.MaxHp);
+                    break;
+
+                case ObjectAppearedEvent x:
+                    writer.WriteString("type", "object_appear");
+                    writer.WriteString("object_name", x.ObjectName);
+                    writer.WriteNumber("object_id", x.ObjectId);
+                    writer.WriteNumber("data_id", x.DataId);
+                    writer.WriteStartObject("position");
+                    writer.WriteNumber("x", Math.Round(x.Position.X, 3));
+                    writer.WriteNumber("y", Math.Round(x.Position.Y, 3));
+                    writer.WriteNumber("z", Math.Round(x.Position.Z, 3));
+                    writer.WriteEndObject();
+                    break;
+
+                case ObjectDisappearedEvent x:
+                    writer.WriteString("type", "object_disappear");
+                    writer.WriteString("object_name", x.ObjectName);
+                    writer.WriteNumber("object_id", x.ObjectId);
                     break;
 
                 default:
