@@ -252,12 +252,13 @@ public sealed class Plugin : IDalamudPlugin
 
         // 自動 AoE テレグラフ（敵キャストを Lumina Action 形状で自動描画）
         _autoTelegraph = new AutoTelegraphService(
-            _eventBus, DataManager, ObjectTable, _worldOverlayWindow, _triggerStore, Log);
+            _eventBus, DataManager, ObjectTable, _worldOverlayWindow, _minimapWindow,
+            _triggerStore, Log);
 
-        // 予測アドバンス警告：TTS + 「予測中」薄いオレンジマーカー
+        // 予測アドバンス警告：TTS + 「予測中」ミニマップ + フィールド円
         _predictedCastReminder = new PredictedCastReminderService(
             Framework, _eventBus, _triggerStore, _combatClock, _recordingScanner, _syncOffset,
-            DataManager, ObjectTable, _worldOverlayWindow, Log);
+            DataManager, ObjectTable, _worldOverlayWindow, _minimapWindow, Log);
 
         // M7 + F8: アクションディスパッチャ
         _ttsHandler = new TtsHandler(Configuration, Log);

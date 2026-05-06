@@ -26,6 +26,7 @@ public sealed class AutoTelegraphService : IDisposable
     private readonly IDataManager _dataManager;
     private readonly IObjectTable _objectTable;
     private readonly WorldOverlayWindow _worldOverlay;
+    private readonly MinimapWindow _minimap;
     private readonly TriggerStore _store;
     private readonly IPluginLog _log;
 
@@ -39,12 +40,14 @@ public sealed class AutoTelegraphService : IDisposable
         IDataManager dataManager,
         IObjectTable objectTable,
         WorldOverlayWindow worldOverlay,
+        MinimapWindow minimap,
         TriggerStore store,
         IPluginLog log)
     {
         _dataManager = dataManager;
         _objectTable = objectTable;
         _worldOverlay = worldOverlay;
+        _minimap = minimap;
         _store = store;
         _log = log;
 
@@ -113,6 +116,18 @@ public sealed class AutoTelegraphService : IDisposable
 
         _log.Information("[FfxivEchoes] AutoTelegraph: 描画 cast={Name} radius={R}m shape={S} pos=({X:0.0},{Z:0.0})",
             ev.CastActionName, radius, shape, worldPos.Value.X, worldPos.Value.Z);
+
+        // 1. ミニマップ（俯瞰アリーナ図）に確定ギミック表示
+        var gimmick = AoeResolver.GuessGimmick(aoe.CastType, aoe.Radius);
+        _minimap.AddArenaView(
+            gimmick: gimmick,
+            callout: $"確定：{ev.CastActionName}",
+            durationSec: ev.CastTime + 0.5,
+            direction: gimmick == "cone" ? "N" : null,
+            fanDeg: gimmick == "cone" ? 90 : null,
+            arenaRadius: 20.0);
+
+        // 2. フィールドにも実体半径の円マーカー（show_auto_telegraphs が ON なら）
         _worldOverlay.AddMarker(
             worldPos: worldPos.Value,
             shape: shape,

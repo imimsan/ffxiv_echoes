@@ -45,6 +45,28 @@ public static class AoeResolver
         }
     }
 
+    /// <summary>
+    /// CastType と EffectRange から arena_view 用の gimmick タイプを推測。
+    /// アリーナ図に表示するための形状。
+    /// </summary>
+    public static string GuessGimmick(int castType, float effectRange)
+    {
+        return castType switch
+        {
+            // ターゲット中心円：基本は内側赤＝中央 AoE （inner_circle）
+            // ただし範囲が大きく（≧15m）アリーナ全域を覆うなら外周回避（中央安置）扱い
+            2 => effectRange >= 15f ? "outer_ring" : "inner_circle",
+            // キャスター中心 PB AoE：同様に大きさで切替
+            5 => effectRange >= 15f ? "outer_ring" : "inner_circle",
+            // Donut（中央安置 / 外周危険）→ 視覚的には outer_ring（外周赤・中央緑）
+            6 => "outer_ring",
+            // Cone / Line：cone gimmick（demo の扇形コーンと同じ）
+            3 => "cone",
+            4 => "cone",
+            _ => "inner_circle",
+        };
+    }
+
     public static bool TryParseCastId(string spec, out uint id)
     {
         id = 0;
