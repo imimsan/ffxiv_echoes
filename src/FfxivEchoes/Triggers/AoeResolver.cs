@@ -75,8 +75,8 @@ public static class AoeResolver
         // 完全網羅は不可能だが、よく使われるテレグラフをカバーする。
         return omenId switch
         {
-            // Donut（中央安置 / 外周危険）系
-            53 or 60 or 61 => "outer_ring",
+            // Donut（中央安置 / 外周危険）系：複数バリエーションある
+            53 or 60 or 61 or 62 or 63 or 64 => "outer_ring",
             // 通常円（中央危険 / 外周安置）系
             1 or 2 or 3 or 4 or 5 => "inner_circle",
             // 標準コーン
@@ -86,6 +86,35 @@ public static class AoeResolver
             // 半円（half-plane 的）
             40 or 41 or 42 => "half_plane",
             _ => null, // 未知は呼び出し側で判定
+        };
+    }
+
+    /// <summary>
+    /// CastType / Omen ID から AoE 効果が「ドーナツ形状」かどうかを判定。
+    /// Donut は内側安置・外周危険の特殊形状で、通常円とは描画が違う。
+    /// </summary>
+    public static bool IsDonutShape(int castType, uint omenId)
+    {
+        // CastType 6, 7, 10 は明確に Donut（公式ゲームデータ準拠）
+        if (castType == 6 || castType == 7 || castType == 10) return true;
+        // Omen ID にも Donut バリエーションがある
+        if (omenId is 53 or 60 or 61 or 62 or 63 or 64) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// Donut の内径比（外径に対する比率）。Omen ID で違うバリエーションがある。
+    /// 不明なら 0.30（標準的な値）。
+    /// </summary>
+    public static float DonutInnerRatio(uint omenId)
+    {
+        return omenId switch
+        {
+            53 => 0.30f,    // 標準 Donut（中央 30% 安置）
+            60 or 61 => 0.40f, // 広めのリング
+            62 or 63 => 0.20f, // 狭い中央安置
+            64 => 0.50f,    // 非常に狭いリング
+            _ => 0.30f,     // 不明：標準値
         };
     }
 

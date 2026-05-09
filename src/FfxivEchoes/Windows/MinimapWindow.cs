@@ -9,6 +9,7 @@ using Dalamud.Interface.Utility;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using FfxivEchoes.SafeZone;
+using FfxivEchoes.Triggers;
 using FfxivEchoes.Triggers.Models;
 
 namespace FfxivEchoes.Windows;
@@ -391,6 +392,18 @@ public sealed class MinimapWindow : Window, IDisposable
         var fill = (ColDanger & 0x00FFFFFFu) | 0x55000000u;
         var stroke = (ColDangerLine & 0x00FFFFFFu) | 0xFF000000u;
 
+        // Omen ID から Donut 形状か事前判定（CastType=2 でも Omen が Donut なら donut 描画）
+        // OmenId は ArenaItem に含まれていないため、CastType 6 のみを Donut として扱う。
+        // 将来 OmenId を ArenaItem に通せばここで autoDetect を強化できる。
+        var isDonut = AoeResolver.IsDonutShape(castType, 0);
+
+        if (isDonut)
+        {
+            var innerR = pixelRadius * AoeResolver.DonutInnerRatio(0);
+            DrawDonutShape(draw, origin, innerR, pixelRadius, fill, stroke);
+            return;
+        }
+
         switch (castType)
         {
             case 2: // Target-centered circle
@@ -403,7 +416,7 @@ public sealed class MinimapWindow : Window, IDisposable
             }
             case 6: // Donut（内側安置）
             {
-                var innerR = pixelRadius * 0.35f;
+                var innerR = pixelRadius * 0.30f;
                 const int segments = 48;
                 for (var i = 0; i < segments; i++)
                 {
@@ -502,6 +515,35 @@ public sealed class MinimapWindow : Window, IDisposable
                 bossCenter.Y + MathF.Sin(angle) * bossR * 1.9f);
             draw.AddLine(bossCenter, nose, ColText, 2.0f);
         }
+    }
+
+    /// <summary>
+    /// ドーナツ形状を quad で塗り潰す（外径と内径の間が危険、内径より内が安置）。
+    /// 内径 / 外径の比は呼び出し側で渡す（Omen ID から決定）。
+    /// </summary>
+    private static void DrawDonutShape(ImDrawListPtr draw, Vector2 origin,
+        float innerR, float outerR, uint fillColor, uint strokeColor)
+    {
+        const int Segments = 64;
+        for (var i = 0; i < Segments; i++)
+        {
+            var a1 = (float)(i * Math.PI * 2 / Segments);
+            var a2 = (float)((i + 1) * Math.PI * 2 / Segments);
+            var pOuter1 = new Vector2(origin.X + MathF.Cos(a1) * outerR,
+                                      origin.Y + MathF.Sin(a1) * outerR);
+            var pOuter2 = new Vector2(origin.X + MathF.Cos(a2) * outerR,
+                                      origin.Y + MathF.Sin(a2) * outerR);
+            var pInner1 = new Vector2(origin.X + MathF.Cos(a1) * innerR,
+                                      origin.Y + MathF.Sin(a1) * innerR);
+            var pInner2 = new Vector2(origin.X + MathF.Cos(a2) * innerR,
+                                      origin.Y + MathF.Sin(a2) * innerR);
+            draw.AddQuadFilled(pOuter1, pOuter2, pInner2, pInner1, fillColor);
+        }
+        draw.AddCircle(origin, outerR, strokeColor, Segments, 1.5f);
+        draw.AddCircle(origin, innerR, strokeColor, Segments, 1.5f);
+        // 中央の安置を緑薄塗りで示す
+        var safeFill = (ColSafe & 0x00FFFFFFu) | 0x40000000u;
+        draw.AddCircleFilled(origin, innerR * 0.95f, safeFill, 32);
     }
 
     private static void DrawHalfPlane(ImDrawListPtr draw, Vector2 center, float r, float angle)
