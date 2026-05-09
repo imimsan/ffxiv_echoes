@@ -194,10 +194,12 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
 
         var list = new List<UpcomingItem>();
         var offset = _syncOffset.CurrentOffsetSec;
+        // 発動後も 3 秒は表示し続ける（「すぐ消えると困る」要望）
+        const double KeepAfterFireSec = 3.0;
         foreach (var template in templates)
         {
             var t = template.RelativeTime + offset;
-            if (t < nowRel - 1.0) continue;
+            if (t < nowRel - KeepAfterFireSec) continue;
             list.Add(new UpcomingItem(
                 Time: t,
                 Icon: template.Icon,

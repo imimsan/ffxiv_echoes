@@ -380,6 +380,16 @@ public sealed class MinimapWindow : Window, IDisposable
         if (item.AoeRadius is not { } radiusM || radiusM <= 0) return;
         if (item.AoeCastType is not { } castType) return;
 
+        // 全体攻撃判定：AoE 半径が arena 半径の 90% を超える円形 AoE は
+        // 「アリーナ全体が危険」を意味し、ミニマップで形を描いても意味がない
+        // （画面が真っ赤になるだけ）。callout だけ残して形状描画はスキップ。
+        if (item.ArenaRadius > 0 &&
+            radiusM >= item.ArenaRadius * 0.9f &&
+            (castType == 2 || castType == 5))
+        {
+            return;
+        }
+
         var origin = item.SourceWorld is { } sw &&
                      TryProjectWorldToMap(mapCenter, mapR, item, sw, out var sp)
             ? sp

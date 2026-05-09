@@ -315,7 +315,8 @@ public sealed class PredictedCastReminderService : IDisposable
         _minimap.AddArenaView(
             gimmick: visualCall.Gimmick,
             callout: $"次: {safeCall.Callout}",
-            durationSec: p.AdvanceWarningSec + 5.0,
+            // 予測通知 → 実発動 → さらに発動後 3 秒残す（「すぐ消えると困る」）
+            durationSec: p.AdvanceWarningSec + 5.0 + 3.0,
             direction: ArenaProjection.UsesFacing(visualCall.Gimmick) ? "N" : null,
             fanDeg: visualCall.FanDeg,
             arenaRadius: 20.0,

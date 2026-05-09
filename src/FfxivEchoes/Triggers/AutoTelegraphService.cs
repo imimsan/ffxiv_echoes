@@ -155,7 +155,8 @@ public sealed class AutoTelegraphService : IDisposable
             _minimap.AddArenaView(
                 gimmick: namedSafeCall.Gimmick,
                 callout: namedSafeCall.Callout,
-                durationSec: ev.CastTime + 0.5,
+                // キャスト時間 + 発動後 3 秒残す（「すぐ消えると困る」）
+                durationSec: ev.CastTime + 3.0,
                 direction: ArenaProjection.UsesFacing(namedSafeCall.Gimmick) ? "N" : null,
                 fanDeg: namedSafeCall.FanDeg,
                 arenaRadius: 20.0,
@@ -210,7 +211,8 @@ public sealed class AutoTelegraphService : IDisposable
             _minimap.AddArenaView(
                 gimmick: visualCall.Gimmick,
                 callout: visualCall.Callout,
-                durationSec: ev.CastTime + 0.5,
+                // キャスト時間 + 発動後 3 秒残す（「すぐ消えると困る」）
+                durationSec: ev.CastTime + 3.0,
                 direction: ArenaProjection.UsesFacing(visualCall.Gimmick) ? "N" : null,
                 fanDeg: visualCall.FanDeg,
                 arenaRadius: 20.0,
