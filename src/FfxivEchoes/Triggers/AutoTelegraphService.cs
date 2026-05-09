@@ -142,7 +142,7 @@ public sealed class AutoTelegraphService : IDisposable
 
         if (aoe is null && namedSafeCall is null)
         {
-            DrawAttackPulse(ev.CastActionName, ev.CastTime, sourceWorld, "詠唱");
+            DrawAttackPulse(ev.CastActionName, ev.CastTime, sourceWorld, "Cast");
             return;
         }
 
@@ -190,9 +190,10 @@ public sealed class AutoTelegraphService : IDisposable
 
         // 1. ミニマップ（俯瞰アリーナ図）に確定/推定ギミック表示
         var safeCall = namedSafeCall ?? AutoSafeCallPlanner.Create(aoe, ev.CastActionName);
+        var visualCall = safeCall ?? AutoSafeCallPlanner.CreateVisual(aoe, ev.CastActionName);
         // cone / half_plane はソース（ボス）の rotation から実方向を計算
         float? facingAngleRad = null;
-        if (ArenaProjection.UsesFacing(safeCall?.Gimmick) && src is not null)
+        if (ArenaProjection.UsesFacing(visualCall?.Gimmick) && src is not null)
         {
             // FFXIV: rotation 0 = +Z (south) 方向。ミニマップ render の atan2 系で
             // south = π/2 になるよう変換：renderAngle = bossRot + π/2 - π/2 = bossRot
@@ -201,17 +202,17 @@ public sealed class AutoTelegraphService : IDisposable
             // 正しい変換: render angle = π/2 - bossRotation
             facingAngleRad = ArenaProjection.RotationToMapAngleRad(src.Rotation);
         }
-        if (safeCall is not null)
+        if (visualCall is not null)
         {
             // sourceWorld には「AoE が実際に発動する場所」を渡す。
             // - キャスター中心 (CastType=5/3/4/6) → ボス位置
             // - ターゲット中心 (CastType=2) → ターゲット位置（worldPos が既にそれ）
             _minimap.AddArenaView(
-                gimmick: safeCall.Gimmick,
-                callout: safeCall.Callout,
+                gimmick: visualCall.Gimmick,
+                callout: visualCall.Callout,
                 durationSec: ev.CastTime + 0.5,
-                direction: ArenaProjection.UsesFacing(safeCall.Gimmick) ? "N" : null,
-                fanDeg: safeCall.FanDeg,
+                direction: ArenaProjection.UsesFacing(visualCall.Gimmick) ? "N" : null,
+                fanDeg: visualCall.FanDeg,
                 arenaRadius: 20.0,
                 directionAngleRad: facingAngleRad,
                 sourceWorld: worldPos,
@@ -256,7 +257,7 @@ public sealed class AutoTelegraphService : IDisposable
     {
         _minimap.AddArenaView(
             gimmick: "attack",
-            callout: $"{prefix}: {label}",
+            callout: AttackPulseLabelPolicy.Format(prefix, label),
             durationSec: Math.Max(1.0, durationSec),
             direction: null,
             fanDeg: null,

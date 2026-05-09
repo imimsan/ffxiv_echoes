@@ -25,6 +25,9 @@ public sealed class ContentListTab : ITab
     private string _newZoneName = string.Empty;
     private string? _saveError;
     private string? _pendingDeleteZone;
+    // BeginTable 内から OpenPopup を呼ぶと ID stack 不一致で開かないため、
+    // テーブル外で開けるようフラグで遅延させる
+    private bool _shouldOpenDeletePopup;
 
     public ContentListTab(TriggerStore triggerStore, RecordingScanner scanner, TabContext context)
     {
@@ -125,12 +128,21 @@ public sealed class ContentListTab : ITab
                     if (ImGui.Button($"削除##{zone}"))
                     {
                         _pendingDeleteZone = zone;
-                        ImGui.OpenPopup("delete-zone-popup");
+                        // テーブル内では ID stack の都合で OpenPopup できないので
+                        // フラグだけ立てて、テーブル外で開く
+                        _shouldOpenDeletePopup = true;
                     }
                 }
             }
 
             ImGui.EndTable();
+        }
+
+        // BeginTable の外で OpenPopup を呼ぶ。BeginPopupModal と同じ ID stack で開く必要がある
+        if (_shouldOpenDeletePopup)
+        {
+            _shouldOpenDeletePopup = false;
+            ImGui.OpenPopup("delete-zone-popup");
         }
     }
 

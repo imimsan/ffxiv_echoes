@@ -103,11 +103,7 @@ public sealed class LiveTimelineWindow : Window, IDisposable
                 AddHistory(ev.Timestamp, $"⚡ {cs.SourceName} → {cs.CastActionName}", 0xFF60A5FA);
                 break;
             case ActionUsedEvent au:
-                // AA は薄い色で軽く表示。詠唱なしのアクションも同じレーンに
-                var label = au.IsAutoAttack
-                    ? $"⚔ {au.SourceName} AA"
-                    : $"⚒ {au.SourceName} → {au.ActionName}";
-                AddHistory(ev.Timestamp, label, au.IsAutoAttack ? 0xFF888888 : 0xFFB088FA);
+                AddActionUsedHistory(au);
                 break;
             case TriggerFiredEvent tf:
                 AddHistory(ev.Timestamp, $"🎯 {tf.TriggerName ?? tf.TriggerId}", 0xFFFBBF24);
@@ -129,6 +125,33 @@ public sealed class LiveTimelineWindow : Window, IDisposable
             var threshold = t.Value - 60.0;
             _history.RemoveAll(h => h.RelativeSec < threshold);
         }
+    }
+
+    private void AddActionUsedHistory(ActionUsedEvent ev)
+    {
+        var file = _store.GetByZone(_currentZone);
+        if (file is null)
+        {
+            return;
+        }
+
+        if (ev.IsAutoAttack)
+        {
+            if (!file.AutoSettings.ShowAutoAttacks)
+            {
+                return;
+            }
+
+            AddHistory(ev.Timestamp, AttackPulseLabelPolicy.Format("AA", ev.ActionName), 0xFF888888);
+            return;
+        }
+
+        if (!file.AutoSettings.ShowAllEnemyCasts)
+        {
+            return;
+        }
+
+        AddHistory(ev.Timestamp, AttackPulseLabelPolicy.Format("Action", ev.ActionName), 0xFFB088FA);
     }
 
     private void UpdateVisibility()

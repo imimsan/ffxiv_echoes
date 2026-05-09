@@ -71,7 +71,25 @@ public sealed class SafeZoneContextBuilder
         }
 
         var markers = new Dictionary<string, Vector3>();
-        var arenaCenter = DefaultArenaCenter;
+        var centerAnchors = new List<Vector3>();
+        if (localPlayer is not null)
+        {
+            centerAnchors.Add(selfPos);
+        }
+        foreach (var pc in party)
+        {
+            centerAnchors.Add(new Vector3(pc.Position.X, pc.Position.Y, pc.Position.Z));
+        }
+        foreach (var npc in bosses)
+        {
+            centerAnchors.Add(new Vector3(npc.Position.X, npc.Position.Y, npc.Position.Z));
+        }
+        if (castActor is not null)
+        {
+            centerAnchors.Add(new Vector3(castActor.Position.X, castActor.Position.Y, castActor.Position.Z));
+        }
+
+        var arenaCenter = ArenaCenterResolver.Resolve(DefaultArenaCenter, centerAnchors);
 
         return new SafeZoneContext(
             SelfPosition: selfPos,

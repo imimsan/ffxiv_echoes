@@ -84,6 +84,7 @@ public sealed class Plugin : IDalamudPlugin
 
     // ── 自動 AoE テレグラフ ──────────────────────────────
     private AutoTelegraphService? _autoTelegraph;
+    private AutoAttackTimingService? _autoAttackTiming;
 
     // ── 同期オフセットトラッカー ──────────────────────────
     private SyncOffsetTracker? _syncOffset;
@@ -273,6 +274,8 @@ public sealed class Plugin : IDalamudPlugin
         _autoTelegraph = new AutoTelegraphService(
             _eventBus, DataManager, ObjectTable, _worldOverlayWindow, _minimapWindow,
             _triggerStore, Log);
+        _autoAttackTiming = new AutoAttackTimingService(
+            Framework, _eventBus, _triggerStore, ObjectTable, Log);
 
         // 予測アドバンス警告：TTS + 「予測中」ミニマップ + フィールド円
         _predictedCastReminder = new PredictedCastReminderService(
@@ -345,6 +348,7 @@ public sealed class Plugin : IDalamudPlugin
         // タイムラインノート通知を停止
         _noteReminder?.Dispose();
         _predictedCastReminder?.Dispose();
+        _autoAttackTiming?.Dispose();
         _autoTelegraph?.Dispose();
         _syncOffset?.Dispose();
 
