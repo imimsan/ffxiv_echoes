@@ -172,6 +172,131 @@ public sealed class TriggerEditorTab : ITab
         };
     }
 
+    /// <summary>
+    /// 散開ポジションをミニマップ上にドット描画して、ドラッグで移動・
+    /// ダブルクリックで追加できる視覚エディタ。
+    /// 座標を手で入力する代わりにこちらを使う。
+    /// </summary>
+    private void DrawSpreadPositionMapEditor(StrategyProfile profile)
+    {
+        var arenaRadius = profile.ArenaRadius is { } ar && ar > 0 ? (float)ar : 20f;
+        var canvasSize = 320f * ImGuiHelpers.GlobalScale;
+        var pos = ImGui.GetCursorScreenPos();
+        var center = new Vector2(pos.X + canvasSize * 0.5f, pos.Y + canvasSize * 0.5f);
+        var mapR = canvasSize * 0.5f - 8f * ImGuiHelpers.GlobalScale;
+        var draw = ImGui.GetWindowDrawList();
+
+        // 背景：黒円 + グリッド + 方位ラベル
+        draw.AddCircleFilled(center, mapR, 0xC0181C25, 64);
+        draw.AddCircle(center, mapR, 0x80FFFFFF, 64, 1.2f);
+        // 5m ごとの薄いグリッド円
+        var gridStep = 5f;
+        for (var rm = gridStep; rm < arenaRadius; rm += gridStep)
+        {
+            var rPx = mapR * (rm / arenaRadius);
+            draw.AddCircle(center, rPx, 0x40FFFFFF, 48, 0.8f);
+        }
+        // 中央十字
+        draw.AddLine(new Vector2(center.X, center.Y - mapR),
+                     new Vector2(center.X, center.Y + mapR), 0x40FFFFFF, 0.8f);
+        draw.AddLine(new Vector2(center.X - mapR, center.Y),
+                     new Vector2(center.X + mapR, center.Y), 0x40FFFFFF, 0.8f);
+        // 方位ラベル
+        AddCenteredMapText(draw, new Vector2(center.X, pos.Y + 4f), "N", 0xFFCCCCCC);
+        AddCenteredMapText(draw, new Vector2(center.X, pos.Y + canvasSize - 16f), "S", 0xFFCCCCCC);
+        AddCenteredMapText(draw, new Vector2(pos.X + 8f, center.Y - 7f), "W", 0xFFCCCCCC);
+        AddCenteredMapText(draw, new Vector2(pos.X + canvasSize - 16f, center.Y - 7f), "E", 0xFFCCCCCC);
+
+        // 透明ボタンでキャンバス領域をクリック検出（ダブルクリックで追加）
+        ImGui.InvisibleButton("##spread-map-bg", new Vector2(canvasSize, canvasSize));
+        if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+        {
+            var mouse = ImGui.GetMousePos();
+            var dx = mouse.X - center.X;
+            var dy = mouse.Y - center.Y;
+            // map pixel → world meters
+            var worldX = dx / mapR * arenaRadius;
+            var worldZ = dy / mapR * arenaRadius;
+            profile.SpreadPositions.Add(new StrategyPosition
+            {
+                Slot = $"P{profile.SpreadPositions.Count + 1}",
+                Label = $"P{profile.SpreadPositions.Count + 1}",
+                X = worldX,
+                Z = worldZ,
+                Color = "#F472B6",
+            });
+            _dirty = true;
+        }
+
+        // 各ドットの描画 + ドラッグハンドリング
+        for (var i = 0; i < profile.SpreadPositions.Count; i++)
+        {
+            var sp = profile.SpreadPositions[i];
+            var x = (float)sp.X;
+            var z = (float)sp.Z;
+            var px = center.X + x / arenaRadius * mapR;
+            var py = center.Y + z / arenaRadius * mapR;
+            var dotR = 12f * ImGuiHelpers.GlobalScale;
+
+            // ドラッグ用の透明ボタンを重ねる
+            ImGui.SetCursorScreenPos(new Vector2(px - dotR, py - dotR));
+            ImGui.InvisibleButton($"##spread-dot-{i}", new Vector2(dotR * 2, dotR * 2));
+            var hovered = ImGui.IsItemHovered();
+            var active = ImGui.IsItemActive();
+
+            if (active && ImGui.IsMouseDragging(ImGuiMouseButton.Left, 0.5f))
+            {
+                var delta = ImGui.GetIO().MouseDelta;
+                if (delta.X != 0 || delta.Y != 0)
+                {
+                    sp.X += delta.X / mapR * arenaRadius;
+                    sp.Z += delta.Y / mapR * arenaRadius;
+                    _dirty = true;
+                }
+            }
+
+            // ドット本体
+            var fill = ParseHex(sp.Color, 0xFFF472B6);
+            var ringColor = active ? 0xFFFFFFFF : (hovered ? 0xFFCCCCCC : 0xFF888888u);
+            draw.AddCircleFilled(new Vector2(px, py), dotR, fill, 24);
+            draw.AddCircle(new Vector2(px, py), dotR, ringColor, 24, hovered ? 2.5f : 1.5f);
+            // ラベル
+            var label = sp.Label ?? sp.Slot;
+            AddCenteredMapText(draw, new Vector2(px, py - 4f), label, 0xFF000000);
+
+            if (hovered)
+            {
+                ImGui.BeginTooltip();
+                ImGui.TextUnformatted($"{sp.Slot} ({sp.Role ?? "—"})");
+                ImGui.TextDisabled($"X={sp.X:0.0}m / Z={sp.Z:0.0}m");
+                ImGui.TextDisabled("ドラッグで移動");
+                ImGui.EndTooltip();
+            }
+        }
+
+        // 描画領域を確保
+        ImGui.SetCursorScreenPos(new Vector2(pos.X, pos.Y + canvasSize));
+        ImGui.Dummy(new Vector2(canvasSize, 0f));
+    }
+
+    private static void AddCenteredMapText(ImDrawListPtr draw, Vector2 center, string text, uint color)
+    {
+        var size = ImGui.CalcTextSize(text);
+        draw.AddText(new Vector2(center.X - size.X * 0.5f, center.Y - size.Y * 0.5f), color, text);
+    }
+
+    private static uint ParseHex(string? hex, uint fallback)
+    {
+        if (string.IsNullOrEmpty(hex) || hex.Length != 7 || hex[0] != '#') return fallback;
+        if (!uint.TryParse(hex.AsSpan(1), System.Globalization.NumberStyles.HexNumber,
+            System.Globalization.CultureInfo.InvariantCulture, out var rgb)) return fallback;
+        var r = (rgb >> 16) & 0xFF;
+        var g = (rgb >> 8) & 0xFF;
+        var b = rgb & 0xFF;
+        // ABGR for ImGui
+        return (0xFFu << 24) | (b << 16) | (g << 8) | r;
+    }
+
     private static List<StrategyPosition> CreateEightWaySpreadPositions()
     {
         return new List<StrategyPosition>
@@ -1241,14 +1366,19 @@ public sealed class TriggerEditorTab : ITab
             return;
         }
 
+        // 上部：簡潔な要約 + 「使わなくていい」明示
+        ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(1f, 0.85f, 0.4f, 1f));
+        ImGui.TextWrapped("■ このタブは “PT 攻略の覚え書き” を作る場所");
+        ImGui.PopStyleColor();
         ImGui.TextWrapped(
-            "PT 構成ごとの「攻略プレイブック」を保存できます。\n" +
-            "・散開ポジ（誰が東、誰が南、…）の座標\n" +
-            "・各ギミックの担当ロール / 読み上げ文 / 視覚通知\n" +
-            "を一元管理するため、固定 PT・野良 PT で別プロファイルに分けたり、" +
-            "速度重視 / 安全重視 のバリエーションを作れます。");
+            "「ホリッドロアの 5 秒前にランパート使う」「散開のときタンクは北、ヒラは東」など、\n" +
+            "PT 内で決まっている動きを保存しておくと、戦闘中に自動で読み上げ + ミニマップ表示してくれる。");
         ImGui.Spacing();
-        ImGui.TextDisabled("最初のうちは「ギミックごとに callout（読み上げ文）と先行通知秒数だけ書く」最小構成で十分動きます。");
+        ImGui.TextDisabled(
+            "※ 単純に音だけ鳴らしたいだけなら「トリガー一覧」タブで足りる。\n" +
+            "※ ここは「PT 全員のポジション」「メカニクスごとに誰が何する」を細かく書きたい人向け。");
+        ImGui.Spacing();
+        ImGui.Separator();
         ImGui.Spacing();
 
         if (_workingCopy.StrategyProfiles.Count == 0)
@@ -1408,6 +1538,13 @@ public sealed class TriggerEditorTab : ITab
         {
             ImGui.SetTooltip("MT/ST/H1/H2/D1-D4 の標準 8 方向散開ポジを自動追加（既存 slot は保護）");
         }
+
+        // 視覚的にドラッグ＆ドロップで配置できるミニマップエディタ
+        ImGui.Spacing();
+        DrawSpreadPositionMapEditor(profile);
+        ImGui.Spacing();
+        ImGui.TextDisabled("↑ ドット をドラッグで移動。空白部分をダブルクリックでポジ追加。下の表で詳細編集。");
+        ImGui.Spacing();
 
         if (!ImGui.BeginTable("##strategy-positions-table", 9,
                 ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.Resizable))
