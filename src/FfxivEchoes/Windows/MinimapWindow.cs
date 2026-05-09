@@ -455,7 +455,32 @@ public sealed class MinimapWindow : Window, IDisposable
                 draw.PathStroke(stroke, ImDrawFlags.None, 1.5f);
                 break;
             }
+            case 7:  // Cross / 十字（簡易：ソース位置に十字線）
+            case 8:  // Multi-cell (rare)
+            {
+                var cross = pixelRadius * 0.7f;
+                draw.AddLine(new Vector2(origin.X - cross, origin.Y),
+                              new Vector2(origin.X + cross, origin.Y), stroke, 4f);
+                draw.AddLine(new Vector2(origin.X, origin.Y - cross),
+                              new Vector2(origin.X, origin.Y + cross), stroke, 4f);
+                draw.AddCircleFilled(origin, pixelRadius * 0.15f, fill, 16);
+                break;
+            }
+            case 10:  // 別形 Donut
+            case 11:  // (rare)
+            case 12:  // (rare)
+            case 13:  // (rare)
+            {
+                // 不明な形：ソース位置に半径分の半透明円を描いて「警戒」だけ示す
+                var segments = (int)MathF.Min(48, MathF.Max(20, pixelRadius * 0.4f));
+                draw.AddCircleFilled(origin, pixelRadius, fill, segments);
+                draw.AddCircle(origin, pixelRadius, stroke, segments, 1.5f);
+                AddCenteredText(draw, origin, $"?{castType}", ColText, 0.85f);
+                break;
+            }
             default:
+                // 完全に未知 → ソースに小さい警戒円
+                draw.AddCircle(origin, MathF.Max(8f, pixelRadius * 0.5f), stroke, 24, 2f);
                 break;
         }
     }

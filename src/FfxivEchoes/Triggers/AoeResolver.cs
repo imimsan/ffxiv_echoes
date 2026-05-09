@@ -26,16 +26,26 @@ public static class AoeResolver
                 return null;
             }
             var effectRange = (float)row.EffectRange;
-            if (effectRange <= 0) return null;
-            // 50m 超は描画しない（アリーナ全域系）
-            if (effectRange > 50f)
+            if (effectRange <= 0)
+            {
+                log?.Debug("[FfxivEchoes] AoE skip non-AoE id={Id:X4} range={R}m castType={Ct}",
+                    actionId, effectRange, (int)row.CastType);
+                return null;
+            }
+            // 100m 超のみ無視（FFXIV のアリーナはほぼ 50m 以内、それ超は誤データ）
+            if (effectRange > 100f)
             {
                 log?.Debug("[FfxivEchoes] AoE skip oversized id={Id:X4} range={R}m", actionId, effectRange);
                 return null;
             }
 
             var castType = (int)row.CastType;
-            var fromCaster = castType == 5 || castType == 3 || castType == 4 || castType == 6;
+            // 2/5: target/caster centered circle
+            // 3: cone, 4: line  → caster-anchored
+            // 6/7/10/11/12/13: donut / cross / various special shapes → caster-anchored
+            var fromCaster = castType == 5 || castType == 3 || castType == 4 ||
+                             castType == 6 || castType == 7 || castType == 10 ||
+                             castType == 11 || castType == 12 || castType == 13;
             // Omen ID（テレグラフのアセット参照）を取得。失敗時は 0
             uint omenId = 0;
             try
@@ -44,6 +54,8 @@ public static class AoeResolver
             }
             catch { /* Omen フィールドが取れない場合は無視 */ }
 
+            log?.Debug("[FfxivEchoes] AoE resolve id={Id:X4} range={R}m castType={Ct} omen={Om}",
+                actionId, effectRange, castType, omenId);
             return new AoeInfo(effectRange, castType, fromCaster, omenId);
         }
         catch (Exception ex)

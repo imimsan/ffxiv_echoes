@@ -74,12 +74,9 @@ public sealed class AutoTelegraphService : IDisposable
 
     private void OnCastStart(CastStartedEvent ev)
     {
+        // 注意：ゾーンファイルが無くても AoE 描画は行う。極ゾディアーク等で
+        // 初見ゾーンに突入したばかりのユーザーでも警告を出すため。
         var file = _store.GetByZone(_currentZone);
-        if (file is null)
-        {
-            _log.Information("[FfxivEchoes] AutoTelegraph: skip (zone={Zone}, no file)", _currentZone);
-            return;
-        }
 
         var isFriendly = IsFriendlyActor(ev.SourceId);
         if (isFriendly)
@@ -101,7 +98,7 @@ public sealed class AutoTelegraphService : IDisposable
         }
         _lastDrawnAt[key] = now;
 
-        if (file.AutoSettings.EnableTriggers)
+        if (file is not null && file.AutoSettings.EnableTriggers)
         {
             var strategy = StrategyPlanResolver.FindMechanicForCast(file, ev.CastActionId, ev.CastActionName);
             if (strategy.Profile is not null && strategy.Mechanic is not null)
@@ -123,8 +120,10 @@ public sealed class AutoTelegraphService : IDisposable
 
         var aoe = AoeResolver.Resolve(_dataManager, ev.CastActionId, _log);
         var namedSafeCall = AutoSafeCallPlanner.CreateKnown(ev.CastActionId, ev.CastActionName);
+        // ゾーン file が無い場合は default の auto_settings を使う（show_auto_telegraphs=true）
+        var autoSettings = file?.AutoSettings ?? new AutoSettings { ShowAutoTelegraphs = true };
         var decision = AttackDisplayPolicy.Decide(
-            file.AutoSettings,
+            autoSettings,
             new AttackDisplayRequest(
                 IsFriendly: false,
                 HasAoe: aoe is not null || namedSafeCall is not null,
