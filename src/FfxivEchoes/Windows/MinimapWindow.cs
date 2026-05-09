@@ -101,7 +101,8 @@ public sealed class MinimapWindow : Window, IDisposable
         float? directionAngleRad = null,
         Vector3? sourceWorld = null,
         IReadOnlyList<StrategyPosition>? strategyPositions = null,
-        float? aoeRadius = null)
+        float? aoeRadius = null,
+        int? aoeCastType = null)
     {
         if (string.IsNullOrEmpty(gimmick))
         {
@@ -122,6 +123,7 @@ public sealed class MinimapWindow : Window, IDisposable
             SourceWorld: sourceWorld,
             StrategyPositions: strategyPositions?.ToArray() ?? Array.Empty<StrategyPosition>(),
             AoeRadius: aoeRadius,
+            AoeCastType: aoeCastType,
             ExpiresAt: DateTimeOffset.UtcNow.AddSeconds(ttl));
         lock (_gate)
         {
@@ -177,6 +179,8 @@ public sealed class MinimapWindow : Window, IDisposable
 
             DrawArena(draw, center, r);
             DrawGimmickBody(draw, center, r, item);
+            // 実 AoE 形状の幾何学的描画（Lumina の CastType + 半径から正確な形を描く）
+            DrawActualAoeShape(draw, center, r, item);
             DrawSafeZoneOverlay(draw, center, r, scale * tileScale, item);
             DrawStrategyPositions(draw, center, r, scale * tileScale, item);
             DrawBoss(draw, center, r, scale * tileScale, item);
@@ -361,6 +365,97 @@ public sealed class MinimapWindow : Window, IDisposable
 
             default:
                 AddCenteredText(draw, center, $"unknown: {item.Gimmick}", ColText, 0.9f);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Lumina の CastType + AoE 半径から AoE の実形状をミニマップに幾何学的に描画。
+    /// 抽象 gimmick（inner_circle 等）と独立に、実際のテレグラフ形状で「これが危険」と示す。
+    /// CastType: 2=ターゲット中心円、3=コーン、4=直線、5=PB AoE、6=Donut。
+    /// </summary>
+    private void DrawActualAoeShape(ImDrawListPtr draw, Vector2 mapCenter, float mapR, ArenaItem item)
+    {
+        if (item.AoeRadius is not { } radiusM || radiusM <= 0) return;
+        if (item.AoeCastType is not { } castType) return;
+
+        var origin = item.SourceWorld is { } sw &&
+                     TryProjectWorldToMap(mapCenter, mapR, item, sw, out var sp)
+            ? sp
+            : mapCenter;
+
+        var pixelRadius = ArenaProjection.WorldRadiusToMap(radiusM, item.ArenaRadius, mapR);
+        if (pixelRadius < 4f) pixelRadius = 4f;
+
+        // 半透明赤で塗り、外周線で形を強調
+        var fill = (ColDanger & 0x00FFFFFFu) | 0x55000000u;
+        var stroke = (ColDangerLine & 0x00FFFFFFu) | 0xFF000000u;
+
+        switch (castType)
+        {
+            case 2: // Target-centered circle
+            case 5: // PB AoE on caster
+            {
+                var segments = (int)MathF.Min(64, MathF.Max(24, pixelRadius * 0.4f));
+                draw.AddCircleFilled(origin, pixelRadius, fill, segments);
+                draw.AddCircle(origin, pixelRadius, stroke, segments, 2f);
+                break;
+            }
+            case 6: // Donut（内側安置）
+            {
+                var innerR = pixelRadius * 0.35f;
+                const int segments = 48;
+                for (var i = 0; i < segments; i++)
+                {
+                    var a1 = (float)(i * Math.PI * 2 / segments);
+                    var a2 = (float)((i + 1) * Math.PI * 2 / segments);
+                    var pOuter1 = new Vector2(origin.X + MathF.Cos(a1) * pixelRadius,
+                                              origin.Y + MathF.Sin(a1) * pixelRadius);
+                    var pOuter2 = new Vector2(origin.X + MathF.Cos(a2) * pixelRadius,
+                                              origin.Y + MathF.Sin(a2) * pixelRadius);
+                    var pInner1 = new Vector2(origin.X + MathF.Cos(a1) * innerR,
+                                              origin.Y + MathF.Sin(a1) * innerR);
+                    var pInner2 = new Vector2(origin.X + MathF.Cos(a2) * innerR,
+                                              origin.Y + MathF.Sin(a2) * innerR);
+                    draw.AddQuadFilled(pOuter1, pOuter2, pInner2, pInner1, fill);
+                }
+                draw.AddCircle(origin, pixelRadius, stroke, segments, 1.5f);
+                draw.AddCircle(origin, innerR, stroke, segments, 1.5f);
+                break;
+            }
+            case 3: // Cone
+            case 4: // Line（細いコーンとして描画）
+            {
+                var facing = item.DirectionAngleRad ?? 0f;
+                var halfFan = castType == 4
+                    ? MathF.PI / 12f      // ~30° 全角の細い扇形
+                    : (item.FanDeg > 0 ? (float)(item.FanDeg * Math.PI / 360.0) : MathF.PI / 4f);
+
+                const int segments = 24;
+                var path = new List<Vector2> { origin };
+                for (var i = 0; i <= segments; i++)
+                {
+                    var t = (float)i / segments;
+                    var a = facing - halfFan + (halfFan * 2f) * t;
+                    path.Add(new Vector2(origin.X + MathF.Cos(a) * pixelRadius,
+                                         origin.Y + MathF.Sin(a) * pixelRadius));
+                }
+                foreach (var p in path) draw.PathLineTo(p);
+                draw.PathFillConvex(fill);
+                // 外周線も描画
+                draw.PathLineTo(origin);
+                for (var i = 0; i <= segments; i++)
+                {
+                    var t = (float)i / segments;
+                    var a = facing - halfFan + (halfFan * 2f) * t;
+                    draw.PathLineTo(new Vector2(origin.X + MathF.Cos(a) * pixelRadius,
+                                                 origin.Y + MathF.Sin(a) * pixelRadius));
+                }
+                draw.PathLineTo(origin);
+                draw.PathStroke(stroke, ImDrawFlags.None, 1.5f);
+                break;
+            }
+            default:
                 break;
         }
     }
@@ -792,5 +887,6 @@ public sealed class MinimapWindow : Window, IDisposable
         Vector3? SourceWorld,
         IReadOnlyList<StrategyPosition> StrategyPositions,
         float? AoeRadius,
+        int? AoeCastType,
         DateTimeOffset ExpiresAt);
 }

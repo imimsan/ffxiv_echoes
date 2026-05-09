@@ -37,11 +37,10 @@ public sealed class AutoTelegraphService : IDisposable
 
     private string _currentZone = "Unknown";
 
-    // 同時多発キャストの重複表示防止：cast_id ごとに最後の発火時刻を覚えて
-    // 0.5 秒以内の連続発火はスキップする（ヒートウィングは boss + 翼 ×2 で
-    // 同じ AoE が 3 回送られてくるため）
-    private readonly Dictionary<uint, DateTimeOffset> _lastDrawnAt = new();
-    private const double DedupWindowSeconds = 0.5;
+    // 同時多発キャストの重複表示防止：(cast_id, source_id) ペアごとに最後の発火時刻を覚える。
+    // 同じ cast_id でもソースが違う（左翼 vs 右翼）場合は別物として両方描画する。
+    private readonly Dictionary<(uint CastId, uint SourceId), DateTimeOffset> _lastDrawnAt = new();
+    private const double DedupWindowSeconds = 0.3;
 
     public AutoTelegraphService(
         IEventBus bus,
@@ -89,16 +88,18 @@ public sealed class AutoTelegraphService : IDisposable
             return;
         }
 
-        // 同時多発の dedup：同じ cast_id が短時間に連続発火した場合は最初の 1 回だけ
+        // 同時多発の dedup：(cast_id, source_id) ペアで判定。
+        // 同 cast_id でもソースが違うなら（左翼 vs 右翼）別物として両方描画。
         var now = ev.Timestamp;
-        if (_lastDrawnAt.TryGetValue(ev.CastActionId, out var prev) &&
+        var key = (ev.CastActionId, ev.SourceId);
+        if (_lastDrawnAt.TryGetValue(key, out var prev) &&
             (now - prev).TotalSeconds < DedupWindowSeconds)
         {
-            _log.Debug("[FfxivEchoes] AutoTelegraph: skip duplicate cast id={Id:X4} within {Sec}s",
-                ev.CastActionId, DedupWindowSeconds);
+            _log.Debug("[FfxivEchoes] AutoTelegraph: skip duplicate cast id={Id:X4} src={Src} within {Sec}s",
+                ev.CastActionId, ev.SourceId, DedupWindowSeconds);
             return;
         }
-        _lastDrawnAt[ev.CastActionId] = now;
+        _lastDrawnAt[key] = now;
 
         if (file.AutoSettings.EnableTriggers)
         {
@@ -216,7 +217,8 @@ public sealed class AutoTelegraphService : IDisposable
                 arenaRadius: 20.0,
                 directionAngleRad: facingAngleRad,
                 sourceWorld: worldPos,
-                aoeRadius: aoe?.Radius);
+                aoeRadius: aoe?.Radius,
+                aoeCastType: aoe?.CastType);
         }
 
         if (safeCall is not null)
