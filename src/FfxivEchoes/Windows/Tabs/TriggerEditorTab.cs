@@ -1241,12 +1241,19 @@ public sealed class TriggerEditorTab : ITab
             return;
         }
 
-        ImGui.TextWrapped("Party-specific strategy profiles are saved in this trigger file. Use them for group-specific spreads, callouts, safe zones, and minimap markers.");
+        ImGui.TextWrapped(
+            "PT 構成ごとの「攻略プレイブック」を保存できます。\n" +
+            "・散開ポジ（誰が東、誰が南、…）の座標\n" +
+            "・各ギミックの担当ロール / 読み上げ文 / 視覚通知\n" +
+            "を一元管理するため、固定 PT・野良 PT で別プロファイルに分けたり、" +
+            "速度重視 / 安全重視 のバリエーションを作れます。");
+        ImGui.Spacing();
+        ImGui.TextDisabled("最初のうちは「ギミックごとに callout（読み上げ文）と先行通知秒数だけ書く」最小構成で十分動きます。");
         ImGui.Spacing();
 
         if (_workingCopy.StrategyProfiles.Count == 0)
         {
-            if (ImGui.Button("Add default profile"))
+            if (ImGui.Button("デフォルトプロファイル作成"))
             {
                 _workingCopy.StrategyProfiles.Add(CreateDefaultStrategyProfile("default", "Default party strategy"));
                 _workingCopy.ActiveStrategyProfileId = "default";
@@ -1287,17 +1294,22 @@ public sealed class TriggerEditorTab : ITab
             string.Equals(p.Id, _workingCopy.ActiveStrategyProfileId, StringComparison.OrdinalIgnoreCase)));
 
         ImGui.SetNextItemWidth(360f * ImGuiHelpers.GlobalScale);
-        if (ImGui.Combo("Active strategy profile", ref selectedIndex, labels, labels.Length))
+        if (ImGui.Combo("使用中のプロファイル", ref selectedIndex, labels, labels.Length))
         {
             _workingCopy.ActiveStrategyProfileId = profiles[selectedIndex].Id;
             _dirty = true;
         }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip("戦闘中に StrategyPlanResolver がここで選択中のプロファイルだけを使う。\n" +
+                             "固定 PT 用 / 野良用 / 練習用 等を切り替えるための機構。");
+        }
 
         ImGui.SameLine();
-        if (ImGui.Button("Add profile"))
+        if (ImGui.Button("プロファイル追加"))
         {
             var id = UniqueStrategyId("profile");
-            var profile = CreateDefaultStrategyProfile(id, $"Strategy {profiles.Count + 1}");
+            var profile = CreateDefaultStrategyProfile(id, $"攻略 {profiles.Count + 1}");
             profiles.Add(profile);
             _workingCopy.ActiveStrategyProfileId = profile.Id;
             _dirty = true;
@@ -1306,17 +1318,18 @@ public sealed class TriggerEditorTab : ITab
 
     private void DrawStrategyProfileEditor(StrategyProfile profile)
     {
-        ImGui.TextUnformatted("Profile");
+        ImGui.TextUnformatted("プロファイル基本情報");
         var enabled = profile.Enabled;
-        if (ImGui.Checkbox("Enabled##strategy-profile-enabled", ref enabled))
+        if (ImGui.Checkbox("有効##strategy-profile-enabled", ref enabled))
         {
             profile.Enabled = enabled;
             _dirty = true;
         }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("OFF にするとこのプロファイルは戦闘中に使われない");
 
         var id = profile.Id;
         ImGui.SetNextItemWidth(220f * ImGuiHelpers.GlobalScale);
-        if (ImGui.InputText("Id##strategy-profile-id", ref id, 64))
+        if (ImGui.InputText("ID（内部識別子）##strategy-profile-id", ref id, 64))
         {
             var oldId = profile.Id;
             profile.Id = string.IsNullOrWhiteSpace(id) ? oldId : id.Trim();
@@ -1326,26 +1339,30 @@ public sealed class TriggerEditorTab : ITab
             }
             _dirty = true;
         }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("英数字推奨。プロファイル切替やトリガー連携で参照される");
 
         var name = profile.Name;
         ImGui.SetNextItemWidth(320f * ImGuiHelpers.GlobalScale);
-        if (ImGui.InputText("Name##strategy-profile-name", ref name, 128))
+        if (ImGui.InputText("表示名##strategy-profile-name", ref name, 128))
         {
             profile.Name = name;
             _dirty = true;
         }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("UI で表示される名前（例：「固定 PT 用」「野良用」）");
 
         var radius = (float)(profile.ArenaRadius ?? 20.0);
         ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
-        if (ImGui.InputFloat("Arena radius##strategy-arena-radius", ref radius, 0.5f, 1.0f, "%.1f"))
+        if (ImGui.InputFloat("アリーナ半径(m)##strategy-arena-radius", ref radius, 0.5f, 1.0f, "%.1f"))
         {
             profile.ArenaRadius = radius <= 0 ? null : radius;
             _dirty = true;
         }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("ミニマップ表示のスケール基準。\n" +
+                                                     "極/絶アリーナはおおむね 18-25m（ゾディアークは 22m 程度）");
 
         var description = profile.Description ?? string.Empty;
         ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputTextMultiline("Description##strategy-description", ref description, 1024,
+        if (ImGui.InputTextMultiline("メモ##strategy-description", ref description, 1024,
                 new Vector2(-1, 60f * ImGuiHelpers.GlobalScale)))
         {
             profile.Description = string.IsNullOrWhiteSpace(description) ? null : description;
@@ -1355,9 +1372,16 @@ public sealed class TriggerEditorTab : ITab
 
     private void DrawStrategyPositionsEditor(StrategyProfile profile)
     {
-        ImGui.TextUnformatted("Spread positions");
+        ImGui.TextUnformatted("散開ポジション（8 人分の立ち位置）");
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip(
+                "散開ギミックの「自分はここに立つ」の座標一覧。\n" +
+                "アリーナ中央を (0, 0) として、X = 東(+) / 西(-)、Z = 南(+) / 北(-)。\n" +
+                "ミニマップに重ねて表示したり、メカニクスの positions で参照したりする。");
+        }
         ImGui.SameLine();
-        if (ImGui.SmallButton("Add position"))
+        if (ImGui.SmallButton("ポジ追加"))
         {
             profile.SpreadPositions.Add(new StrategyPosition
             {
@@ -1368,7 +1392,7 @@ public sealed class TriggerEditorTab : ITab
             _dirty = true;
         }
         ImGui.SameLine();
-        if (ImGui.SmallButton("Fill 8-way missing"))
+        if (ImGui.SmallButton("8 方向ポジを補完"))
         {
             foreach (var pos in CreateEightWaySpreadPositions())
             {
@@ -1380,6 +1404,10 @@ public sealed class TriggerEditorTab : ITab
             }
             _dirty = true;
         }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip("MT/ST/H1/H2/D1-D4 の標準 8 方向散開ポジを自動追加（既存 slot は保護）");
+        }
 
         if (!ImGui.BeginTable("##strategy-positions-table", 9,
                 ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.Resizable))
@@ -1387,14 +1415,14 @@ public sealed class TriggerEditorTab : ITab
             return;
         }
 
-        ImGui.TableSetupColumn("Slot", ImGuiTableColumnFlags.WidthFixed, 56f * ImGuiHelpers.GlobalScale);
-        ImGui.TableSetupColumn("Label", ImGuiTableColumnFlags.WidthFixed, 70f * ImGuiHelpers.GlobalScale);
-        ImGui.TableSetupColumn("Role", ImGuiTableColumnFlags.WidthFixed, 82f * ImGuiHelpers.GlobalScale);
-        ImGui.TableSetupColumn("Job", ImGuiTableColumnFlags.WidthFixed, 56f * ImGuiHelpers.GlobalScale);
-        ImGui.TableSetupColumn("X", ImGuiTableColumnFlags.WidthFixed, 70f * ImGuiHelpers.GlobalScale);
-        ImGui.TableSetupColumn("Z", ImGuiTableColumnFlags.WidthFixed, 70f * ImGuiHelpers.GlobalScale);
-        ImGui.TableSetupColumn("Color", ImGuiTableColumnFlags.WidthFixed, 88f * ImGuiHelpers.GlobalScale);
-        ImGui.TableSetupColumn("Note", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn("スロット", ImGuiTableColumnFlags.WidthFixed, 64f * ImGuiHelpers.GlobalScale);
+        ImGui.TableSetupColumn("表示名", ImGuiTableColumnFlags.WidthFixed, 70f * ImGuiHelpers.GlobalScale);
+        ImGui.TableSetupColumn("ロール", ImGuiTableColumnFlags.WidthFixed, 82f * ImGuiHelpers.GlobalScale);
+        ImGui.TableSetupColumn("ジョブ", ImGuiTableColumnFlags.WidthFixed, 56f * ImGuiHelpers.GlobalScale);
+        ImGui.TableSetupColumn("X (東+/西-)", ImGuiTableColumnFlags.WidthFixed, 84f * ImGuiHelpers.GlobalScale);
+        ImGui.TableSetupColumn("Z (南+/北-)", ImGuiTableColumnFlags.WidthFixed, 84f * ImGuiHelpers.GlobalScale);
+        ImGui.TableSetupColumn("色", ImGuiTableColumnFlags.WidthFixed, 88f * ImGuiHelpers.GlobalScale);
+        ImGui.TableSetupColumn("メモ", ImGuiTableColumnFlags.WidthStretch);
         ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed, 68f * ImGuiHelpers.GlobalScale);
         ImGui.TableHeadersRow();
 
@@ -1477,7 +1505,7 @@ public sealed class TriggerEditorTab : ITab
             }
 
             ImGui.TableNextColumn();
-            if (ImGui.SmallButton("Delete"))
+            if (ImGui.SmallButton("削除"))
             {
                 profile.SpreadPositions.RemoveAt(i);
                 _dirty = true;
@@ -1493,15 +1521,28 @@ public sealed class TriggerEditorTab : ITab
 
     private void DrawMechanicStrategiesEditor(StrategyProfile profile)
     {
-        ImGui.TextUnformatted("Mechanics");
+        ImGui.TextUnformatted("ギミック攻略");
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip(
+                "ボスのギミックごとの処理プラン。集計タブで「攻略ギミックに追加」を押すと\n" +
+                "ここに自動でエントリが作られる。各メカニクスに：\n" +
+                "・通知タイミング（何秒前に音声を流すか）\n" +
+                "・読み上げ文（callout）\n" +
+                "・担当ロール / ジョブ\n" +
+                "・ミニマップ表示形状\n" +
+                "・散開ポジ参照（positions）\n" +
+                "・安置計算（safe_zone）\n" +
+                "を設定する。最低限 callout と先行通知秒数だけでも動く。");
+        }
         ImGui.SameLine();
-        if (ImGui.SmallButton("Add mechanic"))
+        if (ImGui.SmallButton("メカニクス追加"))
         {
             var id = UniqueMechanicId(profile, "mechanic");
             profile.Mechanics.Add(new MechanicStrategy
             {
                 Id = id,
-                Label = $"Mechanic {profile.Mechanics.Count + 1}",
+                Label = $"メカニクス {profile.Mechanics.Count + 1}",
                 Time = 0,
                 AdvanceWarningSec = 5,
                 Gimmick = "scatter",
@@ -1512,7 +1553,8 @@ public sealed class TriggerEditorTab : ITab
 
         if (profile.Mechanics.Count == 0)
         {
-            ImGui.TextDisabled("Add mechanics here when your party uses custom spreads, stacks, bait order, or safe calls.");
+            ImGui.TextDisabled("「集計（観測イベント）」タブで cast を選択 → 「攻略ギミックに追加」で作成、" +
+                                "または上の「メカニクス追加」で手動作成。");
             return;
         }
 
@@ -1532,14 +1574,15 @@ public sealed class TriggerEditorTab : ITab
     private void DrawMechanicStrategyEditor(StrategyProfile profile, MechanicStrategy mechanic, int index)
     {
         var enabled = mechanic.Enabled;
-        if (ImGui.Checkbox("Enabled##mechanic-enabled", ref enabled))
+        if (ImGui.Checkbox("有効##mechanic-enabled", ref enabled))
         {
             mechanic.Enabled = enabled;
             _dirty = true;
         }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("OFF にするとこのメカニクスは戦闘中に発動しない");
 
         ImGui.SameLine();
-        if (ImGui.SmallButton("Delete mechanic"))
+        if (ImGui.SmallButton("メカニクスを削除"))
         {
             profile.Mechanics.RemoveAt(index);
             _dirty = true;
@@ -1548,81 +1591,96 @@ public sealed class TriggerEditorTab : ITab
 
         var id = mechanic.Id;
         ImGui.SetNextItemWidth(220f * ImGuiHelpers.GlobalScale);
-        if (ImGui.InputText("Id##mechanic-id", ref id, 64))
+        if (ImGui.InputText("ID##mechanic-id", ref id, 64))
         {
             mechanic.Id = string.IsNullOrWhiteSpace(id) ? mechanic.Id : id.Trim();
             _dirty = true;
         }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("内部識別子（英数字推奨）");
 
         var label = mechanic.Label;
         ImGui.SetNextItemWidth(320f * ImGuiHelpers.GlobalScale);
-        if (ImGui.InputText("Label##mechanic-label", ref label, 128))
+        if (ImGui.InputText("ラベル##mechanic-label", ref label, 128))
         {
             mechanic.Label = label;
             _dirty = true;
         }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("UI に表示される名前。日本語可（例：「無の肥大」）");
 
         var time = (float)(mechanic.Time ?? 0);
         ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
-        if (ImGui.InputFloat("Time (s)##mechanic-time", ref time, 0.5f, 1f, "%.1f"))
+        if (ImGui.InputFloat("発動時刻(s)##mechanic-time", ref time, 0.5f, 1f, "%.1f"))
         {
             mechanic.Time = time <= 0 ? null : time;
             _dirty = true;
         }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("戦闘開始からの相対秒。録画から自動入力されるが手動で上書き可。\n" +
+                                                     "「観測キャストに紐付け」している場合は録画 aggregate の値を使うので無視される");
 
         ImGui.SameLine();
         var duration = (float)(mechanic.Duration ?? 0);
         ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
-        if (ImGui.InputFloat("Duration##mechanic-duration", ref duration, 0.5f, 1f, "%.1f"))
+        if (ImGui.InputFloat("継続時間##mechanic-duration", ref duration, 0.5f, 1f, "%.1f"))
         {
             mechanic.Duration = duration <= 0 ? null : duration;
             _dirty = true;
         }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("ミニマップやタイムラインに表示し続ける秒数（0=即終了）");
 
         ImGui.SameLine();
         var warn = (float)(mechanic.AdvanceWarningSec ?? 0);
         ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
-        if (ImGui.InputFloat("Warn##mechanic-warn", ref warn, 0.5f, 1f, "%.1f"))
+        if (ImGui.InputFloat("先行通知秒数##mechanic-warn", ref warn, 0.5f, 1f, "%.1f"))
         {
             mechanic.AdvanceWarningSec = warn <= 0 ? null : warn;
             _dirty = true;
         }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("ギミック発動の何秒前に音声 / 視覚通知を出すか。\n" +
+                                                     "5 にすると「5 秒前にカウントダウン開始」");
 
         DrawMechanicAttachEditor(profile, mechanic);
         DrawMechanicEvidence(mechanic);
 
         var role = mechanic.Role ?? string.Empty;
         ImGui.SetNextItemWidth(160f * ImGuiHelpers.GlobalScale);
-        if (ImGui.InputText("Role filter##mechanic-role", ref role, 32))
+        if (ImGui.InputText("対象ロール##mechanic-role", ref role, 32))
         {
             mechanic.Role = string.IsNullOrWhiteSpace(role) ? null : role;
             _dirty = true;
         }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("空欄なら全員対象。\n" +
+                                                     "tank / mt / st / healer / h1 / h2 / dps / melee / ranged / caster のいずれか。\n" +
+                                                     "自分のロールが一致するときだけこのメカニクスが発動する");
 
         ImGui.SameLine();
         var job = mechanic.Job ?? string.Empty;
         ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
-        if (ImGui.InputText("Job filter##mechanic-job", ref job, 16))
+        if (ImGui.InputText("対象ジョブ##mechanic-job", ref job, 16))
         {
             mechanic.Job = string.IsNullOrWhiteSpace(job) ? null : job;
             _dirty = true;
         }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("空欄なら全ジョブ対象。\n" +
+                                                     "PLD / WAR / GNB / DRK 等のジョブ略称（大文字小文字どちらでも可）");
 
         var callout = mechanic.Callout ?? string.Empty;
         ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputText("Callout##mechanic-callout", ref callout, 256))
+        if (ImGui.InputText("読み上げ文##mechanic-callout", ref callout, 256))
         {
             mechanic.Callout = string.IsNullOrWhiteSpace(callout) ? null : callout;
             _dirty = true;
         }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("TTS で読み上げ + 中央オーバーレイの文字。\n" +
+                                                     "例：「中央安置」「散開」「シェイク + ランパート」");
 
         var warning = mechanic.WarningText ?? string.Empty;
         ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputText("Warning text##mechanic-warning", ref warning, 256))
+        if (ImGui.InputText("先行通知文##mechanic-warning", ref warning, 256))
         {
             mechanic.WarningText = string.IsNullOrWhiteSpace(warning) ? null : warning;
             _dirty = true;
         }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("先行通知秒数前に読み上げる文字。空欄なら callout を流用");
 
         var gimmick = mechanic.Gimmick ?? "scatter";
         var gimmickIndex = Array.IndexOf(ArenaViewGimmicks, gimmick);
@@ -1630,25 +1688,28 @@ public sealed class TriggerEditorTab : ITab
         {
             gimmickIndex = 0;
         }
-        ImGui.SetNextItemWidth(220f * ImGuiHelpers.GlobalScale);
-        if (ImGui.Combo("Minimap gimmick##mechanic-gimmick", ref gimmickIndex, ArenaViewGimmicks, ArenaViewGimmicks.Length))
+        var gimmickLabels = Localization.LocalizeAll(ArenaViewGimmicks, Localization.Gimmick);
+        ImGui.SetNextItemWidth(280f * ImGuiHelpers.GlobalScale);
+        if (ImGui.Combo("ミニマップ表示形状##mechanic-gimmick", ref gimmickIndex, gimmickLabels, gimmickLabels.Length))
         {
             mechanic.Gimmick = ArenaViewGimmicks[gimmickIndex];
             _dirty = true;
         }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("ミニマップの俯瞰図に出すギミック形状");
 
         ImGui.SameLine();
         var color = mechanic.Color ?? string.Empty;
         ImGui.SetNextItemWidth(120f * ImGuiHelpers.GlobalScale);
-        if (ImGui.InputText("Color##mechanic-color", ref color, 16))
+        if (ImGui.InputText("色 (#RRGGBB)##mechanic-color", ref color, 16))
         {
             mechanic.Color = string.IsNullOrWhiteSpace(color) ? null : color;
             _dirty = true;
         }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("タイムライン / ノート上での色付け");
 
         var positions = string.Join(", ", mechanic.Positions);
         ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputText("Positions CSV##mechanic-positions", ref positions, 256))
+        if (ImGui.InputText("散開ポジ参照(CSV)##mechanic-positions", ref positions, 256))
         {
             mechanic.Positions = positions
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -1658,7 +1719,9 @@ public sealed class TriggerEditorTab : ITab
         }
         if (ImGui.IsItemHovered())
         {
-            ImGui.SetTooltip("Leave empty to use all spread positions, or enter slots like MT,H1,D1.");
+            ImGui.SetTooltip("「散開ポジション」テーブルで定義した slot を CSV で指定。\n" +
+                             "例：MT,H1,D1\n" +
+                             "空欄なら全 slot を使う。指定すると該当 slot のドットだけミニマップに出る");
         }
 
         var safeZoneAction = new ActionDefinition { SafeZone = mechanic.SafeZone };
@@ -1668,17 +1731,19 @@ public sealed class TriggerEditorTab : ITab
 
     private void DrawMechanicAttachEditor(StrategyProfile profile, MechanicStrategy mechanic)
     {
-        var attached = mechanic.AttachedTo?.CastName ?? mechanic.AttachedTo?.CastId ?? "(timeline time)";
-        ImGui.TextDisabled($"Attached: {attached}");
+        var attached = mechanic.AttachedTo?.CastName ?? mechanic.AttachedTo?.CastId ?? "（時刻指定）";
+        ImGui.TextDisabled($"紐付け先: {attached}");
         ImGui.SameLine();
-        if (ImGui.SmallButton("Attach observed cast"))
+        if (ImGui.SmallButton("録画キャストに紐付け"))
         {
             _attachStrategyProfileId = profile.Id;
             _attachStrategyMechanicId = mechanic.Id;
             ImGui.OpenPopup("strategy-attach-popup");
         }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("録画から拾った特定 cast にこのメカニクスを紐付ける。\n" +
+                                                     "紐付けると発動時刻が録画 aggregate から自動解決される。");
         ImGui.SameLine();
-        if (mechanic.AttachedTo is not null && ImGui.SmallButton("Clear attach"))
+        if (mechanic.AttachedTo is not null && ImGui.SmallButton("紐付け解除"))
         {
             mechanic.AttachedTo = null;
             _dirty = true;
@@ -1699,7 +1764,7 @@ public sealed class TriggerEditorTab : ITab
             ? $"{occurrenceSeen}/{mechanic.ObservedCount ?? occurrenceSeen}"
             : $"{mechanic.ObservedCount ?? 0}";
         var jitter = mechanic.TimeJitterSeconds is { } j ? $"{j:0.0}s" : "-";
-        ImGui.TextDisabled($"Learned: {mechanic.SourceEventType ?? "event"} / seen {seen} / confidence {confidence} / jitter {jitter}");
+        ImGui.TextDisabled($"録画学習: {mechanic.SourceEventType ?? "event"} / 観測 {seen} / 信頼度 {confidence} / 時刻ばらつき {jitter}");
     }
 
     private void DrawStrategyAttachPopup()
