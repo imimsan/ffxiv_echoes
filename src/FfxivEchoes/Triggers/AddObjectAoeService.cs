@@ -96,6 +96,12 @@ public sealed class AddObjectAoeService : IDisposable
         return $"id:{dataId}";
     }
 
+    public static string MakeObjectAoeSuppressKey(uint dataId, string? name)
+        => MakeGroupKey(dataId, name);
+
+    public static string MakeLiveObjectAoeSuppressKey(uint dataId, string? name)
+        => MakeObjectAoeSuppressKey(dataId, name);
+
     private static string MakeCacheKey(uint dataId, string? name)
         => $"id:{dataId}:name:{(name ?? string.Empty).Trim()}";
 
@@ -485,6 +491,29 @@ public sealed class AddObjectAoeService : IDisposable
         if (profile.ObjectAoeRules.Any(rule => ObjectAoeRuleResolver.MatchesIgnoringEnabled(rule, dataId, name)))
         {
             return;
+        }
+
+        // 名前ベースの強化重複防止：同名 (object_name 一致) のルールが既存なら、DataId 違いでも
+        // 重複扱いで skip する。
+        // 動機：月の底のゾディアーク add (data_id=9020) が変身演出で actor.Name が
+        // 「ケツァクウァトル」に変わり、ケラノウス・エイドロン (0x67E1) を発動。これを学習すると
+        // dataId=9020 で PersistLearnedObjectRule が呼ばれ、既存ルール (DataId=14388 = 本物の
+        // ケツァクウァトル本体) と MatchesIgnoringEnabled で DataId mismatch と判定 →
+        // 重複扱いされず新規ルール (data_id 省略、半径 15m) が量産され、変身体 4 体に
+        // 誤発火して画面中央に正体不明のドーナツが出る regression が起きていた。
+        // 名前一致を優先することで、同名 actor の DataId バリエーションを 1 ルールに統合する。
+        var nameTrimmed = name?.Trim();
+        if (!string.IsNullOrEmpty(nameTrimmed))
+        {
+            if (profile.ObjectAoeRules.Any(rule =>
+                !string.IsNullOrWhiteSpace(rule.ObjectName) &&
+                string.Equals(rule.ObjectName!.Trim(), nameTrimmed, StringComparison.OrdinalIgnoreCase)))
+            {
+                _log.Information(
+                    "[FfxivEchoes] AddObjectAoe: 同名ルール既存のため学習スキップ name={Name} learnedDataId={DataId}",
+                    nameTrimmed, dataId);
+                return;
+            }
         }
 
         var rule = ObjectAoeRuleResolver.CreateLearnedRule(dataId, name, zone, source);
@@ -919,7 +948,7 @@ public sealed class AddObjectAoeService : IDisposable
                 continue;
             }
 
-            var key = $"live:name:{name}";
+            var key = MakeLiveObjectAoeSuppressKey(members[0].DataId, name);
             lock (_gate)
             {
                 if (_objectAoeSuppressUntil.TryGetValue(key, out var suppressUntil) &&
