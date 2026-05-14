@@ -96,6 +96,21 @@ public sealed class AutoTelegraphService : IDisposable
             return;
         }
 
+        // self-target cast（target_id が caster 自身）は演出 / バフ / add 召喚系で
+        // AoE 攻撃ではない。Lumina に EffectRange が登録されていても、本物の AoE
+        // ではないため描画スキップ。
+        // 例：月の底のゾディアーク本体「パラデイグマ」(0x67BF) は target_id=source_id で
+        // ケツァク add を召喚する演出 cast だが、Lumina 上 Donut 形状を持つため誤って
+        // ゾディアーク位置（アリーナ南端）を中心にドーナツが描画されていた。
+        // 正規の PB AoE（自爆系の caster 中心 AoE）は target_id=null なのでこのフィルタに
+        // 引っかからない。
+        if (ev.TargetId is { } tid && tid == ev.SourceId)
+        {
+            _log.Information("[FfxivEchoes] AutoTelegraph: skip self-target cast {Name} (id=0x{Id:X4})",
+                ev.CastActionName, ev.CastActionId);
+            return;
+        }
+
         var file = _store.GetByZone(_currentZone);
         if (!AutoAoeDisplayPolicy.IsEnabled(file))
         {

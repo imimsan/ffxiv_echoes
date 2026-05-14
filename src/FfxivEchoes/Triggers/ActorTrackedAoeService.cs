@@ -154,6 +154,15 @@ public sealed class ActorTrackedAoeService : IDisposable
         // ── 共通ゲート ──────────────────────────────────
         // 戦闘外の演出キャスト（zone 入った直後のボス登場演出など）で床塗りを出さない。
         if (!_inCombat) return;
+        // self-target cast は演出 / バフ / add 召喚系で AoE 攻撃ではないため床塗りしない。
+        // 月の底のパラデイグマ (0x67BF, target_id=source_id) はこのパターン。
+        // 正規 PB AoE は target_id=null なのでフィルタには引っかからない。
+        if (ev.TargetId is { } tid && tid == ev.SourceId)
+        {
+            _log.Debug("[FfxivEchoes] ActorTrackedAoe: skip self-target cast {Name} (id=0x{Id:X4})",
+                ev.CastActionName, ev.CastActionId);
+            return;
+        }
         var file = _store.GetByZone(_currentZone);
         if (!AutoAoeDisplayPolicy.IsEnabled(file)) return;
         if (IsFriendlyActor(ev.SourceId)) return;
