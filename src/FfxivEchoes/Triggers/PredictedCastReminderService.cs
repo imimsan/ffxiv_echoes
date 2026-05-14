@@ -213,12 +213,13 @@ public sealed class PredictedCastReminderService : IDisposable
         var pendingActions = p.Actions is null
             ? null
             : AutoSafeCallPlanner.RemoveMinimapActionsForRaidWideMatch(file, p.Actions, match);
+        // 予測描画は無効化。録画ベース予測がアリーナ中央付近に居る「名前衝突 actor」
+        // （月の底のゾディアーク add が変身演出で『ケツァクウァトル』名になっている等）を
+        // ソースとして解決し、画面中央に正体不明のドーナツを描画する回帰を避けるため。
+        // ユーザーは「確定した cast 発動時にだけ AoE を見たい、予測描画は不要」と要望。
+        // TTS / overlay_text の事前警告アクションは下の actions ループで引き続き発行する。
         var suppressMinimap = AutoSafeCallPlanner.ShouldSuppressMinimap(file, match);
-        if (AutoAoeDisplayPolicy.IsEnabled(file) && ShouldDrawAutoInferredPredictionVisual(suppressMinimap))
-        {
-            TryDrawPredictedMarker(file, p);
-            TryEmitPredictedFloorPaint(p);
-        }
+        _ = suppressMinimap; // 予測描画無効化に伴い未使用
 
         var actions = pendingActions is null
             ? new List<ActionDefinition>(BuildDefaultWarningActions(p.Label, p.AdvanceWarningSec))

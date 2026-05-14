@@ -26,6 +26,7 @@ public class Configuration : IPluginConfiguration
     /// 必要なときはユーザーが各トリガーに明示的に overlay_text を入れる。</summary>
     public bool AutoVisualForTts { get; set; } = false;
 
+
     // プロファイル
     public string ActiveProfile { get; set; } = "default";
 
