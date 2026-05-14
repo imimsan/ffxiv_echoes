@@ -84,8 +84,21 @@ public sealed class ObjectCapture : IDisposable
                 continue;
             }
 
+            var pos = new Vector3(obj.Position.X, obj.Position.Y, obj.Position.Z);
+
+            // FFXIV: actor が ObjectTable に登録された直後はまだ position が実位置に
+            // 初期化されておらず、ゾーン共通の placeholder 座標 (100, *, 100) が返ることがある。
+            // 戦闘開始の resnap タイミングで全 NPC をこの座標で publish してしまうと、
+            // AddObjectAoeService が member.Pos = (100, 100) として AoE を学習・発火し、
+            // ケツァクウァトル等 add NPC の AoE がアリーナ中心付近に大量誤発火する。
+            // 実位置に初期化されてから（= 次フレーム以降）の publish に遅延させる。
+            if (IsUninitializedPlaceholderPosition(pos))
+            {
+                continue;
+            }
+
             // PC のペット（フェアリー・エオス / カーバンクル / クイーン / バハムート 等）を
-            // 判定。LuminaPcDetector で BattleNpcSubKind.Pet 一次判定 + OwnerId 二次判定を一括。
+            // 判定。LuminaPcDetector の OwnerId 経由判定で確実に PC 召喚物のみを除外。
             // ボスの召喚物（owner=boss）は通常 mechanic として価値があるので IsPlayer=false で通す。
             var isPlayerOwned = obj is IBattleNpc bnpc && _pcDetector.IsPetBnpc(bnpc);
 
@@ -98,7 +111,6 @@ public sealed class ObjectCapture : IDisposable
             }
 
             // 新規出現
-            var pos = new Vector3(obj.Position.X, obj.Position.Y, obj.Position.Z);
             _seen[key] = new ObjectSnapshot(obj.Name.TextValue, obj.BaseId);
             _bus.Publish(new ObjectAppearedEvent(
                 Timestamp: now,
@@ -131,6 +143,17 @@ public sealed class ObjectCapture : IDisposable
                 _seen.Remove(id);
             }
         }
+    }
+
+    /// <summary>
+    /// FFXIV の ObjectTable は actor が登録された直後 / 一時的に画面外にいる場合、
+    /// position として「ゾーン共通の placeholder 座標 (100, *, 100)」を返すことがある。
+    /// 戦闘開始の resnap タイミングで取得すると未初期化の placeholder が返るため、
+    /// 実位置に初期化されるまで publish を遅延させる必要がある。
+    /// </summary>
+    private static bool IsUninitializedPlaceholderPosition(in Vector3 pos)
+    {
+        return MathF.Abs(pos.X - 100f) < 0.01f && MathF.Abs(pos.Z - 100f) < 0.01f;
     }
 
     private static bool IsInteresting(ObjectKind kind) => kind switch
