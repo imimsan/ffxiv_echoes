@@ -136,14 +136,16 @@ public sealed class AutoTelegraphService : IDisposable
 
         var arena = AutoAoeDisplayPolicy.ResolveArena(file);
 
-        // 旧実装では「アリーナ半径の 90% 超えは描画スキップ」していたが、
-        // 大きな AoE もユーザーは見たい（ZoNDIARK 級の巨大円も視覚補助として有用）。
-        // ノイズと感じたら「全体攻撃にマーク」で個別に隠す運用に統一する。
-        // 例外的に「アリーナの 1.5 倍超」など明らかに raid-wide 相当のものだけ skip。
+        // 全体攻撃ガード：半径がアリーナ半径とほぼ同じ以上の cast は「アリーナ全域 ≒
+        // 回避不能」なのでミニマップに描く意味がない（caster を中心に描くと、source actor が
+        // アリーナ中央に居るボス本体の場合、画面中央に巨大なドーナツが出てきて視界を覆う）。
+        // 月の底のゾディアーク本体「パラデイグマ」(0x67BF) は Donut 形状で半径がアリーナ
+        // 半径級のため、ここで skip しないと「パラデイグマ詠唱と同時に画面中央にドーナツ」
+        // が出る（ユーザー報告の典型症状）。MinimapWindow.DrawActualAoeShape の 0.9 ガードと
+        // 揃え、かつ CastType=2/5 限定だった条件を撤廃して Donut (6/7/10) も対象に含める。
         var preview = AoeResolver.Resolve(_dataManager, ev.CastActionId, _log);
         if (preview is not null &&
-            preview.CastType is 2 or 5 &&
-            preview.Radius >= arena.ArenaRadius * 1.5)
+            preview.Radius >= arena.ArenaRadius * 0.9)
         {
             _log.Information(
                 "[FfxivEchoes] AutoTelegraph: skip raid-wide-equivalent AoE {Name} radius={R}m castType={Ct}",

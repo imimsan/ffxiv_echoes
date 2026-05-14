@@ -166,6 +166,20 @@ public sealed class ActorTrackedAoeService : IDisposable
             ev.TargetId, ev.TargetWorld, expiresAt);
         if (reg is null) return;
 
+        // 全体攻撃ガード：半径がアリーナ半径とほぼ同じ以上の cast は床塗りで描く意味がない
+        // （回避不能 = 全体扱い）。月の底のゾディアーク本体「パラデイグマ」(0x67BF) は
+        // Donut 形状で source actor (ゾディアーク本体 = アリーナ中央付近) を中心に描画
+        // されると「画面中央のドーナツ」になる。これを入口で skip する。
+        // MinimapWindow.DrawActualAoeShape (0.9 倍ガード) および AutoTelegraphService.OnCastStart
+        // と揃える。
+        var arenaForGate = AutoAoeDisplayPolicy.ResolveArena(file);
+        if (arenaForGate.ArenaRadius > 0 && reg.Radius >= arenaForGate.ArenaRadius * 0.9f)
+        {
+            _log.Debug("[FfxivEchoes] ActorTrackedAoe: skip raid-wide-equivalent cast {Name} (id=0x{Id:X4}) r={R}m arena={A}m",
+                ev.CastActionName, ev.CastActionId, reg.Radius, arenaForGate.ArenaRadius);
+            return;
+        }
+
         // Phase: cast 開始 = 確定。常に Confirmed として登録。
         reg.Phase = AoePhase.Confirmed;
         reg.PhaseStartedAt = DateTimeOffset.UtcNow;
