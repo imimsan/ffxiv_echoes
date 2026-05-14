@@ -209,6 +209,7 @@ public sealed class AutoTelegraphService : IDisposable
                 arenaDepth: arena.ArenaDepth,
                 lockedArenaCenter: arena.LockedArenaCenter,
                 aoeRadius: knownGeometry ? knownSpec.RadiusM : null,
+                aoeHalfWidthM: knownGeometry && knownSpec.HalfWidthM > 0 ? knownSpec.HalfWidthM : null,
                 aoeCastType: knownGeometry ? knownSpec.CastType : null,
                 autoLuminaCastId: ev.CastActionId);
             PublishAutoSafeCall(ev, namedSafeCall);

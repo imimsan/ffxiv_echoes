@@ -103,6 +103,7 @@ public sealed class MinimapWindow : Window, IDisposable
         Vector3? sourceWorld = null,
         IReadOnlyList<StrategyPosition>? strategyPositions = null,
         float? aoeRadius = null,
+        float? aoeHalfWidthM = null,
         int? aoeCastType = null,
         uint? aoeOmenId = null,
         IReadOnlyList<Vector3>? multiSourceWorlds = null,
@@ -134,6 +135,7 @@ public sealed class MinimapWindow : Window, IDisposable
             SourceWorld: sourceWorld,
             StrategyPositions: strategyPositions?.ToArray() ?? Array.Empty<StrategyPosition>(),
             AoeRadius: aoeRadius,
+            AoeHalfWidthM: aoeHalfWidthM,
             AoeCastType: aoeCastType,
             AoeOmenId: aoeOmenId,
             MultiSourceWorlds: multiSourceWorlds?.ToArray() ?? Array.Empty<Vector3>(),
@@ -897,11 +899,12 @@ public sealed class MinimapWindow : Window, IDisposable
         if (item.AoeRadius is not { } radiusM || radiusM <= 0) return;
         if (item.AoeCastType is not { } castType) return;
 
-        // 全体攻撃判定：アリーナ半径を大きく超える円形 AoE は
+        // 全体攻撃判定：半径がアリーナ半径とほぼ同じ（または超える）円形 AoE は
         // 「アリーナ全体が危険」を意味し、ミニマップで形を描いても意味がない
         // （画面が真っ赤になるだけ）。callout だけ残して形状描画はスキップ。
+        // 閾値 0.9 はコキュートス等「半径≒アリーナ半径」の全体攻撃を捉えるための値。
         if (item.ArenaRadius > 0 &&
-            radiusM >= item.ArenaRadius * 1.5f &&
+            radiusM >= item.ArenaRadius * 0.9f &&
             (castType == 2 || castType == 5))
         {
             return;
@@ -998,9 +1001,13 @@ public sealed class MinimapWindow : Window, IDisposable
             case 4:  // Line（矩形として描画。床塗り (ActorTrackedAoeService) と shape 一致）
             case 12: // Target-centered line
             {
-                // 床塗り側と同じ既定半幅。ピクセル空間に変換。
+                // 実半幅が判明していればそれを使い、ない場合のみ既定値 (5m) にフォールバック。
+                // 床塗り側 (ActorTrackedAoeService.ResolveHalfWidthForShape) と同じ解決規則。
                 var facing = item.DirectionAngleRad ?? 0f;
-                var halfWidthPx = ArenaProjection.WorldRadiusToMap(AoeGeometryPolicy.DefaultLineHalfWidthM, item.ArenaRadius, mapR);
+                var halfWidthM = item.AoeHalfWidthM is { } hw && hw > 0
+                    ? hw
+                    : AoeGeometryPolicy.DefaultLineHalfWidthM;
+                var halfWidthPx = ArenaProjection.WorldRadiusToMap(halfWidthM, item.ArenaRadius, mapR);
                 if (halfWidthPx < 6f) halfWidthPx = 6f;
                 var fX = MathF.Cos(facing);
                 var fY = MathF.Sin(facing);
@@ -1605,6 +1612,7 @@ public sealed class MinimapWindow : Window, IDisposable
         Vector3? SourceWorld,
         IReadOnlyList<StrategyPosition> StrategyPositions,
         float? AoeRadius,
+        float? AoeHalfWidthM,
         int? AoeCastType,
         uint? AoeOmenId,
         IReadOnlyList<Vector3> MultiSourceWorlds,
