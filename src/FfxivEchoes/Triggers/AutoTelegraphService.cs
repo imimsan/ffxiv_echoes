@@ -309,6 +309,22 @@ public sealed class AutoTelegraphService : IDisposable
             return;
         }
 
+        // 演出系アクション除外：target=null かつ target_world が placeholder 座標
+        // (≈0, *, ≈0) の action は AoE 起点不明の演出系（月の底の「ケラノウス・エイドロン」
+        // 0x67E1 等：ゾディアーク add が「ケツァクウァトル」名で発動）。
+        // FromCaster=true で source 中心に描画すると ゾディアーク add の位置
+        // (100, 0, 79) = アリーナ中央付近に「正体不明のドーナツ」が誤発火するため
+        // 入口で skip する。caster 中心の正規 AoE は target_world にキャスター座標が
+        // 入るため本フィルタに引っかからない。
+        if ((ev.TargetId is null or 0) &&
+            ev.TargetWorld is { } tw &&
+            MathF.Abs(tw.X) < 0.1f && MathF.Abs(tw.Z) < 0.1f)
+        {
+            _log.Debug("[FfxivEchoes] AutoTelegraph(ActionUsed): skip 無効座標 action {Name} (id={Id:X4}) src={Src}",
+                ev.ActionName, ev.ActionId, ev.SourceId);
+            return;
+        }
+
         var file = _store.GetByZone(_currentZone);
         var isFriendly = ev.IsPlayer || IsFriendlyActor(ev.SourceId);
         var isRaidWide = AutoSafeCallPlanner.IsRaidWide(file, ev.ActionId, ev.ActionName);
