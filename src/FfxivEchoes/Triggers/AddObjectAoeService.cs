@@ -535,7 +535,7 @@ public sealed class AddObjectAoeService : IDisposable
                 group = new GroupState(key, ev.DataId, ev.ObjectName);
                 _groups[key] = group;
             }
-            group.Add(ev.DataId, ev.Position, now, ev.ObjectName);
+            group.Add(ev.DataId, ev.EntityId ?? ev.ObjectId, ev.Position, now, ev.ObjectName);
         }
 
         // 単体オブジェクト AoE は「学習済みか」を見てから発火可否を決める。
@@ -904,7 +904,7 @@ public sealed class AddObjectAoeService : IDisposable
                 list = new List<Member>();
                 groups.Add(name, list);
             }
-            list.Add(new Member(obj.BaseId, name, pos, now));
+            list.Add(new Member(obj.BaseId, obj.EntityId, name, pos, now));
         }
 
         foreach (var (name, members) in groups)
@@ -930,7 +930,7 @@ public sealed class AddObjectAoeService : IDisposable
             var group = new GroupState(key, members[0].DataId, name);
             foreach (var member in members)
             {
-                group.Add(member.DataId, member.Pos, now, member.Name);
+                group.Add(member.DataId, member.EntityId, member.Pos, now, member.Name);
             }
             FireGroup(group);
         }
@@ -1007,7 +1007,20 @@ public sealed class AddObjectAoeService : IDisposable
                 continue;
             }
 
-            zones.Add(BuildStaticAoeZone(learned.Value.Zone, member.Pos, arena.LockedArenaCenter));
+            // OnAppear 時点の position は出現直後の placeholder / 仮位置の場合があるため、
+            // 発火タイミングで ObjectTable から actor の現在位置を取り直す。
+            // 例：ゾディアーク add (data_id=9020) は (100, 0, 79) で出現後にケツァクウァトル化
+            // して別位置でアクション発動するため、出現時の position だと AoE が中央に集中誤描画される。
+            var actor = _objectTable?.SearchByEntityId(member.EntityId);
+            var livePos = actor is not null
+                ? new Vector3(actor.Position.X, actor.Position.Y, actor.Position.Z)
+                : member.Pos;
+            if (!IsUsableObjectAoePosition(livePos, arena.LockedArenaCenter))
+            {
+                continue;
+            }
+
+            zones.Add(BuildStaticAoeZone(learned.Value.Zone, livePos, arena.LockedArenaCenter));
             shapeNotes.Add(learned.Value.ShapeNote);
         }
 
@@ -1257,18 +1270,18 @@ public sealed class AddObjectAoeService : IDisposable
             Name = name;
         }
 
-        public void Add(uint dataId, Vector3 pos, DateTimeOffset now, string name)
+        public void Add(uint dataId, uint entityId, Vector3 pos, DateTimeOffset now, string name)
         {
             if (Members.Count == 0) FirstAddAt = now;
             LastAddAt = now;
             if (!string.IsNullOrEmpty(name)) Name = name;
-            Members.Add(new Member(dataId, name, pos, now));
+            Members.Add(new Member(dataId, entityId, name, pos, now));
         }
 
         public void MarkFired() => IsFired = true;
     }
 
-    private readonly record struct Member(uint DataId, string Name, Vector3 Pos, DateTimeOffset Time);
+    private readonly record struct Member(uint DataId, uint EntityId, string Name, Vector3 Pos, DateTimeOffset Time);
 
     private sealed class LiveScanWindow
     {
