@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
 using FfxivEchoes.Events;
+using FfxivEchoes.Utils;
 using Lumina.Excel.Sheets;
 
 namespace FfxivEchoes.Capture;
@@ -23,21 +24,54 @@ public sealed class StatusCapture : IDisposable
     private readonly IDataManager _dataManager;
     private readonly IEventBus _bus;
     private readonly IPluginLog _log;
+    private readonly LuminaPcDetector _pcDetector;
 
     private readonly Dictionary<ulong, ActorStatuses> _states = new();
     private readonly Dictionary<uint, string> _statusNameCache = new();
 
     public StatusCapture(
         IFramework framework, IObjectTable objectTable, IDataManager dataManager,
-        IEventBus bus, IPluginLog log)
+        IEventBus bus, IPluginLog log,
+        LuminaPcDetector pcDetector)
     {
+        // pcDetector は必須。null だと IsPlayer=false 一律で旧バグ（PC スキルが全部録画に残る）が
+        // 復活する。Plugin.cs の DI 順序保証と合わせて null 注入を起動時にクラッシュさせる。
         _framework = framework;
         _objectTable = objectTable;
         _dataManager = dataManager;
         _bus = bus;
         _log = log;
+        _pcDetector = pcDetector ?? throw new ArgumentNullException(nameof(pcDetector));
 
         _framework.Update += OnUpdate;
+    }
+
+    /// <summary>
+    /// Status ID と SourceId から PC 由来かを判定。
+    /// 1) Lumina ClassJobCategory が PC 専用 → true（決定論）
+    /// 2) source actor が IPlayerCharacter or PC ペット → true（PC が付与した buff/debuff）
+    /// </summary>
+    /// <remarks>
+    /// 罠：ここで「target=PC なら true」を入れてはいけない。
+    /// タンクバスター系の debuff（Damage Down / Vulnerability Up / Sludge 等）はボスが PC タンク
+    /// に付けるので target=PC, source=Boss の組み合わせになる。target=PC で true を返すと、
+    /// この種のボスデバフが BattleRecorder で IsPlayer=true 扱いになって録画から消え、
+    /// 攻略 mechanic 候補に上がらなくなる。Source 側の判定だけを信頼する。
+    /// </remarks>
+    private bool IsPlayerStatus(uint statusId, uint sourceId)
+    {
+        if (_pcDetector.IsPlayerStatus(statusId)) return true;
+        // source = PC（PC が他者に付与した buff/debuff）
+        // sourceId は EntityId 空間（uint）。SearchById(uint) のオーバーロードで EntityId 検索する。
+        // edge case：source actor が despawn 直後で ObjectTable に居ない場合、SearchById は null を返す。
+        // → IsPlayerOrPlayerOwned(null) = false → IsPlayer=false で扱う（録画される、安全側）。
+        // 「ボスが despawn 直前にかけたデバフ」が IsPlayer=false で記録されるので情報損失なし。
+        if (sourceId != 0)
+        {
+            var srcObj = _objectTable.FindByEntityOrObjectId(sourceId);
+            if (_pcDetector.IsPlayerOrPlayerOwned(srcObj)) return true;
+        }
+        return false;
     }
 
     public void Dispose()
@@ -114,19 +148,26 @@ public sealed class StatusCapture : IDisposable
                 var name = ResolveStatusName(snap.StatusId);
                 _bus.Publish(new StatusGainedEvent(
                     DateTimeOffset.UtcNow, (uint)actorId, actorName,
-                    snap.StatusId, name, snap.RemainingTime, snap.Stacks, snap.SourceId));
+                    snap.StatusId, name, snap.RemainingTime, snap.Stacks, snap.SourceId,
+                    IsPlayer: IsPlayerStatus(snap.StatusId, snap.SourceId)));
                 continue;
             }
 
             var stacksChanged = old.Stacks != snap.Stacks;
+            var refreshed = snap.RemainingTime > old.RemainingTime + 0.05f;
             var remainingChanged = Math.Abs(old.RemainingTime - snap.RemainingTime) > RemainingTimeUpdateThresholdSeconds;
-            // 残時間は単調減少なので「閾値以上の差」を増分として捉えると更新が必要なケースを拾える
-            // 増分（リフレッシュ）も含める：差が +0 以上を含めて判定する
-            if (stacksChanged || (snap.RemainingTime > old.RemainingTime + 0.05f) || remainingChanged && stacksChanged)
+            // 発火条件：
+            // - スタック変化（弱体・強化のスタック消費／追加）
+            // - リフレッシュ（残時間が増えた）
+            // - 残時間が閾値（0.5s）以上変化（debuff の自然減衰でタイムライン更新したい）
+            // 旧コードは `remainingChanged && stacksChanged` だったが、& は | より優先のため
+            // stacksChanged 単独でカバーされ実質デッドコードだった。
+            if (stacksChanged || refreshed || remainingChanged)
             {
                 _bus.Publish(new StatusUpdatedEvent(
                     DateTimeOffset.UtcNow, (uint)actorId,
-                    snap.StatusId, snap.Stacks, snap.RemainingTime));
+                    snap.StatusId, snap.Stacks, snap.RemainingTime,
+                    IsPlayer: IsPlayerStatus(snap.StatusId, snap.SourceId)));
             }
         }
 
@@ -139,7 +180,8 @@ public sealed class StatusCapture : IDisposable
             }
             var name = ResolveStatusName(old.StatusId);
             _bus.Publish(new StatusLostEvent(
-                DateTimeOffset.UtcNow, (uint)actorId, actorName, old.StatusId, name));
+                DateTimeOffset.UtcNow, (uint)actorId, actorName, old.StatusId, name,
+                IsPlayer: IsPlayerStatus(old.StatusId, old.SourceId)));
         }
 
         prev.Statuses = current;

@@ -124,6 +124,26 @@ public sealed class ActionDefinition
     [JsonPropertyName("arena_radius")]
     public double? ArenaRadius { get; set; }
 
+    /// <summary>arena_view: アリーナ形状（"circle" / "square" / "rect"）。未指定なら circle。</summary>
+    [JsonPropertyName("arena_shape")]
+    public string? ArenaShape { get; set; }
+
+    /// <summary>arena_view: 矩形系の幅（東西 m）。</summary>
+    [JsonPropertyName("arena_width")]
+    public double? ArenaWidth { get; set; }
+
+    /// <summary>arena_view: 矩形系の奥行（南北 m）。</summary>
+    [JsonPropertyName("arena_depth")]
+    public double? ArenaDepth { get; set; }
+
+    /// <summary>arena_view: アリーナ中心の世界座標 X（校正済の場合）。</summary>
+    [JsonPropertyName("arena_center_x")]
+    public double? ArenaCenterX { get; set; }
+
+    /// <summary>arena_view: アリーナ中心の世界座標 Z（校正済の場合）。</summary>
+    [JsonPropertyName("arena_center_z")]
+    public double? ArenaCenterZ { get; set; }
+
     [JsonPropertyName("strategy_profile_id")]
     public string? StrategyProfileId { get; set; }
 
@@ -132,6 +152,22 @@ public sealed class ActionDefinition
 
     [JsonPropertyName("strategy_positions")]
     public List<StrategyPosition>? StrategyPositions { get; set; }
+
+    /// <summary>arena_view: ユーザー定義のオブジェクト/敵マーカー（ボス・add 等）。</summary>
+    [JsonPropertyName("object_markers")]
+    public List<StrategyObjectMarker>? ObjectMarkers { get; set; }
+
+    /// <summary>arena_view: ユーザー定義の AoE 形状（円・ドーナツ・扇・矩形）。</summary>
+    [JsonPropertyName("aoe_zones")]
+    public List<StrategyAoeZone>? AoeZones { get; set; }
+
+    /// <summary>arena_view: 時間差 / 連鎖 AoE。エクサフレア等の順次着弾用。</summary>
+    [JsonPropertyName("aoe_sequence")]
+    public AoeSequence? AoeSequence { get; set; }
+
+    /// <summary>arena_view: 「特定バフ／デバフを持っている PT メンバーは色／バッジ強調」の指定。</summary>
+    [JsonPropertyName("party_status_highlights")]
+    public List<StatusHighlightSpec>? PartyStatusHighlights { get; set; }
 
     // 想定外フィールドを失わないための受け皿（フォーマットバージョン跨ぎの後方互換用）
     [JsonExtensionData]

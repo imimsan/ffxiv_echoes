@@ -85,10 +85,12 @@ public sealed class SafeCallDictionary
         lock (_gate)
         {
             // 1. cast_id 完全一致（最優先）
-            var idKey = $"0x{actionId:X4}";
-            if (_data.Overrides.TryGetValue(idKey, out var entry))
+            foreach (var idKey in BuildActionKeyCandidates(actionId))
             {
-                return entry;
+                if (_data.Overrides.TryGetValue(idKey, out var entry))
+                {
+                    return entry;
+                }
             }
 
             // 2. 名前パターン
@@ -118,9 +120,10 @@ public sealed class SafeCallDictionary
     public void Upsert(string castIdOrPattern, DictionaryEntry entry)
     {
         if (string.IsNullOrEmpty(castIdOrPattern)) return;
+        var key = NormalizeOverrideKey(castIdOrPattern);
         lock (_gate)
         {
-            _data.Overrides[castIdOrPattern] = entry;
+            _data.Overrides[key] = entry;
         }
         Save();
     }
@@ -134,6 +137,24 @@ public sealed class SafeCallDictionary
     public IReadOnlyList<NamePattern> AllPatterns()
     {
         lock (_gate) return _data.NamePatterns.ToArray();
+    }
+
+    private static IEnumerable<string> BuildActionKeyCandidates(uint actionId)
+    {
+        yield return $"0x{actionId:X4}";
+        yield return $"0x{actionId:X}";
+        yield return actionId.ToString("X4");
+        yield return actionId.ToString("X");
+    }
+
+    private static string NormalizeOverrideKey(string key)
+    {
+        var trimmed = key.Trim();
+        if (AoeResolver.TryParseCastId(trimmed, out var actionId))
+        {
+            return $"0x{actionId:X4}";
+        }
+        return trimmed;
     }
 
     private sealed class DictionaryFile
@@ -162,12 +183,27 @@ public sealed class SafeCallDictionary
         [JsonPropertyName("fan_deg")]
         public double? FanDeg { get; set; }
 
-        /// <summary>"manual" / "name_pattern" / "multi_cast_detected" / "omen" のどれか</summary>
+        /// <summary>"manual" / "name_pattern" / "multi_cast_detected" / "omen" / "hp_correlation" のどれか</summary>
         [JsonPropertyName("source")]
         public string? Source { get; set; }
 
         [JsonPropertyName("confidence")]
         public double? Confidence { get; set; }
+
+        /// <summary>
+        /// true なら「全体攻撃」とマークされている。ミニマップに範囲を描いても無意味
+        /// （回避不能 / アリーナ全域）なので描画スキップに使う。
+        /// HP 相関検知で 6/8 以上の PT メンバーが同時に被弾したものを自動マークする。
+        /// </summary>
+        [JsonPropertyName("raid_wide")]
+        public bool RaidWide { get; set; }
+
+        /// <summary>
+        /// AoE 半径のオーバーライド（メートル）。Lumina EffectRange が 0 や異常値の
+        /// アクション、あるいは NPC 側の自動攻撃で半径を手動指定したいケースに使う。
+        /// </summary>
+        [JsonPropertyName("aoe_radius_m")]
+        public double? AoeRadiusM { get; set; }
     }
 
     public sealed class NamePattern

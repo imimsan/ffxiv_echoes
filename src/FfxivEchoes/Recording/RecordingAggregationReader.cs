@@ -13,6 +13,14 @@ public static class RecordingAggregationReader
 {
     private const double OccurrenceClusterWindowSeconds = 6.0;
 
+    /// <summary>
+    /// PC スキル / ペット / HP IsPlayer フラグが録画ファイルに書き込まれるようになった
+    /// プラグインバージョンの下限（このバージョン以降の録画は IsPlayer による厳密フィルタ済み）。
+    /// これより古い録画は <see cref="PcSkillNameFilter"/> の名前ベース fallback に依存するため、
+    /// 警告ログで明示する。
+    /// </summary>
+    private const string MinSupportedPluginVersion = "0.1.0";
+
     public static AggregatedEvents AggregateFiles(
         IEnumerable<string> paths,
         Action<Exception, string>? onWarning = null)
@@ -32,7 +40,7 @@ public static class RecordingAggregationReader
                 var observationsInFile = new Dictionary<EventKey, List<double>>();
                 var partySourceInFile = new HashSet<EventKey>();
 
-                using var stream = File.OpenRead(path);
+                using var stream = RecordingFileIO.OpenReadShared(path);
                 using var reader = new StreamReader(stream);
                 string? line;
                 while ((line = reader.ReadLine()) is not null)
@@ -50,6 +58,21 @@ public static class RecordingAggregationReader
                         {
                             hasMeta = true;
                             ReadPartyMembers(root, partyMembers);
+                            // プラグインバージョン下限チェック：古い録画は IsPlayer フラグ未対応で
+                            // PcSkillNameFilter の名前 fallback に依存する。集計は通すが onWarning で通知。
+                            if (root.TryGetProperty("plugin_version", out var verEl) &&
+                                verEl.ValueKind == JsonValueKind.String)
+                            {
+                                var ver = verEl.GetString();
+                                if (!string.IsNullOrEmpty(ver) && CompareVersions(ver, MinSupportedPluginVersion) < 0)
+                                {
+                                    onWarning?.Invoke(
+                                        new InvalidDataException(
+                                            $"古い録画フォーマット (plugin_version={ver} < {MinSupportedPluginVersion})。" +
+                                            "IsPlayer フラグ非対応のため PC スキル混入の可能性あり。"),
+                                        path);
+                                }
+                            }
                             continue;
                         }
 
@@ -145,11 +168,34 @@ public static class RecordingAggregationReader
 
     private static bool IsPartyRelated(EventKey key, JsonElement evRoot, PartyIdentity partyMembers)
     {
+        var rawSource = ReadString(evRoot, "source") ?? ReadString(evRoot, "actor");
         if ((!string.IsNullOrEmpty(key.Source) && partyMembers.Names.Contains(key.Source)) ||
+            (!string.IsNullOrEmpty(rawSource) && partyMembers.Names.Contains(rawSource)) ||
             PartyIdMatches(evRoot, "source_id", partyMembers) ||
             PartyIdMatches(evRoot, "actor_id", partyMembers))
         {
             return true;
+        }
+
+        // 自己付与 status（source_id == target_id）の扱い：
+        //  - party meta が分かっている場合：source/target が PT メンバーの場合のみ「self-applied PC バフ」
+        //    として除外する。ボス自己強化（エンレイジ status 等）は source=ボスなので保持される。
+        //  - party meta が空 / object_id 不明の古い録画：従来通り「source==target なら PC 自己バフ扱い」で
+        //    フォールバック除外（旧録画はこれが唯一の self-buff 識別手段）。
+        if (key.Type is "status_gain" or "status_update" or "status_lose" &&
+            IsSelfAppliedStatus(evRoot, out var selfId))
+        {
+            if (partyMembers.ObjectIds.Count > 0)
+            {
+                // party meta あり：PT メンバーの self-buff のみ除外
+                if (partyMembers.ObjectIds.Contains(selfId)) return true;
+                // それ以外（ボス自己強化など）はフォールスルーで通常判定へ
+            }
+            else
+            {
+                // party meta なし（古い録画）：source==target なら PC 自己バフとみなす
+                return true;
+            }
         }
 
         var hasSource =
@@ -163,6 +209,42 @@ public static class RecordingAggregationReader
 
         return (!string.IsNullOrEmpty(key.Target) && partyMembers.Names.Contains(key.Target)) ||
                PartyIdMatches(evRoot, "target_id", partyMembers);
+    }
+
+    /// <summary>
+    /// SemVer 風バージョン文字列を比較。a &lt; b なら -1、a == b なら 0、a &gt; b なら 1。
+    /// "1.2.3" のような数値 . 区切りのみサポート。それ以外は 0（同等）扱い。
+    /// </summary>
+    private static int CompareVersions(string a, string b)
+    {
+        var aParts = a.Split('.', '-', '+');
+        var bParts = b.Split('.', '-', '+');
+        var len = Math.Max(aParts.Length, bParts.Length);
+        for (var i = 0; i < len; i++)
+        {
+            var ai = i < aParts.Length && int.TryParse(aParts[i], out var an) ? an : 0;
+            var bi = i < bParts.Length && int.TryParse(bParts[i], out var bn) ? bn : 0;
+            if (ai != bi) return ai < bi ? -1 : 1;
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// status イベントが「self-applied」（source_id == target_id）かを判定。
+    /// 一致した場合は <paramref name="selfId"/> に self の id を返す。PC 自己バフはほぼ全てこの条件
+    /// に当てはまる（ただしボス自己強化も同条件で当てはまるため、呼び出し側で party meta との
+    /// 照合を行う）。
+    /// </summary>
+    private static bool IsSelfAppliedStatus(JsonElement evRoot, out uint selfId)
+    {
+        selfId = 0;
+        if (!evRoot.TryGetProperty("source_id", out var srcEl) ||
+            !evRoot.TryGetProperty("target_id", out var tgtEl)) return false;
+        if (srcEl.ValueKind != JsonValueKind.Number || tgtEl.ValueKind != JsonValueKind.Number) return false;
+        if (!srcEl.TryGetUInt32(out var s) || !tgtEl.TryGetUInt32(out var t)) return false;
+        if (s == 0 || s != t) return false;
+        selfId = s;
+        return true;
     }
 
     private static bool PartyIdMatches(JsonElement evRoot, string propertyName, PartyIdentity partyMembers)
@@ -194,6 +276,7 @@ public static class RecordingAggregationReader
             "status_gain" or "status_lose" or "status_update" => StatusKey(type, evRoot),
             "hp_change" => HpKey(evRoot),
             "object_appear" or "object_disappear" => ObjectKey(type, evRoot),
+            "player_pos" => null, // 録画スキャン専用なので集計対象外
             _ => new EventKey(type, null, null, null, null),
         };
     }
@@ -202,24 +285,43 @@ public static class RecordingAggregationReader
     {
         var castId = evRoot.TryGetProperty("cast_id", out var c) ? c.GetString() : null;
         var castName = evRoot.TryGetProperty("cast_name", out var n) ? n.GetString() : null;
-        // 集計時のキーから source を除外し、同じ cast_id を 1 行に纏める。
-        // 同じ cast を複数アクターが同時詠唱（ボス + 翼 ×2 等）しても集計上は 1 件。
-        // 発動者情報は recording の raw データに残っているので必要なら参照可能。
-        return new EventKey(type, castId, castName, null, null);
+        return new EventKey(type, castId, castName, ReadSource(evRoot), ReadTarget(evRoot));
     }
 
     private static EventKey ActionKey(JsonElement evRoot)
     {
         var actionId = evRoot.TryGetProperty("action_id", out var c) ? c.GetString() : null;
         var actionName = evRoot.TryGetProperty("action_name", out var n) ? n.GetString() : null;
-        // action_used も同様に source を除外して纏める
-        return new EventKey("action_used", actionId, actionName, null, null);
+        // オートアタックは独立した EventType として扱う。
+        // 同じ action_id でも boss/peer ごとに「アタック」が来る周期は別物として可視化したいので
+        // タイムライン側で個別に扱えるよう型を分ける。
+        var isAutoAttack = evRoot.TryGetProperty("auto_attack", out var aaEl) &&
+                           aaEl.ValueKind == JsonValueKind.True;
+        if (!isAutoAttack)
+        {
+            isAutoAttack = IsAutoAttackActionName(actionName);
+        }
+        var type = isAutoAttack ? "auto_attack" : "action_used";
+        return new EventKey(type, actionId, actionName, ReadSource(evRoot), ReadTarget(evRoot));
     }
 
     private static EventKey StatusKey(string type, JsonElement evRoot)
     {
         var statusId = evRoot.TryGetProperty("status_id", out var i) ? i.GetUInt32().ToString() : null;
         var statusName = evRoot.TryGetProperty("status_name", out var n) ? n.GetString() : null;
+
+        // source: 文字列があればそれ、無ければ source_id を文字列化（PC 由来 status の filtering に使う）。
+        // 旧実装は null ハードコードで、self-buff の source 識別がフィルタに届かなかった。
+        var source = evRoot.TryGetProperty("source", out var s) && s.ValueKind == JsonValueKind.String
+            ? s.GetString()
+            : null;
+        if (string.IsNullOrEmpty(source) &&
+            evRoot.TryGetProperty("source_id", out var sourceId) &&
+            sourceId.ValueKind == JsonValueKind.Number)
+        {
+            source = sourceId.GetUInt32().ToString();
+        }
+
         var target = evRoot.TryGetProperty("target", out var t) && t.ValueKind == JsonValueKind.String
             ? t.GetString()
             : null;
@@ -229,7 +331,7 @@ public static class RecordingAggregationReader
         {
             target = targetId.GetUInt32().ToString();
         }
-        return new EventKey(type, statusId, statusName, null, target);
+        return new EventKey(type, statusId, statusName, source, target);
     }
 
     private static EventKey HpKey(JsonElement evRoot)
@@ -252,6 +354,47 @@ public static class RecordingAggregationReader
 
         var name = evRoot.TryGetProperty("object_name", out var n) ? n.GetString() : null;
         return new EventKey(type, id, name, name, null);
+    }
+
+    private static string? ReadSource(JsonElement evRoot) =>
+        ReadString(evRoot, "source") ??
+        ReadString(evRoot, "actor") ??
+        ReadUInt32String(evRoot, "source_id") ??
+        ReadUInt32String(evRoot, "actor_id");
+
+    private static string? ReadTarget(JsonElement evRoot) =>
+        ReadString(evRoot, "target") ??
+        ReadUInt32String(evRoot, "target_id");
+
+    private static string? ReadString(JsonElement evRoot, string propertyName)
+    {
+        return evRoot.TryGetProperty(propertyName, out var value) &&
+               value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
+    }
+
+    private static string? ReadUInt32String(JsonElement evRoot, string propertyName)
+    {
+        return evRoot.TryGetProperty(propertyName, out var value) &&
+               value.ValueKind == JsonValueKind.Number &&
+               value.TryGetUInt32(out var id)
+            ? id.ToString()
+            : null;
+    }
+
+    private static bool IsAutoAttackActionName(string? actionName)
+    {
+        if (string.IsNullOrWhiteSpace(actionName))
+        {
+            return false;
+        }
+
+        var normalized = actionName.Trim();
+        return string.Equals(normalized, "攻撃", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(normalized, "Attack", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(normalized, "Auto Attack", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(normalized, "Auto-Attack", StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed class AggregateBuilder

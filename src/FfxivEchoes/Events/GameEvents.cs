@@ -49,7 +49,8 @@ public sealed record CastStartedEvent(
     uint CastActionId,
     string CastActionName,
     float CastTime,
-    uint? TargetId
+    uint? TargetId,
+    System.Numerics.Vector3? TargetWorld = null
 ) : IGameEvent;
 
 public sealed record CastCompletedEvent(
@@ -75,7 +76,9 @@ public sealed record ActionUsedEvent(
     uint ActionId,
     string ActionName,
     uint? TargetId,
-    bool IsAutoAttack
+    bool IsAutoAttack,
+    bool IsPlayer = false,
+    System.Numerics.Vector3? TargetWorld = null
 ) : IGameEvent;
 
 // ─── ステータス（バフ／デバフ） ──────────────────────────────────────
@@ -88,7 +91,8 @@ public sealed record StatusGainedEvent(
     string StatusName,
     float RemainingTime,
     ushort Stacks,
-    uint SourceId
+    uint SourceId,
+    bool IsPlayer = false
 ) : IGameEvent;
 
 public sealed record StatusLostEvent(
@@ -96,7 +100,8 @@ public sealed record StatusLostEvent(
     uint TargetId,
     string TargetName,
     uint StatusId,
-    string StatusName
+    string StatusName,
+    bool IsPlayer = false
 ) : IGameEvent;
 
 public sealed record StatusUpdatedEvent(
@@ -104,7 +109,8 @@ public sealed record StatusUpdatedEvent(
     uint TargetId,
     uint StatusId,
     ushort Stacks,
-    float RemainingTime
+    float RemainingTime,
+    bool IsPlayer = false
 ) : IGameEvent;
 
 // ─── HP 変化 ─────────────────────────────────────────────────────────
@@ -115,7 +121,8 @@ public sealed record HpChangedEvent(
     string ActorName,
     float HpPct,
     uint CurrentHp,
-    uint MaxHp
+    uint MaxHp,
+    bool IsPlayer = false
 ) : IGameEvent;
 
 // ─── オブジェクト出現／消失（F9） ──────────────────────────────────
@@ -125,12 +132,35 @@ public sealed record ObjectAppearedEvent(
     uint ObjectId,
     string ObjectName,
     uint DataId,
-    System.Numerics.Vector3 Position) : IGameEvent;
+    System.Numerics.Vector3 Position,
+    bool IsPlayer = false,
+    uint? EntityId = null) : IGameEvent;
+
+public sealed record ObjectGroupAppearedEvent(
+    DateTimeOffset Timestamp,
+    string ObjectName,
+    uint DataId,
+    int Count,
+    IReadOnlyList<System.Numerics.Vector3> Positions) : IGameEvent;
 
 public sealed record ObjectDisappearedEvent(
     DateTimeOffset Timestamp,
     uint ObjectId,
     string ObjectName) : IGameEvent;
+
+// ─── プレイヤー位置（アリーナ寸法推定用） ───────────────────────────
+
+/// <summary>
+/// 戦闘中に定期サンプルされる自分（LocalPlayer）の位置。
+/// </summary>
+/// <remarks>
+/// アリーナ寸法を録画から推定する用途。プレイヤーは戦闘で必ず端まで動かされるので、
+/// LocalPlayer 位置の bbox がアリーナ床面とほぼ一致する。
+/// 戦闘中のみ発火し、戦闘終了後は止める（屋外ぶらつきを混ぜない）。
+/// </remarks>
+public sealed record LocalPlayerPositionEvent(
+    DateTimeOffset Timestamp,
+    System.Numerics.Vector3 Position) : IGameEvent;
 
 // ─── トリガー発火（M6 で発行） ─────────────────────────────────────
 

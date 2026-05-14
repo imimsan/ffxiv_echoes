@@ -24,6 +24,24 @@ public sealed class TriggerAutoGenerator
         IReadOnlyList<TriggerDefinition> existing,
         IReadOnlyList<string>? partyMembers = null)
     {
+        return Generate(agg, existing, partyMembers, AutoAoeDisplayPolicy.ResolveArena(null), null);
+    }
+
+    public GenerationResult Generate(
+        AggregatedEvents agg,
+        TriggerFile file,
+        IReadOnlyList<string>? partyMembers = null)
+    {
+        return Generate(agg, file.Triggers, partyMembers, AutoAoeDisplayPolicy.ResolveArena(file), file);
+    }
+
+    private GenerationResult Generate(
+        AggregatedEvents agg,
+        IReadOnlyList<TriggerDefinition> existing,
+        IReadOnlyList<string>? partyMembers,
+        AutoAoeArenaConfig arena,
+        TriggerFile? file)
+    {
         var existingCastIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var trig in existing)
         {
@@ -40,33 +58,58 @@ public sealed class TriggerAutoGenerator
         var generated = new List<TriggerDefinition>();
         var skipped = new List<string>();
 
+        // 同じ cast_id を 1 回だけ生成するための集合。
+        // 集計側 EventKey が (cast_id, source, target) で分裂するようになったので、
+        // 同 cast_id 異 source の AggregatedEvent が複数あると、ここで dedup しないと
+        // auto_cast_6c60 / auto_cast_6c60_source / auto_cast_6c60_source_2 ... のように
+        // ほぼ同内容の trigger が大量に生まれる。観測回数が最も多いものを代表として採用する。
+        var bestPerCastId = new Dictionary<string, AggregatedEvent>(StringComparer.OrdinalIgnoreCase);
         foreach (var ev in agg.Events)
         {
             if (ev.Key.Type != "cast_start") continue;
             if (string.IsNullOrEmpty(ev.Key.Id)) continue;
-
             if (!string.IsNullOrEmpty(ev.Key.Source) && partySet.Contains(ev.Key.Source))
             {
                 continue;
             }
-
-            if (existingCastIds.Contains(ev.Key.Id))
+            if (!bestPerCastId.TryGetValue(ev.Key.Id, out var prev) || ev.Count > prev.Count)
             {
-                skipped.Add($"{ev.Key.Name ?? ev.Key.Id} (existing)");
+                bestPerCastId[ev.Key.Id] = ev;
+            }
+        }
+
+        // skipped 表示用：同じ cast_id / 同じ name は 1 行にまとめる（既存ファイルに
+        // 過去の重複生成が大量に残っていると、ここに「コキュートス (existing)」が
+        // 何十個も並んで読みにくくなる）
+        var skippedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var ev in bestPerCastId.Values)
+        {
+            if (existingCastIds.Contains(ev.Key.Id!))
+            {
+                var label = ev.Key.Name ?? ev.Key.Id ?? "?";
+                if (skippedNames.Add(label))
+                {
+                    skipped.Add($"{label} (existing)");
+                }
                 continue;
             }
 
-            var trigger = BuildTrigger(ev, generatedIds);
+            var trigger = BuildTrigger(ev, generatedIds, arena, file);
             if (trigger is not null)
             {
                 generated.Add(trigger);
+                existingCastIds.Add(ev.Key.Id!); // 念のため：同じ cast_id を二度生成しない
             }
         }
 
         return new GenerationResult(generated, skipped);
     }
 
-    private TriggerDefinition? BuildTrigger(AggregatedEvent ev, ISet<string> generatedIds)
+    private TriggerDefinition? BuildTrigger(
+        AggregatedEvent ev,
+        ISet<string> generatedIds,
+        AutoAoeArenaConfig arena,
+        TriggerFile? file)
     {
         if (!AoeResolver.TryParseCastId(ev.Key.Id!, out var actionId))
         {
@@ -90,6 +133,11 @@ public sealed class TriggerAutoGenerator
 
         trigger.Actions.Add(new ActionDefinition { Type = "tts", Text = castName });
 
+        if (AutoSafeCallPlanner.IsRaidWide(file, actionId, castName))
+        {
+            return trigger;
+        }
+
         var knownSafeCall = AutoSafeCallPlanner.CreateKnown(actionId, castName);
         var aoe = AoeResolver.Resolve(_dataManager, actionId, _log);
         var safeCall = knownSafeCall ?? (aoe is null ? null : AutoSafeCallPlanner.Create(aoe, castName));
@@ -103,7 +151,12 @@ public sealed class TriggerAutoGenerator
                 FanDeg = safeCall.FanDeg,
                 Callout = safeCall.Callout,
                 Duration = 5.0,
-                ArenaRadius = 20.0,
+                ArenaRadius = arena.ArenaRadius,
+                ArenaShape = arena.ArenaShape,
+                ArenaWidth = arena.ArenaWidth,
+                ArenaDepth = arena.ArenaDepth,
+                ArenaCenterX = arena.LockedArenaCenter?.X,
+                ArenaCenterZ = arena.LockedArenaCenter?.Z,
             });
         }
 

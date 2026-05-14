@@ -24,10 +24,11 @@ public sealed class TimelineRenderer
 
     private static readonly (string Name, uint Color)[] Lanes =
     {
-        ("ボスキャスト",  0xFF60A5FA),
-        ("ステータス",    0xFF34D399),
-        ("HP 変化",       0xFFFBBF24),
-        ("その他",        0xFFA78BFA),
+        ("ボスキャスト",   0xFF60A5FA),
+        ("AA / アクション", 0xFFFBA67A),  // 通常攻撃 / 即時アクション専用
+        ("ステータス",     0xFF34D399),
+        ("HP 変化",        0xFFFBBF24),
+        ("その他",         0xFFA78BFA),
     };
 
     private float _pxPerSecond = DefaultPxPerSecond;
@@ -141,10 +142,11 @@ public sealed class TimelineRenderer
 
     private static int ResolveLane(string type) => type switch
     {
-        "cast_start" or "cast_complete" or "cast_cancel" or "action_used" => 0,
-        "status_gain" or "status_lose" or "status_update" => 1,
-        "hp_change" => 2,
-        _ => 3,
+        "cast_start" or "cast_complete" or "cast_cancel" => 0,
+        "action_used" or "auto_attack" => 1, // AA / 即時アクション
+        "status_gain" or "status_lose" or "status_update" => 2,
+        "hp_change" => 3,
+        _ => 4,
     };
 
     private void DrawTimeAxis(ImDrawListPtr draw, Vector2 origin, double maxSeconds, float totalWidth)

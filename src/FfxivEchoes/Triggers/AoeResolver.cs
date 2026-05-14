@@ -10,7 +10,14 @@ namespace FfxivEchoes.Triggers;
 /// </summary>
 public static class AoeResolver
 {
-    public sealed record AoeInfo(float Radius, int CastType, bool FromCaster, uint OmenId = 0);
+    public const float MaxReliableEffectRangeM = 50f;
+
+    public sealed record AoeInfo(
+        float Radius,
+        int CastType,
+        bool FromCaster,
+        uint OmenId = 0,
+        bool IncludeCasterHitbox = false);
 
     /// <summary>
     /// Lumina Action から AoE 情報を取得。AoE でない場合や異常値は null。
@@ -32,20 +39,29 @@ public static class AoeResolver
                     actionId, effectRange, (int)row.CastType);
                 return null;
             }
-            // 100m 超のみ無視（FFXIV のアリーナはほぼ 50m 以内、それ超は誤データ）
-            if (effectRange > 100f)
+            // 50m 超は全体攻撃・特殊演出・誤データが混ざりやすく、
+            // 自動推測で床範囲として描くと誤誘導になるため明示定義がある場合だけ扱う。
+            if (!IsReliableEffectRange(effectRange))
             {
                 log?.Debug("[FfxivEchoes] AoE skip oversized id={Id:X4} range={R}m", actionId, effectRange);
                 return null;
             }
 
             var castType = (int)row.CastType;
-            // 2/5: target/caster centered circle
-            // 3: cone, 4: line  → caster-anchored
-            // 6/7/10/11/12/13: donut / cross / various special shapes → caster-anchored
-            var fromCaster = castType == 5 || castType == 3 || castType == 4 ||
-                             castType == 6 || castType == 7 || castType == 10 ||
-                             castType == 11 || castType == 12 || castType == 13;
+            // Splatoon の Projection.GuessShapeAndSize / 描画ルールに準拠：
+            //   2  = Circle, **target 中心**（地面/プレイヤー指定）
+            //   3  = Cone, caster 中心、caster 正面向き、+ HitboxRadius
+            //   4  = Rect, caster 中心、caster 正面向き、+ HitboxRadius
+            //   5  = Circle (PBAoE), caster 中心、+ HitboxRadius
+            //   6  = Donut, caster 中心（特殊：内安置外危）
+            //   7  = 特殊 Donut（caster 中心）
+            //   10 = Donut
+            //   11 = Cross, caster 中心
+            //   12 = Rect, **地面（target 中心）**、HitboxRadius 加算なし
+            //   13 = Cone, **地面（target 中心）**、HitboxRadius 加算なし
+            // 旧実装は 12/13 を caster 中心にしていたため、ground-targeted 技
+            // （プレイヤー位置中心の rect/cone）が caster 位置に間違って描画されていた。
+            var fromCaster = castType is 3 or 4 or 5 or 6 or 7 or 10 or 11;
             // Omen ID（テレグラフのアセット参照）を取得。失敗時は 0
             uint omenId = 0;
             try
@@ -56,7 +72,8 @@ public static class AoeResolver
 
             log?.Debug("[FfxivEchoes] AoE resolve id={Id:X4} range={R}m castType={Ct} omen={Om}",
                 actionId, effectRange, castType, omenId);
-            return new AoeInfo(effectRange, castType, fromCaster, omenId);
+            var includeCasterHitbox = castType is 3 or 4 or 5;
+            return new AoeInfo(effectRange, castType, fromCaster, omenId, includeCasterHitbox);
         }
         catch (Exception ex)
         {
@@ -64,6 +81,9 @@ public static class AoeResolver
             return null;
         }
     }
+
+    public static bool IsReliableEffectRange(float effectRange)
+        => effectRange > 0f && effectRange <= MaxReliableEffectRangeM;
 
     /// <summary>
     /// 既知の Omen ID から gimmick を推測。
@@ -131,11 +151,26 @@ public static class AoeResolver
             5 => "inner_circle",
             // Donut: 外周が危険で内側が安置。
             6 => "outer_ring",
+            7 => "outer_ring",
+            10 => "outer_ring",
             // Cone / Line：cone gimmick（demo の扇形コーンと同じ）
             3 => "cone",
             4 => "cone",
+            11 => "cone",
+            12 => "cone",
+            13 => "cone",
             _ => "inner_circle",
         };
+    }
+
+    public static float EffectiveRadius(AoeInfo aoe, float casterHitboxRadius)
+    {
+        if (!aoe.IncludeCasterHitbox)
+        {
+            return aoe.Radius;
+        }
+
+        return aoe.Radius + Math.Max(0f, casterHitboxRadius);
     }
 
     public static bool TryParseCastId(string spec, out uint id)

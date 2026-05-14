@@ -23,11 +23,6 @@ public static class AttackDisplayPolicy
             return AttackDisplayDecision.AoeTelegraph;
         }
 
-        if (request.IsCast && settings.ShowAllEnemyCasts)
-        {
-            return AttackDisplayDecision.AttackPulse;
-        }
-
         return AttackDisplayDecision.None;
     }
 }

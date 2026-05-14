@@ -24,11 +24,14 @@ public sealed class PredictedCastReminderService : IDisposable
     private readonly IDataManager _dataManager;
     private readonly IObjectTable _objectTable;
     private readonly MinimapWindow _minimap;
+    private readonly ActorTrackedAoeService? _actorTracked;
     private readonly IPluginLog _log;
+    private readonly Func<string?, bool>? _branchActiveCheck;
 
     private readonly IDisposable _combatStartSub;
     private readonly IDisposable _combatEndSub;
     private readonly IDisposable _zoneSub;
+    private readonly IDisposable _branchResolvedSub;
 
     private readonly List<PendingPrediction> _pending = new();
     private readonly object _gate = new();
@@ -39,7 +42,9 @@ public sealed class PredictedCastReminderService : IDisposable
         RecordingScanner recordings, SyncOffsetTracker syncOffset,
         IDataManager dataManager, IObjectTable objectTable,
         WorldOverlayWindow worldOverlay, MinimapWindow minimap,
-        IPluginLog log)
+        IPluginLog log,
+        ActorTrackedAoeService? actorTracked = null,
+        Func<string?, bool>? branchActiveCheck = null)
     {
         _framework = framework;
         _bus = bus;
@@ -50,7 +55,9 @@ public sealed class PredictedCastReminderService : IDisposable
         _dataManager = dataManager;
         _objectTable = objectTable;
         _minimap = minimap;
+        _actorTracked = actorTracked;
         _log = log;
+        _branchActiveCheck = branchActiveCheck;
 
         _combatStartSub = bus.Subscribe<CombatStartedEvent>(_ => Schedule());
         _combatEndSub = bus.Subscribe<CombatEndedEvent>(_ =>
@@ -59,6 +66,7 @@ public sealed class PredictedCastReminderService : IDisposable
         });
         _zoneSub = bus.Subscribe<ZoneChangedEvent>(z =>
             _currentZone = string.IsNullOrEmpty(z.ZoneName) ? "Unknown" : z.ZoneName);
+        _branchResolvedSub = bus.Subscribe<BranchResolvedEvent>(_ => Schedule());
 
         _framework.Update += OnUpdate;
     }
@@ -68,6 +76,7 @@ public sealed class PredictedCastReminderService : IDisposable
         _combatStartSub.Dispose();
         _combatEndSub.Dispose();
         _zoneSub.Dispose();
+        _branchResolvedSub.Dispose();
         _framework.Update -= OnUpdate;
         lock (_gate) { _pending.Clear(); }
     }
@@ -120,9 +129,12 @@ public sealed class PredictedCastReminderService : IDisposable
                 var fireAt = CalculateFireAtSeconds(prediction, warn);
                 var isCoveredByTrigger = !string.IsNullOrEmpty(prediction.CastId) &&
                     coveredCastIds.Contains(prediction.CastId);
-                var strategy = StrategyPlanResolver.FindMechanicForPrediction(file, prediction);
+                var strategy = StrategyPlanResolver.FindMechanicForPrediction(
+                    file,
+                    prediction,
+                    _branchActiveCheck);
                 var strategyActions = strategy.Profile is not null && strategy.Mechanic is not null
-                    ? StrategyPlanResolver.BuildReminderActions(strategy.Profile, strategy.Mechanic)
+                    ? StrategyPlanResolver.BuildReminderActions(file, strategy.Profile, strategy.Mechanic)
                     : null;
 
                 var actions = strategy.Mechanic?.AdvanceWarningSec is > 0 || isCoveredByTrigger
@@ -196,20 +208,21 @@ public sealed class PredictedCastReminderService : IDisposable
 
     private void FirePrediction(PendingPrediction p)
     {
-        var hasExplicitArenaView = p.Actions?.Any(a =>
-            string.Equals(a.Type, "arena_view", StringComparison.OrdinalIgnoreCase)) == true;
-        if (!hasExplicitArenaView)
+        var file = _store.GetByZone(_currentZone);
+        var match = BuildPredictionMatch(p);
+        var pendingActions = p.Actions is null
+            ? null
+            : AutoSafeCallPlanner.RemoveMinimapActionsForRaidWideMatch(file, p.Actions, match);
+        var suppressMinimap = AutoSafeCallPlanner.ShouldSuppressMinimap(file, match);
+        if (AutoAoeDisplayPolicy.IsEnabled(file) && ShouldDrawAutoInferredPredictionVisual(suppressMinimap))
         {
-            TryDrawPredictedMarker(p);
+            TryDrawPredictedMarker(file, p);
+            TryEmitPredictedFloorPaint(p);
         }
 
-        var actions = p.Actions is null
-            ? new List<ActionDefinition> { new() { Type = "tts", Text = $"次: {p.Label}" } }
-            : new List<ActionDefinition>(p.Actions);
-        if (p.Actions is null)
-        {
-            actions = new List<ActionDefinition>(BuildDefaultWarningActions(p.Label, p.AdvanceWarningSec));
-        }
+        var actions = pendingActions is null
+            ? new List<ActionDefinition>(BuildDefaultWarningActions(p.Label, p.AdvanceWarningSec))
+            : new List<ActionDefinition>(pendingActions);
         if (actions.Count == 0)
         {
             return;
@@ -222,6 +235,41 @@ public sealed class PredictedCastReminderService : IDisposable
             TriggerName: $"予測: {p.Label}",
             Actions: actions,
             SourceEvent: new CombatStartedEvent(DateTimeOffset.UtcNow)));
+    }
+
+    /// <summary>
+    /// PendingPrediction から actor を解決して、ActorTrackedAoeService の Predicted エントリを登録する。
+    /// 床塗り経路は <see cref="ActorTrackedAoeService.TrackPredicted"/> が冪等性と dedup を保証する。
+    /// </summary>
+    private void TryEmitPredictedFloorPaint(PendingPrediction p)
+    {
+        if (_actorTracked is null) return;
+        if (string.IsNullOrEmpty(p.CastId)) return;
+        if (!AoeResolver.TryParseCastId(p.CastId, out var castId)) return;
+
+        var source = ResolvePredictionSource(p.Source);
+        if (source is null) return; // 床塗りは actor 必須（ミニマップは別経路で出る）
+
+        // 予測着弾時刻：ev.EventAtRelSec は CombatStarted からの相対秒。
+        // CombatClock 経由で絶対時刻に戻して TrackPredicted に渡す。
+        var nowAbs = DateTimeOffset.UtcNow;
+        var nowRel = _combatClock.RelativeSecondsAt(nowAbs);
+        if (nowRel is null) return;
+        var deltaSec = p.EventAtRelSec + _syncOffset.CurrentOffsetSec - nowRel.Value;
+        var fireAt = nowAbs.AddSeconds(Math.Max(0, deltaSec));
+
+        _actorTracked.TrackPredicted(source.EntityId, castId, p.Label, fireAt);
+    }
+
+    private static MatchCondition? BuildPredictionMatch(PendingPrediction prediction)
+    {
+        return string.IsNullOrWhiteSpace(prediction.CastId)
+            ? null
+            : new MatchCondition
+            {
+                CastId = prediction.CastId,
+                CastName = prediction.Label,
+            };
     }
 
     public static double CalculateFireAtSeconds(RecordingPrediction prediction, double warningSec)
@@ -277,15 +325,39 @@ public sealed class PredictedCastReminderService : IDisposable
         };
     }
 
-    private void TryDrawPredictedMarker(PendingPrediction p)
+    public static bool ShouldDrawAutoInferredPredictionVisual(bool suppressMinimap)
+    {
+        return !suppressMinimap;
+    }
+
+    private void TryDrawPredictedMarker(TriggerFile? file, PendingPrediction p)
     {
         AutoSafeCall? namedSafeCall = null;
         AoeResolver.AoeInfo? aoe = null;
+        uint actionId = 0;
         if (!string.IsNullOrEmpty(p.CastId) &&
-            AoeResolver.TryParseCastId(p.CastId, out var actionId))
+            AoeResolver.TryParseCastId(p.CastId, out actionId))
         {
+            // 全体攻撃マーク済 → 予測通知でもミニマップは出さない
+            if (AutoSafeCallPlanner.IsRaidWide(file, actionId, p.Label))
+            {
+                _log.Debug("[FfxivEchoes] PredictedReminder: skip raid-wide {Name} id={Id:X4}", p.Label, actionId);
+                return;
+            }
             namedSafeCall = AutoSafeCallPlanner.CreateKnown(actionId, p.Label);
             aoe = AoeResolver.Resolve(_dataManager, actionId, _log);
+            // Lumina の EffectRange だけで全体攻撃判定（学習なしでも 1 戦目から効く）
+            // - 円形 25m 以上 → ほぼ確実にアリーナ全体
+            // - それ以外の形（ドーナツ等）でも 30m 以上はもう「内側に逃げる時間が無い」レベル
+            //   なので回避不能扱いにしてミニマップに出さない
+            if (aoe is not null &&
+                ((aoe.CastType is 2 or 5 && aoe.Radius >= 25f) || aoe.Radius >= 30f))
+            {
+                _log.Information(
+                    "[FfxivEchoes] PredictedReminder: skip oversized AoE {Name} radius={R}m castType={Ct} (全体扱い)",
+                    p.Label, aoe.Radius, aoe.CastType);
+                return;
+            }
         }
         else
         {
@@ -308,10 +380,14 @@ public sealed class PredictedCastReminderService : IDisposable
         var sourceWorld = source is null
             ? (Vector3?)null
             : new Vector3(source.Position.X, source.Position.Y, source.Position.Z);
+        var radius = aoe is null
+            ? (float?)null
+            : AoeResolver.EffectiveRadius(aoe, source?.HitboxRadius ?? 0f);
         var facingAngleRad = ArenaProjection.UsesFacing(visualCall.Gimmick) && source is not null
             ? ArenaProjection.RotationToMapAngleRad(source.Rotation)
             : (float?)null;
 
+        var arena = AutoAoeDisplayPolicy.ResolveArena(file);
         _minimap.AddArenaView(
             gimmick: visualCall.Gimmick,
             callout: $"次: {safeCall.Callout}",
@@ -319,10 +395,16 @@ public sealed class PredictedCastReminderService : IDisposable
             durationSec: p.AdvanceWarningSec + 5.0 + 3.0,
             direction: ArenaProjection.UsesFacing(visualCall.Gimmick) ? "N" : null,
             fanDeg: visualCall.FanDeg,
-            arenaRadius: 20.0,
+            arenaRadius: arena.ArenaRadius,
             directionAngleRad: facingAngleRad,
             sourceWorld: sourceWorld,
-            aoeRadius: aoe?.Radius);
+            aoeRadius: radius,
+            aoeCastType: aoe?.CastType,
+            aoeOmenId: aoe?.OmenId,
+            arenaShape: arena.ArenaShape,
+            arenaWidth: arena.ArenaWidth,
+            arenaDepth: arena.ArenaDepth,
+            lockedArenaCenter: arena.LockedArenaCenter);
 
         _log.Information("[FfxivEchoes] Predicted minimap telegraph: {Label} gimmick={G} source={Source}",
             p.Label, visualCall.Gimmick, p.Source ?? "?");

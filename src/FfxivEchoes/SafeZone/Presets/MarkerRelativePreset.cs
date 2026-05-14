@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Numerics;
 using Dalamud.Plugin.Services;
 using FfxivEchoes.Triggers.Models;
@@ -19,22 +20,24 @@ public sealed class MarkerRelativePreset : ISafeZonePreset
 {
     public string Method => "marker_relative";
 
-    private readonly IPluginLog _log;
+    private readonly IPluginLog? _log;
 
-    public MarkerRelativePreset(IPluginLog log)
+    public MarkerRelativePreset(IPluginLog? log = null)
     {
         _log = log;
     }
 
     public SafeZoneResult? Calculate(SafeZoneCalculation calc, SafeZoneContext ctx)
     {
-        var originStr = ParamHelper.GetString(calc.Params, "origin")?.ToLowerInvariant() ?? "marker_a";
+        var originStr = ParamHelper.GetString(calc.Params, "marker") ??
+                        ParamHelper.GetString(calc.Params, "origin") ??
+                        "marker_a";
         var angleDeg = ParamHelper.GetFloat(calc.Params, "angle") ?? 0f;
         var distance = ParamHelper.GetFloat(calc.Params, "distance") ?? 0f;
 
-        if (!ctx.FieldMarkers.TryGetValue(originStr, out var basePos))
+        if (!TryResolveMarker(ctx.FieldMarkers, originStr, out var basePos))
         {
-            _log.Debug("[FfxivEchoes] マーカー '{Marker}' が未配置のため SafeZone 計算をスキップ", originStr);
+            _log?.Debug("[FfxivEchoes] マーカー '{Marker}' が未配置のため SafeZone 計算をスキップ", originStr);
             return null;
         }
 
@@ -44,5 +47,35 @@ public sealed class MarkerRelativePreset : ISafeZonePreset
         var pos = basePos + new Vector3(dx, 0, dz);
 
         return new SafeZoneResult(pos, DirectionInfo.Compute(ctx.SelfPosition, pos));
+    }
+
+    public static bool TryResolveMarker(IReadOnlyDictionary<string, Vector3> markers, string? marker, out Vector3 position)
+    {
+        var originStr = string.IsNullOrWhiteSpace(marker) ? "marker_a" : marker;
+        var markerKey = NormalizeMarkerKey(originStr);
+        return markers.TryGetValue(markerKey, out position) ||
+               markers.TryGetValue(originStr, out position);
+    }
+
+    private static string NormalizeMarkerKey(string value)
+    {
+        var v = value.Trim().ToLowerInvariant();
+        if (v.StartsWith("marker_", StringComparison.OrdinalIgnoreCase))
+        {
+            return v;
+        }
+
+        return v switch
+        {
+            "a" => "marker_a",
+            "b" => "marker_b",
+            "c" => "marker_c",
+            "d" => "marker_d",
+            "1" => "marker_1",
+            "2" => "marker_2",
+            "3" => "marker_3",
+            "4" => "marker_4",
+            _ => v,
+        };
     }
 }

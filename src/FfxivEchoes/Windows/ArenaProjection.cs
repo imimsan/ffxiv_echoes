@@ -29,6 +29,32 @@ public static class ArenaProjection
         return new Vector2(mapCenter.X + nx * mapRadius, mapCenter.Y + nz * mapRadius);
     }
 
+    public static Vector2 ProjectRelativeToMap(
+        Vector2 mapCenter,
+        float mapRadius,
+        float halfX,
+        float halfZ,
+        double relativeX,
+        double relativeZ)
+    {
+        if (halfX <= 0 || halfZ <= 0)
+        {
+            return mapCenter;
+        }
+
+        var nx = (float)(relativeX / halfX);
+        var nz = (float)(relativeZ / halfZ);
+        var maxAbs = MathF.Max(MathF.Abs(nx), MathF.Abs(nz));
+        if (maxAbs > 1.0f)
+        {
+            var clamp = 0.97f / maxAbs;
+            nx *= clamp;
+            nz *= clamp;
+        }
+
+        return new Vector2(mapCenter.X + nx * mapRadius, mapCenter.Y + nz * mapRadius);
+    }
+
     public static float RotationToMapAngleRad(float ffxivRotation)
     {
         return MathF.PI / 2f - ffxivRotation;
@@ -59,6 +85,15 @@ public static class ArenaProjection
         if (arenaRadius <= 0 || worldRadius <= 0) return 0;
         return MathF.Min(mapR * 0.95f, worldRadius / arenaRadius * mapR);
     }
+
+    public static float WorldDirectionalLengthToMap(float worldLength, float arenaRadius, float mapR)
+    {
+        if (arenaRadius <= 0 || worldLength <= 0 || mapR <= 0) return 0;
+        return MathF.Min(mapR * 2.5f, worldLength / arenaRadius * mapR);
+    }
+
+    public static bool IsDirectionalAoeCastType(int castType)
+        => castType is 3 or 4 or 11 or 12 or 13;
 
     public static bool UsesFacing(string? gimmick)
     {

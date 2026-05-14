@@ -17,6 +17,8 @@ public sealed class MainWindow : Window, IDisposable
 
     public MainWindow(IReadOnlyList<ITab> tabs, Tabs.TabContext? tabContext = null)
         : base("FFXIV Echoes 設定###ffxiv-echoes-main",
+            // 親ウィンドウは scroll しない。タブごとに BeginChild でスクロールを管理する
+            // （タブバーが画面外に流れないように外側は固定）。
             ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
     {
         SizeConstraints = new WindowSizeConstraints
@@ -72,7 +74,14 @@ public sealed class MainWindow : Window, IDisposable
                 if (ImGui.BeginTabItem(tab.Title, flags))
                 {
                     ImGui.Spacing();
-                    tab.Draw();
+                    // 各タブのコンテンツを子コンテナに入れて縦スクロール可能にする。
+                    // タブバーは上部に固定したまま、攻略登録のような長いタブも下までスクロールできる。
+                    if (ImGui.BeginChild($"##tab-content-{tab.Id}", new Vector2(0, 0),
+                            false, ImGuiWindowFlags.HorizontalScrollbar))
+                    {
+                        tab.Draw();
+                    }
+                    ImGui.EndChild();
                     ImGui.EndTabItem();
                 }
             }

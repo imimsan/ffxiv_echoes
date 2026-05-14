@@ -31,11 +31,19 @@ public class Configuration : IPluginConfiguration
 
     // 音声（SPEC.md §10.2 三階層音量制御の上位 2 階層）
     public string DefaultVoice { get; set; } = "ja-JP-Default";
-    public float MasterVolume { get; set; } = 0.8f;
+    public float MasterVolume { get; set; } = 1.0f;
     public float TtsVolume { get; set; } = 1.0f;
     public float WavVolume { get; set; } = 1.0f;
     public float FeedbackVolume { get; set; } = 0.8f;
     public string? AudioDevice { get; set; } = null;
+
+    /// <summary>
+    /// TTS のブースト倍率（NAudio 経由で SAPI 出力を増幅）。
+    /// 1.0 = SAPI そのまま、2.0 = 約 +6dB、3.0 = 約 +9.5dB、5.0 = 約 +14dB。最大 5.0。
+    /// SAPI 単体だと最大 100% で頭打ちなので、ここを上げると更に大音量になる。
+    /// 3.0 を超えると元音源によってはクリッピング（音割れ）が発生する場合あり。
+    /// </summary>
+    public float TtsBoost { get; set; } = 2.0f;
 
     // 取り込み・ログ保管
     public double MergeToleranceSeconds { get; set; } = 2.0;
@@ -52,6 +60,7 @@ public class Configuration : IPluginConfiguration
         TtsVolume = Math.Clamp(TtsVolume, 0f, 1f);
         WavVolume = Math.Clamp(WavVolume, 0f, 1f);
         FeedbackVolume = Math.Clamp(FeedbackVolume, 0f, 1f);
+        TtsBoost = Math.Clamp(TtsBoost, 1.0f, 5.0f);
         MergeToleranceSeconds = Math.Clamp(MergeToleranceSeconds, 0.0, 60.0);
         if (LogRetentionDays is { } days && days <= 0)
         {

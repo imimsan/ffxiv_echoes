@@ -8,6 +8,7 @@ public static class ArenaViewPriority
         {
             "half_plane" => 95,
             "cone" => 90,
+            "multi_aoe" => 88, // add NPC 同時出現の AoE 群（cone/half_plane の次に重要）
             "outer_ring" => 85,
             "inner_circle" => 85,
             "stack" => 75,

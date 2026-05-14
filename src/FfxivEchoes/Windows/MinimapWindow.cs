@@ -103,7 +103,17 @@ public sealed class MinimapWindow : Window, IDisposable
         Vector3? sourceWorld = null,
         IReadOnlyList<StrategyPosition>? strategyPositions = null,
         float? aoeRadius = null,
-        int? aoeCastType = null)
+        int? aoeCastType = null,
+        uint? aoeOmenId = null,
+        IReadOnlyList<Vector3>? multiSourceWorlds = null,
+        IReadOnlyList<StrategyObjectMarker>? objectMarkers = null,
+        IReadOnlyList<StrategyAoeZone>? aoeZones = null,
+        IReadOnlyList<StatusHighlightSpec>? partyStatusHighlights = null,
+        string? arenaShape = null,
+        double? arenaWidth = null,
+        double? arenaDepth = null,
+        Vector3? lockedArenaCenter = null,
+        uint? autoLuminaCastId = null)
     {
         if (string.IsNullOrEmpty(gimmick))
         {
@@ -125,12 +135,75 @@ public sealed class MinimapWindow : Window, IDisposable
             StrategyPositions: strategyPositions?.ToArray() ?? Array.Empty<StrategyPosition>(),
             AoeRadius: aoeRadius,
             AoeCastType: aoeCastType,
-            ExpiresAt: DateTimeOffset.UtcNow.AddSeconds(ttl));
+            AoeOmenId: aoeOmenId,
+            MultiSourceWorlds: multiSourceWorlds?.ToArray() ?? Array.Empty<Vector3>(),
+            ObjectMarkers: objectMarkers?.ToArray() ?? Array.Empty<StrategyObjectMarker>(),
+            AoeZones: aoeZones?.ToArray() ?? Array.Empty<StrategyAoeZone>(),
+            PartyStatusHighlights: partyStatusHighlights?.ToArray() ?? Array.Empty<StatusHighlightSpec>(),
+            ArenaShape: string.IsNullOrEmpty(arenaShape) ? "circle" : arenaShape!.ToLowerInvariant(),
+            ArenaHalfWidth: arenaWidth is { } w && w > 0 ? (float)w * 0.5f : radius,
+            ArenaHalfDepth: arenaDepth is { } d && d > 0 ? (float)d * 0.5f : radius,
+            // アイテム表示中はこの中心を固定して使う。null の場合は描画時に
+            // _contextBuilder.Build() から動的に取り、その後ロックする。
+            LockedArenaCenter: lockedArenaCenter,
+            ExpiresAt: DateTimeOffset.UtcNow.AddSeconds(ttl),
+            AutoLuminaCastId: autoLuminaCastId);
         lock (_gate)
         {
             _items.Add(item);
         }
         IsOpen = true;
+    }
+
+    /// <summary>
+    /// 指定の cast id で登録された Lumina 自動経路の <see cref="ArenaItem"/> を全削除する。
+    /// ユーザー定義 zone（<see cref="StrategyAoeZone.SuppressAutoAoe"/> = true）が
+    /// 同じ cast に紐付いて入ってきたとき、自動の不正確 AoE をミニマップから消す用途。
+    /// </summary>
+    public void SuppressAutoLuminaForCast(uint castId)
+    {
+        if (castId == 0) return;
+        lock (_gate)
+        {
+            _items.RemoveAll(it => it.AutoLuminaCastId == castId);
+        }
+    }
+
+    /// <summary>
+    /// 複数の世界座標すべてに同じ AoE 円を描画する専用 API。
+    /// add NPC（ステュクスのケラノウス・エイドロン等）が同時出現したときに
+    /// 各 NPC の位置に AoE 範囲を即座にプロットする用途。
+    /// </summary>
+    public void AddMultiAoeView(
+        string callout,
+        IReadOnlyList<Vector3> positions,
+        float aoeRadiusM,
+        double durationSec,
+        double? arenaRadius = null,
+        int aoeCastType = 2,
+        string? arenaShape = null,
+        double? arenaWidth = null,
+        double? arenaDepth = null,
+        Vector3? lockedArenaCenter = null)
+    {
+        if (positions is null || positions.Count == 0)
+        {
+            return;
+        }
+        AddArenaView(
+            gimmick: "multi_aoe",
+            callout: callout,
+            durationSec: durationSec,
+            direction: null,
+            fanDeg: null,
+            arenaRadius: arenaRadius,
+            aoeRadius: aoeRadiusM,
+            aoeCastType: aoeCastType,
+            multiSourceWorlds: positions,
+            arenaShape: arenaShape,
+            arenaWidth: arenaWidth,
+            arenaDepth: arenaDepth,
+            lockedArenaCenter: lockedArenaCenter);
     }
 
     public void Clear()
@@ -146,19 +219,22 @@ public sealed class MinimapWindow : Window, IDisposable
     {
         var now = DateTimeOffset.UtcNow;
 
-        // すべての active items を Priority desc, ExpiresAt asc でソート
-        ArenaItem[] activeSorted;
+        // すべての active items を Priority desc, ExpiresAt asc でソート。
+        // Lumina 自動 AoE が同時に複数ある場合は、別タイルにせず 1 枚の地図へ重ねる。
+        ArenaDisplayGroup[] activeGroups;
         lock (_gate)
         {
             _items.RemoveAll(it => it.ExpiresAt <= now);
-            activeSorted = _items
+            var activeSorted = _items
                 .OrderByDescending(it => it.Priority)
                 .ThenBy(it => it.ExpiresAt)
-                .Take(3)  // 最大 3 件まで同時表示（古い・低優先度は省略）
+                .ToArray();
+            activeGroups = BuildDisplayGroups(activeSorted)
+                .Take(3)  // 最大 3 グループまで同時表示（古い・低優先度は省略）
                 .ToArray();
         }
 
-        if (activeSorted.Length == 0)
+        if (activeGroups.Length == 0)
         {
             IsOpen = false;
             return;
@@ -168,9 +244,10 @@ public sealed class MinimapWindow : Window, IDisposable
         var scale = ImGuiHelpers.GlobalScale;
 
         // 1 枚目: フルサイズ。2-3 枚目: 半分サイズで並べる
-        for (var idx = 0; idx < activeSorted.Length; idx++)
+        for (var idx = 0; idx < activeGroups.Length; idx++)
         {
-            var item = activeSorted[idx];
+            var group = activeGroups[idx];
+            var item = group.Primary;
             var tilePos = ImGui.GetCursorScreenPos();
             // 最初は full、それ以降は 60%
             var tileScale = idx == 0 ? 1.0f : 0.6f;
@@ -178,21 +255,38 @@ public sealed class MinimapWindow : Window, IDisposable
             var center = new Vector2(tilePos.X + size * 0.5f, tilePos.Y + size * 0.5f);
             var r = size * 0.5f - 4f * scale;
 
-            DrawArena(draw, center, r);
-            DrawGimmickBody(draw, center, r, item);
-            // 実 AoE 形状の幾何学的描画（Lumina の CastType + 半径から正確な形を描く）
-            DrawActualAoeShape(draw, center, r, item);
+            DrawArena(draw, center, r, item);
+            foreach (var layer in group.Items)
+            {
+                DrawGimmickBody(draw, center, r, layer);
+                // 実 AoE 形状の幾何学的描画（Lumina の CastType + 半径から正確な形を描く）
+                DrawActualAoeShape(draw, center, r, layer);
+            }
             DrawSafeZoneOverlay(draw, center, r, scale * tileScale, item);
             DrawStrategyPositions(draw, center, r, scale * tileScale, item);
-            DrawBoss(draw, center, r, scale * tileScale, item);
-            DrawPlayerPositions(draw, center, r, scale * tileScale, item);
+            var liveLayerMode = GetLiveLayerMode(item);
+            if (liveLayerMode == MinimapLiveLayerMode.Full)
+            {
+                DrawBoss(draw, center, r, scale * tileScale, item);
+            }
+            if (liveLayerMode != MinimapLiveLayerMode.None)
+            {
+                DrawPlayerPositions(
+                    draw,
+                    center,
+                    r,
+                    scale * tileScale,
+                    item,
+                    drawLiveContext: liveLayerMode == MinimapLiveLayerMode.Full);
+            }
 
             ImGui.Dummy(new Vector2(size, size));
 
-            var remaining = (item.ExpiresAt - now).TotalSeconds;
+            var remaining = group.Items.Max(it => (it.ExpiresAt - now).TotalSeconds);
+            var callout = group.Callout;
             var calloutText = idx == 0
-                ? item.Callout
-                : $"次→ {item.Callout}";
+                ? callout
+                : $"次→ {callout}";
             var subText = $"{Math.Max(0, remaining):0.0}s";
             DrawCallout(draw, tilePos, size, scale * tileScale, calloutText, subText);
             ImGui.Dummy(new Vector2(size, CalloutHeight * scale * tileScale));
@@ -200,24 +294,104 @@ public sealed class MinimapWindow : Window, IDisposable
         }
     }
 
+    private static IReadOnlyList<ArenaDisplayGroup> BuildDisplayGroups(IReadOnlyList<ArenaItem> sortedItems)
+    {
+        var layerableAuto = sortedItems.Where(IsLayerableAutoAoe).ToArray();
+        var shouldLayerAuto = layerableAuto.Length > 1;
+        var emittedAutoLayer = false;
+        var groups = new List<ArenaDisplayGroup>();
+
+        foreach (var item in sortedItems)
+        {
+            if (shouldLayerAuto && IsLayerableAutoAoe(item))
+            {
+                if (!emittedAutoLayer)
+                {
+                    groups.Add(new ArenaDisplayGroup(layerableAuto));
+                    emittedAutoLayer = true;
+                }
+                continue;
+            }
+
+            groups.Add(new ArenaDisplayGroup(new[] { item }));
+        }
+
+        return groups;
+    }
+
+    private static bool IsLayerableAutoAoe(ArenaItem item)
+    {
+        return MinimapDisplayGroupingPolicy.ShouldLayerAutoAoe(
+            item.AutoLuminaCastId,
+            item.AoeRadius,
+            item.AoeCastType,
+            item.StrategyPositions.Count,
+            item.ObjectMarkers.Count,
+            item.AoeZones.Count);
+    }
+
     // ── 描画ヘルパ ─────────────────────────────────────────────────
 
-    private static void DrawArena(ImDrawListPtr draw, Vector2 center, float r)
+    private static MinimapLiveLayerMode GetLiveLayerMode(ArenaItem item)
     {
-        draw.AddCircleFilled(center, r, ColBg, 64);
-        draw.AddCircle(center, r, ColBorder, 64, 1.5f);
+        return MinimapLiveLayerPolicy.GetLiveLayerMode(
+            item.Gimmick,
+            item.StrategyPositions.Count,
+            item.ObjectMarkers.Count,
+            item.AoeZones.Count);
+    }
+
+    private static void DrawArena(ImDrawListPtr draw, Vector2 center, float r, ArenaItem item)
+    {
+        // 形状ごとに背景＋境界線を描き分ける。矩形系は ArenaHalfWidth/Depth と
+        // ArenaRadius の比率で縦横比を保つ。
+        if (string.Equals(item.ArenaShape, "circle", StringComparison.OrdinalIgnoreCase))
+        {
+            draw.AddCircleFilled(center, r, ColBg, 64);
+            draw.AddCircle(center, r, ColBorder, 64, 1.5f);
+            return;
+        }
+
+        // 矩形：半径 r をアリーナの「最大半径」とみなし、縦横比を反映
+        var arenaMax = MathF.Max(item.ArenaHalfWidth, item.ArenaHalfDepth);
+        if (arenaMax <= 0) arenaMax = item.ArenaRadius;
+        var hw = r * (item.ArenaHalfWidth / arenaMax);
+        var hd = r * (item.ArenaHalfDepth / arenaMax);
+        var rectMin = new Vector2(center.X - hw, center.Y - hd);
+        var rectMax = new Vector2(center.X + hw, center.Y + hd);
+        draw.AddRectFilled(rectMin, rectMax, ColBg);
+        draw.AddRect(rectMin, rectMax, ColBorder, 0f, ImDrawFlags.None, 1.5f);
     }
 
     private void DrawGimmickBody(ImDrawListPtr draw, Vector2 center, float r, ArenaItem item)
     {
+        // ユーザーが AoE ゾーンを明示的に定義しているなら、そちらを正解として優先描画する。
+        // 旧 gimmick タイプ（outer_ring / inner_circle / donut / scatter / stack 等）は
+        // 半径 55% / 96% といったハードコード値で描かれるので、実ボス技サイズと乖離しがち。
+        // AoeZones がある = ユーザーが「正確な範囲はこっち」と意思表示しているので、
+        // 旧 gimmick のハードコード描画は抑制し、二重表示を避ける。
+        if (item.AoeZones.Count > 0)
+        {
+            DrawUserAoeZones(draw, center, r, item);
+            DrawUserObjectMarkers(draw, center, r, item);
+            return;
+        }
+
         switch (item.Gimmick)
         {
             case "outer_ring":
-                // 外周が危険、中央安置
+                // 外周が危険、中央安置。
+                // AoeRadius が提供されていれば DrawActualAoeShape が donut を実半径 + 内径 30%
+                // で正確に描くため、ここの近似描画は二重描画になる。skip して委譲する。
+                // （以前は内径 45% でハードコードされ、DrawActualAoeShape の 30% と乖離していた）
+                if (item.AoeRadius is { } aoeOuter && aoeOuter > 0)
+                {
+                    break;
+                }
                 draw.AddCircleFilled(center, r * 0.96f, ColDanger, 64);
-                draw.AddCircleFilled(center, r * 0.45f, ColSafe, 48);
-                DrawDashedCircle(draw, center, r * 0.45f, ColSafeLine, 2.5f, 24);
-                AddCenteredText(draw, center + new Vector2(0, r * 0.62f), "SAFE", ColSafeLine, 1.05f);
+                draw.AddCircleFilled(center, r * 0.30f, ColSafe, 48);
+                DrawDashedCircle(draw, center, r * 0.30f, ColSafeLine, 2.5f, 24);
+                AddCenteredText(draw, center + new Vector2(0, r * 0.45f), "SAFE", ColSafeLine, 1.05f);
                 break;
 
             case "inner_circle":
@@ -275,6 +449,14 @@ public sealed class MinimapWindow : Window, IDisposable
 
             case "cone":
                 {
+                    // CastType=4 (Line) は AutoSafeCallPlanner.Create が gimmick="cone" + FanDeg=30
+                    // で送ってくるが、これは「細い扇形 ≒ 直線」を意図している。
+                    // 正確な矩形は DrawActualAoeShape の case 4 で描く（床塗りと一致）ので、
+                    // ここはスキップして二重描画を避ける。
+                    if (item.AoeCastType is 4 or 11 or 12 or 13 && item.AoeRadius is { } && item.AoeRadius > 0)
+                    {
+                        break;
+                    }
                     // DirectionAngleRad（ボス向き等の動的計算結果）が来ていればそれを優先
                     var angle = item.DirectionAngleRad is { } rad
                         ? rad
@@ -364,27 +546,362 @@ public sealed class MinimapWindow : Window, IDisposable
                 AddCenteredText(draw, center, "!", ColText, 1.2f);
                 break;
 
+            case "multi_aoe":
+                DrawMultiAoeBody(draw, center, r, item);
+                break;
+
+            case "user_layout":
+                // ユーザーが攻略登録タブで描いたレイアウトのみ表示。
+                // 既存の自動 gimmick は何も描かず、AoE ゾーンとオブジェクトマーカーで覆う。
+                break;
+
             default:
                 AddCenteredText(draw, center, $"unknown: {item.Gimmick}", ColText, 0.9f);
                 break;
+        }
+
+        // ユーザー定義の AoE ゾーン（user_layout 以外でも重ねて描ける）
+        DrawUserAoeZones(draw, center, r, item);
+        DrawUserObjectMarkers(draw, center, r, item);
+    }
+
+    /// <summary>
+    /// ユーザーが攻略登録で描いた AoE ゾーン群（円・ドーナツ・扇・矩形）を描画。
+    /// </summary>
+    private void DrawUserAoeZones(ImDrawListPtr draw, Vector2 mapCenter, float mapR, ArenaItem item)
+    {
+        if (item.AoeZones.Count == 0 || item.ArenaRadius <= 0) return;
+        var halfX = item.ArenaHalfWidth > 0 ? item.ArenaHalfWidth : item.ArenaRadius;
+        var halfZ = item.ArenaHalfDepth > 0 ? item.ArenaHalfDepth : item.ArenaRadius;
+        var radiusScale = MathF.Max(halfX, halfZ);
+        if (halfX <= 0 || halfZ <= 0 || radiusScale <= 0) return;
+
+        foreach (var zone in item.AoeZones)
+        {
+            var origin = ArenaProjection.ProjectRelativeToMap(mapCenter, mapR, halfX, halfZ, zone.X, zone.Z);
+            var pixelR = (float)(zone.RadiusM / radiusScale) * mapR;
+            if (pixelR < 4f) pixelR = 4f;
+
+            uint baseFill, baseStroke;
+            if (zone.IsDanger)
+            {
+                baseFill = (ColDanger & 0x00FFFFFFu) | 0x55000000u;
+                baseStroke = (ColDangerLine & 0x00FFFFFFu) | 0xFF000000u;
+            }
+            else
+            {
+                baseFill = (ColSafe & 0x00FFFFFFu) | 0x55000000u;
+                baseStroke = (ColSafeLine & 0x00FFFFFFu) | 0xFF000000u;
+            }
+            // ユーザー指定色があれば塗り色を上書き（線色は同色のα無し）
+            if (!string.IsNullOrEmpty(zone.Color))
+            {
+                var custom = ParseColor(zone.Color, baseStroke);
+                baseStroke = custom;
+                baseFill = (custom & 0x00FFFFFFu) | 0x55000000u;
+            }
+
+            switch ((zone.Shape ?? "circle").ToLowerInvariant())
+            {
+                case "circle":
+                    draw.AddCircleFilled(origin, pixelR, baseFill, 48);
+                    draw.AddCircle(origin, pixelR, baseStroke, 48, 2f);
+                    break;
+                case "donut":
+                {
+                    var inner = (zone.InnerRadiusM ?? zone.RadiusM * 0.5);
+                    var innerPx = (float)(inner / radiusScale) * mapR;
+                    if (innerPx < 2f) innerPx = 2f;
+                    DrawDonutShape(draw, origin, innerPx, pixelR, baseFill, baseStroke);
+                    break;
+                }
+                case "cone":
+                {
+                    var rotRad = UserZoneRotationRad(zone, fallbackDeg: -90.0);
+                    var halfFan = (float)((zone.FanDeg ?? 90.0) * Math.PI / 360.0);
+                    const int segments = 24;
+                    var path = new List<Vector2> { origin };
+                    for (var i = 0; i <= segments; i++)
+                    {
+                        var t = (float)i / segments;
+                        var a = rotRad - halfFan + (halfFan * 2f) * t;
+                        path.Add(new Vector2(origin.X + MathF.Cos(a) * pixelR,
+                                              origin.Y + MathF.Sin(a) * pixelR));
+                    }
+                    foreach (var p in path) draw.PathLineTo(p);
+                    draw.PathFillConvex(baseFill);
+                    for (var i = 0; i <= segments; i++)
+                    {
+                        var t = (float)i / segments;
+                        var a = rotRad - halfFan + (halfFan * 2f) * t;
+                        draw.PathLineTo(new Vector2(origin.X + MathF.Cos(a) * pixelR,
+                                                     origin.Y + MathF.Sin(a) * pixelR));
+                    }
+                    draw.PathStroke(baseStroke, ImDrawFlags.None, 1.5f);
+                    break;
+                }
+                case "rect":
+                case "line":
+                {
+                    var rotRad = UserZoneRotationRad(zone, fallbackDeg: 0.0);
+                    var lengthPx = pixelR; // RadiusM は前方の長さ
+                    var halfWPx = (AoeGeometryPolicy.ResolveLineHalfWidth(zone.HalfWidthM) / radiusScale) * mapR;
+                    if (halfWPx < 6f) halfWPx = 6f;
+                    DrawForwardRect(draw, origin, rotRad, lengthPx, halfWPx, baseFill, baseStroke);
+                    break;
+                }
+                case "cross":
+                {
+                    var rotRad = UserZoneRotationRad(zone, fallbackDeg: 0.0);
+                    var halfWPx = (AoeGeometryPolicy.ResolveLineHalfWidth(zone.HalfWidthM) / radiusScale) * mapR;
+                    if (halfWPx < 6f) halfWPx = 6f;
+                    DrawCenteredRect(draw, origin, rotRad, pixelR, halfWPx, baseFill, baseStroke);
+                    DrawCenteredRect(draw, origin, rotRad + MathF.PI / 2f, pixelR, halfWPx, baseFill, baseStroke);
+                    break;
+                }
+                case "donut_cone":
+                {
+                    var rotRad = UserZoneRotationRad(zone, fallbackDeg: -90.0);
+                    var inner = (zone.InnerRadiusM ?? zone.RadiusM * 0.5);
+                    var innerPx = (float)(inner / radiusScale) * mapR;
+                    if (innerPx < 2f) innerPx = 2f;
+                    DrawDonutConeShape(draw, origin, innerPx, pixelR, rotRad, (float)(zone.FanDeg ?? 90.0), baseFill, baseStroke);
+                    break;
+                }
+                case "half_plane":
+                {
+                    var rotRad = UserZoneRotationRad(zone, fallbackDeg: -90.0);
+                    DrawHalfPlane(draw, origin, pixelR, rotRad);
+                    break;
+                }
+            }
+
+            if (!string.IsNullOrEmpty(zone.Label))
+            {
+                AddCenteredText(draw, origin, zone.Label!, ColText, 0.9f);
+            }
+        }
+    }
+
+    private static float UserZoneRotationRad(StrategyAoeZone zone, double fallbackDeg)
+        => (float)(((zone.RotationDeg ?? fallbackDeg) + (zone.RotationOffsetDeg ?? 0.0)) * Math.PI / 180.0);
+
+    private static void DrawForwardRect(
+        ImDrawListPtr draw,
+        Vector2 origin,
+        float rotRad,
+        float lengthPx,
+        float halfWidthPx,
+        uint fill,
+        uint stroke)
+    {
+        var fwd = new Vector2(MathF.Cos(rotRad), MathF.Sin(rotRad));
+        var perp = new Vector2(-fwd.Y, fwd.X);
+        var p1 = origin - perp * halfWidthPx;
+        var p2 = origin + perp * halfWidthPx;
+        var p3 = p2 + fwd * lengthPx;
+        var p4 = p1 + fwd * lengthPx;
+        draw.AddQuadFilled(p1, p2, p3, p4, fill);
+        draw.AddQuad(p1, p2, p3, p4, stroke, 1.8f);
+    }
+
+    private static void DrawCenteredRect(
+        ImDrawListPtr draw,
+        Vector2 origin,
+        float rotRad,
+        float halfLengthPx,
+        float halfWidthPx,
+        uint fill,
+        uint stroke)
+    {
+        var fwd = new Vector2(MathF.Cos(rotRad), MathF.Sin(rotRad));
+        var perp = new Vector2(-fwd.Y, fwd.X);
+        var p1 = origin - fwd * halfLengthPx - perp * halfWidthPx;
+        var p2 = origin + fwd * halfLengthPx - perp * halfWidthPx;
+        var p3 = origin + fwd * halfLengthPx + perp * halfWidthPx;
+        var p4 = origin - fwd * halfLengthPx + perp * halfWidthPx;
+        draw.AddQuadFilled(p1, p2, p3, p4, fill);
+        draw.AddQuad(p1, p2, p3, p4, stroke, 1.5f);
+    }
+
+    private static void DrawDonutConeShape(
+        ImDrawListPtr draw,
+        Vector2 origin,
+        float innerR,
+        float outerR,
+        float rotRad,
+        float fanDeg,
+        uint fill,
+        uint stroke)
+    {
+        var halfFan = fanDeg * MathF.PI / 360f;
+        const int Segments = 32;
+        for (var i = 0; i < Segments; i++)
+        {
+            var t1 = (float)i / Segments;
+            var t2 = (float)(i + 1) / Segments;
+            var a1 = rotRad - halfFan + (halfFan * 2f) * t1;
+            var a2 = rotRad - halfFan + (halfFan * 2f) * t2;
+            var pOuter1 = new Vector2(origin.X + MathF.Cos(a1) * outerR, origin.Y + MathF.Sin(a1) * outerR);
+            var pOuter2 = new Vector2(origin.X + MathF.Cos(a2) * outerR, origin.Y + MathF.Sin(a2) * outerR);
+            var pInner1 = new Vector2(origin.X + MathF.Cos(a1) * innerR, origin.Y + MathF.Sin(a1) * innerR);
+            var pInner2 = new Vector2(origin.X + MathF.Cos(a2) * innerR, origin.Y + MathF.Sin(a2) * innerR);
+            draw.AddQuadFilled(pOuter1, pOuter2, pInner2, pInner1, fill);
+        }
+
+        draw.PathLineTo(new Vector2(origin.X + MathF.Cos(rotRad - halfFan) * innerR, origin.Y + MathF.Sin(rotRad - halfFan) * innerR));
+        draw.PathLineTo(new Vector2(origin.X + MathF.Cos(rotRad - halfFan) * outerR, origin.Y + MathF.Sin(rotRad - halfFan) * outerR));
+        for (var i = 0; i <= Segments; i++)
+        {
+            var t = (float)i / Segments;
+            var a = rotRad - halfFan + (halfFan * 2f) * t;
+            draw.PathLineTo(new Vector2(origin.X + MathF.Cos(a) * outerR, origin.Y + MathF.Sin(a) * outerR));
+        }
+        draw.PathLineTo(new Vector2(origin.X + MathF.Cos(rotRad + halfFan) * innerR, origin.Y + MathF.Sin(rotRad + halfFan) * innerR));
+        for (var i = Segments; i >= 0; i--)
+        {
+            var t = (float)i / Segments;
+            var a = rotRad - halfFan + (halfFan * 2f) * t;
+            draw.PathLineTo(new Vector2(origin.X + MathF.Cos(a) * innerR, origin.Y + MathF.Sin(a) * innerR));
+        }
+        draw.PathStroke(stroke, ImDrawFlags.Closed, 1.5f);
+    }
+
+    /// <summary>
+    /// ユーザー定義のオブジェクトマーカー（ボス位置・add 等）を描画。
+    /// 形状は circle / square / triangle / diamond。
+    /// </summary>
+    private void DrawUserObjectMarkers(ImDrawListPtr draw, Vector2 mapCenter, float mapR, ArenaItem item)
+    {
+        if (item.ObjectMarkers.Count == 0 || item.ArenaRadius <= 0) return;
+        var scale = ImGuiHelpers.GlobalScale;
+        var dotR = 8f * scale;
+        var arenaCenter = item.LockedArenaCenter;
+        var halfX = item.ArenaHalfWidth > 0 ? item.ArenaHalfWidth : item.ArenaRadius;
+        var halfZ = item.ArenaHalfDepth > 0 ? item.ArenaHalfDepth : item.ArenaRadius;
+        if (halfX <= 0 || halfZ <= 0) return;
+
+        foreach (var mk in item.ObjectMarkers)
+        {
+            // ウェイマーク連動：A/B/C/D/1-4 が指定されてれば、現在の実マーカー位置を優先
+            float worldX = (float)mk.X;
+            float worldZ = (float)mk.Z;
+            var live = FfxivEchoes.Capture.WaymarkProvider.TryGetPosition(mk.Waymark);
+            if (live is { } wp && arenaCenter is { } ac)
+            {
+                // ウェイマーク位置はアリーナ中心からの相対 (m) に変換
+                worldX = wp.X - ac.X;
+                worldZ = wp.Z - ac.Z;
+            }
+            var p = ArenaProjection.ProjectRelativeToMap(mapCenter, mapR, halfX, halfZ, worldX, worldZ);
+            var fill = ParseColor(mk.Color, 0xFF6B6BF6u); // 既定：赤系（ABGR）
+            var ring = 0xFFFFFFFFu;
+
+            switch ((mk.Shape ?? "circle").ToLowerInvariant())
+            {
+                case "square":
+                    draw.AddRectFilled(p - new Vector2(dotR, dotR), p + new Vector2(dotR, dotR), fill);
+                    draw.AddRect(p - new Vector2(dotR, dotR), p + new Vector2(dotR, dotR), ring, 0f, ImDrawFlags.None, 1.5f);
+                    break;
+                case "triangle":
+                    draw.AddTriangleFilled(
+                        p + new Vector2(0, -dotR),
+                        p + new Vector2(dotR, dotR * 0.8f),
+                        p + new Vector2(-dotR, dotR * 0.8f),
+                        fill);
+                    draw.AddTriangle(
+                        p + new Vector2(0, -dotR),
+                        p + new Vector2(dotR, dotR * 0.8f),
+                        p + new Vector2(-dotR, dotR * 0.8f),
+                        ring, 1.5f);
+                    break;
+                case "diamond":
+                    draw.AddQuadFilled(
+                        p + new Vector2(0, -dotR),
+                        p + new Vector2(dotR, 0),
+                        p + new Vector2(0, dotR),
+                        p + new Vector2(-dotR, 0),
+                        fill);
+                    draw.AddQuad(
+                        p + new Vector2(0, -dotR),
+                        p + new Vector2(dotR, 0),
+                        p + new Vector2(0, dotR),
+                        p + new Vector2(-dotR, 0),
+                        ring, 1.5f);
+                    break;
+                default:
+                    draw.AddCircleFilled(p, dotR, fill, 18);
+                    draw.AddCircle(p, dotR, ring, 18, 1.5f);
+                    break;
+            }
+
+            if (!string.IsNullOrEmpty(mk.Label))
+            {
+                AddCenteredText(draw, p + new Vector2(0, -dotR - 8f * scale), mk.Label!, ColText, 0.85f);
+            }
+        }
+    }
+
+    /// <summary>
+    /// 複数の世界座標すべてに同じ AoE 形状を描画する。
+    /// add NPC が同時出現したときに、各 NPC 位置に対して AoE 範囲を表示する用途。
+    /// CastType=6/7/10 ならドーナツ、それ以外は円として描く。
+    /// </summary>
+    private void DrawMultiAoeBody(ImDrawListPtr draw, Vector2 mapCenter, float mapR, ArenaItem item)
+    {
+        if (item.MultiSourceWorlds.Count == 0) return;
+        var radiusM = item.AoeRadius ?? 6f;
+        var pixelR = ArenaProjection.WorldRadiusToMap(radiusM, item.ArenaRadius, mapR);
+        if (pixelR < 6f) pixelR = 6f;
+
+        var castType = item.AoeCastType ?? 2;
+        var isDonut = AoeResolver.IsDonutShape(castType, 0);
+
+        var fill = (ColDanger & 0x00FFFFFFu) | 0x55000000u;
+        var stroke = (ColDangerLine & 0x00FFFFFFu) | (0xFFu << 24);
+
+        for (var i = 0; i < item.MultiSourceWorlds.Count; i++)
+        {
+            var w = item.MultiSourceWorlds[i];
+            if (!TryProjectWorldToMap(mapCenter, mapR, item, w, out var p))
+            {
+                continue;
+            }
+            if (isDonut)
+            {
+                var innerR = pixelR * AoeResolver.DonutInnerRatio(0);
+                DrawDonutShape(draw, p, innerR, pixelR, fill, stroke);
+                AddCenteredText(draw, p, (i + 1).ToString(), ColText, 1.0f);
+            }
+            else
+            {
+                draw.AddCircleFilled(p, pixelR, fill, 32);
+                draw.AddCircle(p, pixelR, stroke, 32, 2f);
+                AddCenteredText(draw, p, (i + 1).ToString(), ColText, 1.0f);
+            }
         }
     }
 
     /// <summary>
     /// Lumina の CastType + AoE 半径から AoE の実形状をミニマップに幾何学的に描画。
     /// 抽象 gimmick（inner_circle 等）と独立に、実際のテレグラフ形状で「これが危険」と示す。
-    /// CastType: 2=ターゲット中心円、3=コーン、4=直線、5=PB AoE、6=Donut。
+    /// CastType: 2=ターゲット中心円、3/13=コーン、4/12=直線、5=PB AoE、6/7/10=Donut、11=十字。
     /// </summary>
     private void DrawActualAoeShape(ImDrawListPtr draw, Vector2 mapCenter, float mapR, ArenaItem item)
     {
+        // multi_aoe は DrawMultiAoeBody で各位置に既に AoE が描かれているのでここではスキップ
+        if (item.Gimmick == "multi_aoe") return;
+        // half_plane は DrawGimmickBody の専用描画が正。CastType=4 の直線描画を重ねると
+        // 半面ではなく細い矩形に見えるため、実形状レイヤーは抑制する。
+        if (item.Gimmick == "half_plane") return;
         if (item.AoeRadius is not { } radiusM || radiusM <= 0) return;
         if (item.AoeCastType is not { } castType) return;
 
-        // 全体攻撃判定：AoE 半径が arena 半径の 90% を超える円形 AoE は
+        // 全体攻撃判定：アリーナ半径を大きく超える円形 AoE は
         // 「アリーナ全体が危険」を意味し、ミニマップで形を描いても意味がない
         // （画面が真っ赤になるだけ）。callout だけ残して形状描画はスキップ。
         if (item.ArenaRadius > 0 &&
-            radiusM >= item.ArenaRadius * 0.9f &&
+            radiusM >= item.ArenaRadius * 1.5f &&
             (castType == 2 || castType == 5))
         {
             return;
@@ -395,21 +912,21 @@ public sealed class MinimapWindow : Window, IDisposable
             ? sp
             : mapCenter;
 
-        var pixelRadius = ArenaProjection.WorldRadiusToMap(radiusM, item.ArenaRadius, mapR);
+        var pixelRadius = ArenaProjection.IsDirectionalAoeCastType(castType)
+            ? ArenaProjection.WorldDirectionalLengthToMap(radiusM, item.ArenaRadius, mapR)
+            : ArenaProjection.WorldRadiusToMap(radiusM, item.ArenaRadius, mapR);
         if (pixelRadius < 4f) pixelRadius = 4f;
 
         // 半透明赤で塗り、外周線で形を強調
         var fill = (ColDanger & 0x00FFFFFFu) | 0x55000000u;
         var stroke = (ColDangerLine & 0x00FFFFFFu) | 0xFF000000u;
 
-        // Omen ID から Donut 形状か事前判定（CastType=2 でも Omen が Donut なら donut 描画）
-        // OmenId は ArenaItem に含まれていないため、CastType 6 のみを Donut として扱う。
-        // 将来 OmenId を ArenaItem に通せばここで autoDetect を強化できる。
-        var isDonut = AoeResolver.IsDonutShape(castType, 0);
+        var omenId = item.AoeOmenId ?? 0;
+        var isDonut = AoeResolver.IsDonutShape(castType, omenId);
 
         if (isDonut)
         {
-            var innerR = pixelRadius * AoeResolver.DonutInnerRatio(0);
+            var innerR = pixelRadius * AoeResolver.DonutInnerRatio(omenId);
             DrawDonutShape(draw, origin, innerR, pixelRadius, fill, stroke);
             return;
         }
@@ -446,13 +963,13 @@ public sealed class MinimapWindow : Window, IDisposable
                 draw.AddCircle(origin, innerR, stroke, segments, 1.5f);
                 break;
             }
-            case 3: // Cone
-            case 4: // Line（細いコーンとして描画）
+            case 3:  // Cone
+            case 13: // Target-centered cone
             {
                 var facing = item.DirectionAngleRad ?? 0f;
-                var halfFan = castType == 4
-                    ? MathF.PI / 12f      // ~30° 全角の細い扇形
-                    : (item.FanDeg > 0 ? (float)(item.FanDeg * Math.PI / 360.0) : MathF.PI / 4f);
+                var halfFan = item.FanDeg > 0
+                    ? (float)(item.FanDeg * Math.PI / 360.0)
+                    : MathF.PI / 4f;
 
                 const int segments = 24;
                 var path = new List<Vector2> { origin };
@@ -478,8 +995,31 @@ public sealed class MinimapWindow : Window, IDisposable
                 draw.PathStroke(stroke, ImDrawFlags.None, 1.5f);
                 break;
             }
-            case 7:  // Cross / 十字（簡易：ソース位置に十字線）
-            case 8:  // Multi-cell (rare)
+            case 4:  // Line（矩形として描画。床塗り (ActorTrackedAoeService) と shape 一致）
+            case 12: // Target-centered line
+            {
+                // 床塗り側と同じ既定半幅。ピクセル空間に変換。
+                var facing = item.DirectionAngleRad ?? 0f;
+                var halfWidthPx = ArenaProjection.WorldRadiusToMap(AoeGeometryPolicy.DefaultLineHalfWidthM, item.ArenaRadius, mapR);
+                if (halfWidthPx < 6f) halfWidthPx = 6f;
+                var fX = MathF.Cos(facing);
+                var fY = MathF.Sin(facing);
+                var pX = -fY;
+                var pY = fX;
+                var p1 = new Vector2(origin.X + pX * halfWidthPx, origin.Y + pY * halfWidthPx);
+                var p2 = new Vector2(origin.X + fX * pixelRadius + pX * halfWidthPx,
+                                     origin.Y + fY * pixelRadius + pY * halfWidthPx);
+                var p3 = new Vector2(origin.X + fX * pixelRadius - pX * halfWidthPx,
+                                     origin.Y + fY * pixelRadius - pY * halfWidthPx);
+                var p4 = new Vector2(origin.X - pX * halfWidthPx, origin.Y - pY * halfWidthPx);
+                draw.AddQuadFilled(p1, p2, p3, p4, fill);
+                draw.AddLine(p1, p2, stroke, 1.5f);
+                draw.AddLine(p2, p3, stroke, 1.5f);
+                draw.AddLine(p3, p4, stroke, 1.5f);
+                draw.AddLine(p4, p1, stroke, 1.5f);
+                break;
+            }
+            case 11: // Cross / 十字（簡易：ソース位置に十字線）
             {
                 var cross = pixelRadius * 0.7f;
                 draw.AddLine(new Vector2(origin.X - cross, origin.Y),
@@ -489,10 +1029,7 @@ public sealed class MinimapWindow : Window, IDisposable
                 draw.AddCircleFilled(origin, pixelRadius * 0.15f, fill, 16);
                 break;
             }
-            case 10:  // 別形 Donut
-            case 11:  // (rare)
-            case 12:  // (rare)
-            case 13:  // (rare)
+            case 8:  // Multi-cell (rare)
             {
                 // 不明な形：ソース位置に半径分の半透明円を描いて「警戒」だけ示す
                 var segments = (int)MathF.Min(48, MathF.Max(20, pixelRadius * 0.4f));
@@ -590,17 +1127,22 @@ public sealed class MinimapWindow : Window, IDisposable
     {
         if (item.SafeZoneWorld is not { } safeWorld) return;
 
-        SafeZoneContext snapshot;
-        try
+        Vector3 arenaCenter;
+        if (item.LockedArenaCenter is { } locked)
         {
-            snapshot = _contextBuilder.Build();
+            arenaCenter = locked;
         }
-        catch
+        else
         {
-            return;
+            try
+            {
+                arenaCenter = _contextBuilder.Build().ArenaCenter;
+            }
+            catch
+            {
+                return;
+            }
         }
-
-        var arenaCenter = snapshot.ArenaCenter;
         var arenaR = item.ArenaRadius;
         if (arenaR <= 0) return;
 
@@ -646,11 +1188,14 @@ public sealed class MinimapWindow : Window, IDisposable
 
         try
         {
-            var snapshot = _contextBuilder.Build();
+            // ロック済中心があればそれを優先（描画中ジッタしない）
+            Vector3 ac;
+            if (item.LockedArenaCenter is { } locked) ac = locked;
+            else ac = _contextBuilder.Build().ArenaCenter;
             mapPos = ArenaProjection.ProjectWorldToMap(
                 mapCenter,
                 mapR,
-                snapshot.ArenaCenter,
+                ac,
                 item.ArenaRadius,
                 worldPos);
             return true;
@@ -667,20 +1212,16 @@ public sealed class MinimapWindow : Window, IDisposable
         {
             return;
         }
+        var halfX = item.ArenaHalfWidth > 0 ? item.ArenaHalfWidth : item.ArenaRadius;
+        var halfZ = item.ArenaHalfDepth > 0 ? item.ArenaHalfDepth : item.ArenaRadius;
+        if (halfX <= 0 || halfZ <= 0)
+        {
+            return;
+        }
 
         foreach (var position in item.StrategyPositions)
         {
-            var nx = (float)(position.X / item.ArenaRadius);
-            var nz = (float)(position.Z / item.ArenaRadius);
-            var dist = MathF.Sqrt(nx * nx + nz * nz);
-            if (dist > 1.0f)
-            {
-                var clamp = 0.97f / dist;
-                nx *= clamp;
-                nz *= clamp;
-            }
-
-            var point = new Vector2(mapCenter.X + nx * mapR, mapCenter.Y + nz * mapR);
+            var point = ArenaProjection.ProjectRelativeToMap(mapCenter, mapR, halfX, halfZ, position.X, position.Z);
             var color = ParseColor(position.Color, ColScatterLine);
             var fill = (color & 0x00FFFFFF) | 0x90000000;
             draw.AddCircleFilled(point, 7f * scale, fill, 18);
@@ -696,7 +1237,13 @@ public sealed class MinimapWindow : Window, IDisposable
     /// <summary>
     /// 自分と PT メンバーの世界座標をミニマップ座標に変換してドットで描画する。
     /// </summary>
-    private void DrawPlayerPositions(ImDrawListPtr draw, Vector2 center, float r, float scale, ArenaItem item)
+    private void DrawPlayerPositions(
+        ImDrawListPtr draw,
+        Vector2 center,
+        float r,
+        float scale,
+        ArenaItem item,
+        bool drawLiveContext)
     {
         SafeZoneContext snapshot;
         try
@@ -709,125 +1256,185 @@ public sealed class MinimapWindow : Window, IDisposable
             return;
         }
 
-        var arenaCenter = snapshot.ArenaCenter;
-        var radius = item.ArenaRadius;
-        if (radius <= 0)
+        // ジッタ防止：アイテムにロック済中心があればそれを使う。なければ
+        // 今回の snapshot から取り、以降は固定（描画関数内の参照のみ）。
+        var arenaCenter = item.LockedArenaCenter ?? snapshot.ArenaCenter;
+        // 矩形系では X/Z 軸を独立に正規化する（円形は両方同じ値を使う）。
+        // ArenaHalfWidth / ArenaHalfDepth は AddArenaView で寸法既定があれば設定される。
+        var halfX = item.ArenaHalfWidth > 0 ? item.ArenaHalfWidth : item.ArenaRadius;
+        var halfZ = item.ArenaHalfDepth > 0 ? item.ArenaHalfDepth : item.ArenaRadius;
+        if (halfX <= 0 || halfZ <= 0)
         {
             return;
         }
 
         var selfPos = snapshot.SelfPosition;
-        var bossIds = new HashSet<ulong>();
-        foreach (var bossNpc in snapshot.Bosses)
+        if (drawLiveContext)
         {
-            bossIds.Add(bossNpc.GameObjectId);
-        }
-
-        var primaryBossId = snapshot.Boss?.GameObjectId ?? 0UL;
-        foreach (var bossNpc in snapshot.Bosses)
-        {
-            if (bossNpc.GameObjectId == primaryBossId)
+            var primaryBossId = snapshot.Boss?.GameObjectId ?? 0UL;
+            foreach (var bossNpc in snapshot.Bosses)
             {
-                continue;
-            }
-
-            var bossPos = new Vector3(bossNpc.Position.X, bossNpc.Position.Y, bossNpc.Position.Z);
-            DrawPositionDot(draw, center, r, arenaCenter, radius, bossPos,
-                ColBoss, ColText, 5.5f * scale, ringThickness: 1.6f);
-        }
-
-        if (item.SourceWorld is { } sourceWorld)
-        {
-            DrawPositionDot(draw, center, r, arenaCenter, radius, sourceWorld,
-                ColScatterLine, ColText, 7.0f * scale, ringThickness: 2.0f);
-        }
-
-        // 他の敵 NPC（ボス以外、HP > 0）を赤いドットで描画
-        try
-        {
-            foreach (var obj in _objectTable)
-            {
-                if (obj is not IBattleNpc npc) continue;
-                if (bossIds.Contains(npc.GameObjectId)) continue;
-                if (npc.MaxHp == 0) continue;
-                if (!IsEnemy(npc)) continue;
-
-                var pos = new Vector3(npc.Position.X, npc.Position.Y, npc.Position.Z);
-                // アリーナ範囲外（半径 1.5 倍より遠く）はスキップ：他のフィールド敵を拾わない
-                var dx = pos.X - arenaCenter.X;
-                var dz = pos.Z - arenaCenter.Z;
-                if (dx * dx + dz * dz > radius * radius * 2.25f) continue;
-
-                DrawPositionDot(draw, center, r, arenaCenter, radius, pos,
-                    ColEnemy, ColEnemyRing, 4f * scale);
-            }
-        }
-        catch { /* ObjectTable 走査中の例外は無視 */ }
-
-        // PT メンバーはロール別色のドット（自分は後で上書き描画するためスキップ）
-        const float SelfMatchEpsilonSq = 0.05f * 0.05f;
-        foreach (var member in snapshot.Party)
-        {
-            if (member is null) continue;
-            var memberPos = new Vector3(member.Position.X, member.Position.Y, member.Position.Z);
-            var dxSelf = memberPos.X - selfPos.X;
-            var dzSelf = memberPos.Z - selfPos.Z;
-            if ((dxSelf * dxSelf + dzSelf * dzSelf) < SelfMatchEpsilonSq)
-            {
-                continue; // 自分自身は後段で前景描画
-            }
-
-            uint fillColor;
-            try
-            {
-                var role = member.ClassJob.Value.Role;
-                fillColor = role switch
+                if (bossNpc.GameObjectId == primaryBossId)
                 {
-                    1 => ColRoleTank,
-                    2 or 3 => ColRoleDps,
-                    4 => ColRoleHealer,
-                    _ => ColRoleNonCombat,
-                };
-            }
-            catch
-            {
-                fillColor = ColPartyMember;
+                    continue;
+                }
+
+                var bossPos = new Vector3(bossNpc.Position.X, bossNpc.Position.Y, bossNpc.Position.Z);
+                DrawPositionDot(draw, center, r, arenaCenter, halfX, halfZ, bossPos,
+                    ColBoss, ColText, 5.5f * scale, ringThickness: 1.6f);
             }
 
-            DrawPositionDot(draw, center, r, arenaCenter, radius, memberPos,
-                fillColor, ColPartyMemberRing, 4f * scale);
+            if (item.SourceWorld is { } sourceWorld)
+            {
+                DrawPositionDot(draw, center, r, arenaCenter, halfX, halfZ, sourceWorld,
+                    ColScatterLine, ColText, 7.0f * scale, ringThickness: 2.0f);
+            }
+
+            // フィールドマーカー（A/B/C/D・1-4）を描画。設置済のみ表示。
+            DrawWaymarkOverlay(draw, center, r, arenaCenter, halfX, halfZ, scale);
+
+            // PT メンバーはロール別色のドット（自分は後で上書き描画するためスキップ）
+            const float SelfMatchEpsilonSq = 0.05f * 0.05f;
+            foreach (var member in snapshot.Party)
+            {
+                if (member is null) continue;
+                var memberPos = new Vector3(member.Position.X, member.Position.Y, member.Position.Z);
+                var dxSelf = memberPos.X - selfPos.X;
+                var dzSelf = memberPos.Z - selfPos.Z;
+                if ((dxSelf * dxSelf + dzSelf * dzSelf) < SelfMatchEpsilonSq)
+                {
+                    continue; // 自分自身は後段で前景描画
+                }
+
+                uint fillColor;
+                try
+                {
+                    var role = member.ClassJob.Value.Role;
+                    fillColor = role switch
+                    {
+                        1 => ColRoleTank,
+                        2 or 3 => ColRoleDps,
+                        4 => ColRoleHealer,
+                        _ => ColRoleNonCombat,
+                    };
+                }
+                catch
+                {
+                    fillColor = ColPartyMember;
+                }
+
+                // ステータスハイライト：このメンバーが指定バフ／デバフを持っていれば
+                // 色とバッジを上書きする
+                string? badge = null;
+                if (item.PartyStatusHighlights.Count > 0)
+                {
+                    var hi = MatchStatusHighlight(member, item.PartyStatusHighlights);
+                    if (hi is not null)
+                    {
+                        if (!string.IsNullOrEmpty(hi.Color))
+                        {
+                            fillColor = ParseColor(hi.Color, fillColor);
+                        }
+                        badge = hi.Badge;
+                    }
+                }
+
+                DrawPositionDot(draw, center, r, arenaCenter, halfX, halfZ, memberPos,
+                    fillColor, ColPartyMemberRing, 4f * scale);
+
+                if (!string.IsNullOrEmpty(badge))
+                {
+                    var nx = (memberPos.X - arenaCenter.X) / halfX;
+                    var nz = (memberPos.Z - arenaCenter.Z) / halfZ;
+                    var px = center.X + nx * r;
+                    var py = center.Y + nz * r;
+                    AddCenteredText(draw, new Vector2(px, py - 12f * scale), badge!, ColCallout, 1.0f);
+                }
+            }
         }
 
         // 自分は明緑 + 太い白リングで前景強調
         if (selfPos != Vector3.Zero)
         {
-            DrawPositionDot(draw, center, r, arenaCenter, radius, selfPos,
+            DrawPositionDot(draw, center, r, arenaCenter, halfX, halfZ, selfPos,
                 ColPlayerSelf, ColPlayerSelfRing, 5.5f * scale, ringThickness: 1.8f);
         }
     }
 
     /// <summary>
-    /// 世界座標 (X / Z 平面) をミニマップ円内の画素座標に変換してドットを描画。
-    /// アリーナ円の外に出る場合は外周ぎりぎりに丸める。
+    /// FFXIV のフィールドマーカー（A/B/C/D・1〜4）をライブミニマップに重ねて描画。
+    /// </summary>
+    /// <remarks>
+    /// 設置されていないマーカーはスキップ。色は実ゲーム準拠
+    /// （A/1=赤, B/2=黄, C/3=青, D/4=紫）。アリーナ枠の外に出るマーカーは
+    /// クランプして方向だけ示す（DrawPositionDot 内のクランプロジックを利用）。
+    /// </remarks>
+    private static void DrawWaymarkOverlay(
+        ImDrawListPtr draw, Vector2 mapCenter, float mapR,
+        Vector3 arenaCenter, float halfX, float halfZ, float scale)
+    {
+        var letters = new[] { "A", "B", "C", "D", "1", "2", "3", "4" };
+        // ImGui の uint 色は ABGR（下位から R→G→B→A）。
+        // A/1=#E74C3C 赤, B/2=#F1C40F 黄, C/3=#3498DB 青, D/4=#9B59B6 紫
+        var colors = new uint[]
+        {
+            0xFF3C4CE7u, 0xFF0FC4F1u, 0xFFDB9834u, 0xFFB6599Bu,
+            0xFF3C4CE7u, 0xFF0FC4F1u, 0xFFDB9834u, 0xFFB6599Bu,
+        };
+        var dotR = 6.0f * scale;
+        for (var i = 0; i < letters.Length; i++)
+        {
+            var live = FfxivEchoes.Capture.WaymarkProvider.TryGetPosition(letters[i]);
+            if (live is null) continue;
+
+            // arenaCenter からの相対 → ミニマップ画素
+            var dx = live.Value.X - arenaCenter.X;
+            var dz = live.Value.Z - arenaCenter.Z;
+            var nx = halfX > 0 ? dx / halfX : 0f;
+            var nz = halfZ > 0 ? dz / halfZ : 0f;
+            if (MathF.Abs(nx) > 1f || MathF.Abs(nz) > 1f)
+            {
+                var maxAbs = MathF.Max(MathF.Abs(nx), MathF.Abs(nz));
+                var clamp = 0.97f / maxAbs;
+                nx *= clamp;
+                nz *= clamp;
+            }
+            var px = mapCenter.X + nx * mapR;
+            var py = mapCenter.Y + nz * mapR;
+
+            // 半透明塗り + 外枠
+            var fill = (colors[i] & 0x00FFFFFFu) | 0xC0000000u;
+            draw.AddCircleFilled(new Vector2(px, py), dotR, fill, 20);
+            draw.AddCircle(new Vector2(px, py), dotR, colors[i], 20, 1.5f);
+            // 中央に文字（黒、見やすく小さく）
+            AddCenteredText(draw, new Vector2(px, py - 4f * scale), letters[i], 0xFF000000u, 0.85f);
+        }
+    }
+
+    /// <summary>
+    /// 世界座標 (X / Z 平面) をミニマップ画素座標に変換してドットを描画。
+    /// X 軸は <paramref name="halfX"/>、Z 軸は <paramref name="halfZ"/> で独立に正規化する。
+    /// 円形アリーナは halfX == halfZ == 半径、矩形系は halfWidth / halfDepth を渡す。
     /// </summary>
     private static void DrawPositionDot(
         ImDrawListPtr draw, Vector2 mapCenter, float mapR,
-        Vector3 arenaCenter, float arenaRadius,
+        Vector3 arenaCenter, float halfX, float halfZ,
         Vector3 worldPos, uint fillColor, uint ringColor, float dotR,
         float ringThickness = 1.2f)
     {
-        // FFXIV 座標：X = 東+、Z = 南+。ミニマップは北上、X 右、Y 下なので
-        // mapX = cx + dx / arenaR * mapR
-        // mapY = cy + dz / arenaR * mapR
+        // FFXIV 座標：X = 東+、Z = 南+。ミニマップは北上・X 右・Y 下。
+        // 矩形対応のため X/Z 軸独立に正規化：
+        //   nx = (worldX - centerX) / halfX
+        //   nz = (worldZ - centerZ) / halfZ
         var dx = worldPos.X - arenaCenter.X;
         var dz = worldPos.Z - arenaCenter.Z;
-        var nx = dx / arenaRadius;
-        var nz = dz / arenaRadius;
-        var dist = MathF.Sqrt(nx * nx + nz * nz);
-        // 円の外に出るなら外周ぎりぎりに丸める（外側に居ることが分かるよう少し控えめ）
-        if (dist > 1.0f)
+        var nx = halfX > 0 ? dx / halfX : 0f;
+        var nz = halfZ > 0 ? dz / halfZ : 0f;
+        // 範囲外（|nx|>1 or |nz|>1）はマップ枠ぎりぎりに丸める
+        if (MathF.Abs(nx) > 1f || MathF.Abs(nz) > 1f)
         {
-            var clamp = 0.97f / dist;
+            var maxAbs = MathF.Max(MathF.Abs(nx), MathF.Abs(nz));
+            var clamp = 0.97f / maxAbs;
             nx *= clamp;
             nz *= clamp;
         }
@@ -921,6 +1528,40 @@ public sealed class MinimapWindow : Window, IDisposable
     /// IBattleNpc が敵側かどうかの簡易判定。BattleNpcKind が Enemy か、または
     /// SubKind から判別できない場合は MaxHp > 0 で「敵対 NPC」とみなす。
     /// </summary>
+    /// <summary>
+    /// 指定 PT メンバーが <paramref name="specs"/> の何れかにマッチするステータスを
+    /// 持っていれば、その spec を返す。最初のマッチで打ち切り。
+    /// </summary>
+    private static StatusHighlightSpec? MatchStatusHighlight(
+        Dalamud.Game.ClientState.Objects.SubKinds.IPlayerCharacter member,
+        IReadOnlyList<StatusHighlightSpec> specs)
+    {
+        try
+        {
+            var statuses = member.StatusList;
+            if (statuses is null) return null;
+
+            foreach (var st in statuses)
+            {
+                if (st is null || st.StatusId == 0) continue;
+                foreach (var spec in specs)
+                {
+                    if (spec.StatusId is { } sid && sid == st.StatusId) return spec;
+                    if (!string.IsNullOrEmpty(spec.StatusName))
+                    {
+                        var nm = st.GameData.ValueNullable?.Name.ExtractText() ?? string.Empty;
+                        if (nm.Contains(spec.StatusName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            return spec;
+                        }
+                    }
+                }
+            }
+        }
+        catch { /* 取得失敗は無視 */ }
+        return null;
+    }
+
     private static bool IsEnemy(IBattleNpc npc)
     {
         try
@@ -965,5 +1606,38 @@ public sealed class MinimapWindow : Window, IDisposable
         IReadOnlyList<StrategyPosition> StrategyPositions,
         float? AoeRadius,
         int? AoeCastType,
-        DateTimeOffset ExpiresAt);
+        uint? AoeOmenId,
+        IReadOnlyList<Vector3> MultiSourceWorlds,
+        IReadOnlyList<StrategyObjectMarker> ObjectMarkers,
+        IReadOnlyList<StrategyAoeZone> AoeZones,
+        IReadOnlyList<StatusHighlightSpec> PartyStatusHighlights,
+        string ArenaShape,
+        float ArenaHalfWidth,
+        float ArenaHalfDepth,
+        Vector3? LockedArenaCenter,
+        DateTimeOffset ExpiresAt,
+        /// <summary>
+        /// AutoTelegraphService 等の Lumina 自動経路で追加された場合の cast id。
+        /// <see cref="SuppressAutoLuminaForCast"/> で同 cast の自動エントリを除去するキー。
+        /// ユーザー定義 zone は null。
+        /// </summary>
+        uint? AutoLuminaCastId);
+
+    private readonly record struct ArenaDisplayGroup(IReadOnlyList<ArenaItem> Items)
+    {
+        public ArenaItem Primary => Items[0];
+
+        public string Callout
+        {
+            get
+            {
+                if (Items.Count <= 1)
+                {
+                    return Primary.Callout;
+                }
+
+                return $"{Primary.Callout} ほか{Items.Count - 1}";
+            }
+        }
+    }
 }

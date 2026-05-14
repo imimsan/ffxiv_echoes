@@ -20,17 +20,20 @@ namespace FfxivEchoes.Windows;
 /// </summary>
 public sealed class UpcomingEventsWindow : Window, IDisposable
 {
-    private const int MaxItems = 6;
+    private const int MaxItems = 8;
     private const float ImminentSec = 5f;
-    private const float Width = 340f;
+    private const float Width = 320f;
+    private const float Height = 260f;
 
     private readonly CombatClock _combatClock;
     private readonly TriggerStore _store;
     private readonly RecordingScanner _recordings;
     private readonly SyncOffsetTracker _syncOffset;
+    private readonly BranchObserverService? _branchObserver;
     private readonly IDisposable _eventSub;
     private readonly object _cacheGate = new();
     private readonly List<UpcomingTemplate> _cachedTemplates = new();
+    private readonly Dictionary<string, UpcomingTemplate> _liveAutoAttackTemplates = new(StringComparer.OrdinalIgnoreCase);
     private bool _cacheDirty = true;
 
     private string _currentZone = "Unknown";
@@ -38,7 +41,8 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
 
     public UpcomingEventsWindow(
         IEventBus bus, CombatClock combatClock, TriggerStore store,
-        RecordingScanner recordings, SyncOffsetTracker syncOffset)
+        RecordingScanner recordings, SyncOffsetTracker syncOffset,
+        BranchObserverService? branchObserver = null)
         : base("##ffxiv-echoes-upcoming",
             ImGuiWindowFlags.NoTitleBar |
             ImGuiWindowFlags.NoResize |
@@ -53,8 +57,9 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
         _store = store;
         _recordings = recordings;
         _syncOffset = syncOffset;
+        _branchObserver = branchObserver;
 
-        Size = new Vector2(Width, 200f) * ImGuiHelpers.GlobalScale;
+        Size = new Vector2(Width, Height) * ImGuiHelpers.GlobalScale;
         SizeCondition = ImGuiCond.FirstUseEver;
         IsOpen = false;
         RespectCloseHotkey = false;
@@ -70,18 +75,28 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
         {
             case ZoneChangedEvent z:
                 _currentZone = string.IsNullOrEmpty(z.ZoneName) ? "Unknown" : z.ZoneName;
+                ClearLiveAutoAttacks();
                 InvalidateCache();
                 UpdateVisibility();
                 break;
             case CombatStartedEvent:
                 _inCombat = true;
+                ClearLiveAutoAttacks();
                 InvalidateCache();
                 UpdateVisibility();
                 break;
             case CombatEndedEvent:
                 _inCombat = false;
                 IsOpen = false;
+                ClearLiveAutoAttacks();
                 ClearCache();
+                break;
+            case BranchResolvedEvent:
+                // 分岐確定 → タイムラインを再構築（rejected branch の mechanic を除外）
+                InvalidateCache();
+                break;
+            case TriggerFiredEvent t when t.TriggerId.StartsWith("__auto_attack_timer_", StringComparison.Ordinal):
+                TrackLiveAutoAttackTimer(t);
                 break;
         }
     }
@@ -100,6 +115,14 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
         {
             _cachedTemplates.Clear();
             _cacheDirty = true;
+        }
+    }
+
+    private void ClearLiveAutoAttacks()
+    {
+        lock (_cacheGate)
+        {
+            _liveAutoAttackTemplates.Clear();
         }
     }
 
@@ -126,60 +149,260 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
         }
 
         var items = CollectUpcoming(nowRel.Value);
-        if (items.Count == 0)
+        DrawHeroAndList(nowRel.Value, items);
+    }
+
+    /// <summary>
+    /// cactbot 系の縮むタイマーバー UI（BigWigs スタイル）。
+    /// </summary>
+    /// <remarks>
+    /// 各イベントが横長のバーで、**時間が経つにつれてバーが右から左に縮む** → ゼロになる瞬間 = 発動。
+    /// MMO プレイヤー（BigWigs / cactbot 経験者）にとって最も直感的な形式。
+    /// 視覚特性：
+    ///  - バー長 = 残り時間に直接対応（30 秒先 = 100% 長、5 秒先 = ~17% 長）
+    ///  - 行背景は常に白、文字は常に黒（時間帯で文字色が変わると「直前まで見えない」問題が出るため）
+    ///  - バーフィル色は残り時間で段階遷移：薄水（>15s）→ 黄（5-15s）→ オレンジ（1-5s）→ 赤（≤1s）
+    ///  - 1 行 1 イベント。詳細はホバー時 tooltip
+    ///  - 不明アクション・同名 ±3 秒重複は dedup
+    /// </remarks>
+    private void DrawHeroAndList(double nowRel, List<UpcomingItem> items)
+    {
+        var visible = items
+            .Where(i => !UpcomingTimelinePolicy.IsRawUnknownActionLabel(i.Label))
+            .Where(i => UpcomingTimelinePolicy.ShouldDisplayUpcomingItem(i.Time, nowRel))
+            .ToList();
+        visible = visible
+            .OrderBy(i => i.Time)
+            .ToList();
+        visible = DedupByLabelWithin(visible, 3.0)
+            .OrderBy(i => i.Time)
+            .ToList();
+        if (visible.Count == 0)
         {
-            ImGui.TextDisabled("予測データがありません。録画してから再戦闘してください。");
+            ImGui.TextDisabled("予測データなし — 録画してから 1 戦してください");
             return;
         }
 
-        var iconColumnW = 32f * ImGuiHelpers.GlobalScale;
-        var countdownColumnW = 64f * ImGuiHelpers.GlobalScale;
-        var rowHeight = 28f * ImGuiHelpers.GlobalScale;
+        var scale = ImGuiHelpers.GlobalScale;
+        var draw = ImGui.GetWindowDrawList();
+        var winAvail = ImGui.GetContentRegionAvail();
 
-        foreach (var it in items)
-        {
-            var remaining = (float)(it.Time - nowRel.Value);
-            var imminent = remaining <= ImminentSec && remaining >= -0.5f;
+        const float BarWindowSec = 30f;       // バー全長 = 30 秒先
+        const int MaxRows = 8;
+        var rowH = 22f * scale;
+        var rowSpacing = 4f * scale;
+        var headerH = 18f * scale;
 
-            var draw = ImGui.GetWindowDrawList();
-            var rowStart = ImGui.GetCursorScreenPos();
-            var rowEnd = new Vector2(rowStart.X + ImGui.GetContentRegionAvail().X, rowStart.Y + rowHeight);
+        // 文字色は常に濃いグレー（黒）。背景白・バー色付きでも一貫して読める。
+        // 「直前になってから白文字に切り替わる → 見えない」問題を解消。
+        const uint TextColor = 0xFF1A1A1Au;
+        // 行背景：ほぼ白（バー外領域も含めて全幅）
+        const uint LaneBgColor = 0xFFF0F0F0u;
+        // 行枠：薄いグレーで行間の区切りを補助
+        const uint LaneBorderColor = 0xFFA0A0A0u;
 
-            // 背景
-            uint bg = imminent ? 0x60249EFB : 0x80000000; // amber when imminent / 黒半透明
-            uint border = imminent ? 0xFF3B82F6 : 0xFF888888; // 青 / 灰
-            // border_left を太く
-            draw.AddRectFilled(rowStart, rowEnd, bg, 3f);
-            draw.AddLine(new Vector2(rowStart.X, rowStart.Y), new Vector2(rowStart.X, rowEnd.Y), it.Color, 4f);
-
-            // アイコン領域
-            var iconX = rowStart.X + 8f;
-            var iconY = rowStart.Y + (rowHeight - 22f * ImGuiHelpers.GlobalScale) * 0.5f;
-            // emoji icon を文字列として描画（フォントが対応していれば見える）
-            draw.AddText(new Vector2(iconX, iconY), 0xFFFFFFFF, it.Icon);
-
-            // カウントダウン
-            var countdownText = remaining < 0
-                ? $"+{(-remaining):0.0}s"
-                : $"{remaining:0.0}s";
-            var cdColor = imminent ? 0xFF3BCFFB : 0xFFFFFFFFu;
-            var cdSize = ImGui.CalcTextSize(countdownText);
-            var cdX = rowStart.X + iconColumnW + countdownColumnW - cdSize.X - 4f;
-            var cdY = rowStart.Y + (rowHeight - cdSize.Y) * 0.5f;
-            draw.AddText(new Vector2(cdX, cdY), cdColor, countdownText);
-
-            // ラベル
-            var labelX = rowStart.X + iconColumnW + countdownColumnW + 6f;
-            var labelY = rowStart.Y + 3f;
-            draw.AddText(new Vector2(labelX, labelY), 0xFFE2E8F0, Truncate(it.Label, 22));
-            // sub
-            if (!string.IsNullOrEmpty(it.Sub))
+        var groups = visible
+            .GroupBy(i => UpcomingTimelinePolicy.SourceGroupName(i.Source, i.Label))
+            .Select(g => new
             {
-                draw.AddText(new Vector2(labelX, labelY + 13f * ImGuiHelpers.GlobalScale), 0xFF94A3B8, Truncate(it.Sub, 28));
+                Source = g.Key,
+                Items = DedupByLabelWithin(g.ToList(), 3.0),
+                FirstTime = g.Min(i => i.Time),
+            })
+            .OrderBy(g => g.FirstTime)
+            .ToList();
+
+        var rowIndex = 0;
+        var rowsDrawn = 0;
+        foreach (var group in groups)
+        {
+            if (rowsDrawn >= MaxRows)
+            {
+                break;
             }
 
-            ImGui.Dummy(new Vector2(ImGui.GetContentRegionAvail().X, rowHeight + 2f));
+            if (UpcomingTimelinePolicy.ShouldDrawSourceGroupHeader(group.Source))
+            {
+                var headerStart = ImGui.GetCursorScreenPos();
+                var headerEnd = new Vector2(headerStart.X + winAvail.X, headerStart.Y + headerH);
+                draw.AddRectFilled(headerStart, headerEnd, 0xCC101010u, 4f);
+                draw.AddText(
+                    new Vector2(headerStart.X + 8f * scale, headerStart.Y + 2f * scale),
+                    0xFFE6E6E6u,
+                    Truncate(group.Source, 26));
+                ImGui.SetCursorScreenPos(new Vector2(headerStart.X, headerEnd.Y + 2f * scale));
+            }
+
+            foreach (var it in group.Items)
+            {
+                if (rowsDrawn >= MaxRows)
+                {
+                    break;
+                }
+
+            var remaining = (float)(it.Time - nowRel);
+            // バー長：残時間 / 窓長。残時間多いほどバー長い（cactbot 流）。
+            // 0 秒で完全に消える、過去（remaining < 0）は短い赤バーで余韻。
+            var fillRatio = remaining > 0
+                ? Math.Clamp(remaining / BarWindowSec, 0.02f, 1f)
+                : 0.04f;
+
+            // 色階層：cactbot の info/soon/alarm + 過ぎた赤。
+            // 白背景にコントラストする色を選ぶ（薄水・黄でも視認できる）。
+            uint barColor;
+            if (remaining <= 1f)
+            {
+                barColor = 0xFF3030F0u;       // 真赤
+            }
+            else if (remaining <= 5f)
+            {
+                barColor = 0xFF3FA0F8u;       // 橙
+            }
+            else if (remaining <= 15f)
+            {
+                barColor = 0xFF50C8E8u;       // 黄
+            }
+            else
+            {
+                barColor = 0xFFD8C8B0u;       // 薄水
+            }
+
+            var rowStart = ImGui.GetCursorScreenPos();
+            var rowEnd = new Vector2(rowStart.X + winAvail.X, rowStart.Y + rowH);
+            var barWidth = (rowEnd.X - rowStart.X) * fillRatio;
+            var barEnd = new Vector2(rowStart.X + barWidth, rowEnd.Y);
+
+            // 背景レーン（白で全幅）→ 上に色付きバー（縮む）
+            draw.AddRectFilled(rowStart, rowEnd, LaneBgColor, 4f);
+            draw.AddRectFilled(rowStart, barEnd, barColor, 4f);
+            // 行枠（白背景上で行を区切る薄いグレー枠）
+            draw.AddRect(rowStart, rowEnd, LaneBorderColor, 4f, ImDrawFlags.None, 1f);
+
+            // 直近 5 秒以内は赤い枠線で強調（"soon" / "alarm" 段階。
+            // 白枠だと白背景に紛れるので赤に変更）。
+            if (remaining <= 5f && remaining >= -1f)
+            {
+                draw.AddRect(rowStart, rowEnd, 0xFF3030F0u, 4f, ImDrawFlags.None, 2f);
+            }
+
+            // 時刻（バー左端、固定位置・1.05倍）
+            var timeText = remaining < 0 ? $"+{(-remaining):F1}s" : $"{remaining:F1}s";
+            ImGui.SetWindowFontScale(1.05f);
+            var timeSize = ImGui.CalcTextSize(timeText);
+            draw.AddText(
+                new Vector2(rowStart.X + 8f * scale, rowStart.Y + (rowH - timeSize.Y) * 0.5f),
+                TextColor, timeText);
+            // 技名（時刻の右）
+            var rowLabel = UpcomingTimelinePolicy.FormatRowLabel(it.Label, it.Source);
+            var labelText = Truncate(rowLabel, 22);
+            var labelSize = ImGui.CalcTextSize(labelText);
+            draw.AddText(
+                new Vector2(rowStart.X + 60f * scale, rowStart.Y + (rowH - labelSize.Y) * 0.5f),
+                TextColor, labelText);
+            ImGui.SetWindowFontScale(1f);
+
+            // 行全体に当たり判定 → ホバー時に詳細 tooltip
+            ImGui.SetCursorScreenPos(rowStart);
+            ImGui.InvisibleButton($"##upcoming-row-{rowIndex}", new Vector2(winAvail.X, rowH));
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.BeginTooltip();
+                ImGui.TextUnformatted(rowLabel);
+                if (!string.IsNullOrEmpty(it.Source))
+                {
+                    ImGui.TextDisabled($"source: {it.Source}");
+                }
+                ImGui.TextDisabled($"残り {timeText}");
+                if (!string.IsNullOrEmpty(it.Sub))
+                {
+                    ImGui.TextDisabled(it.Sub);
+                }
+                ImGui.EndTooltip();
+            }
+            ImGui.SetCursorScreenPos(new Vector2(rowStart.X, rowEnd.Y + rowSpacing));
+                rowsDrawn++;
+                rowIndex++;
+            }
         }
+    }
+
+    /// <summary>
+    /// 同名イベントが指定秒内に並ぶケースを 1 件に集約（最も早いものを残す）。
+    /// 例：cast_start 同名 0xAAAA / 0xBBBB がそれぞれ 12.8s / 13.2s で表示されると
+    /// 「パラデイグマ」が 2 回並ぶ。これを 1 件にまとめる。
+    /// </summary>
+    private static List<UpcomingItem> DedupByLabelWithin(List<UpcomingItem> items, double windowSec)
+    {
+        if (items.Count <= 1) return items;
+        var sorted = items.OrderBy(it => it.Time).ToList();
+        var result = new List<UpcomingItem>(sorted.Count);
+        var consumed = new bool[sorted.Count];
+        for (var i = 0; i < sorted.Count; i++)
+        {
+            if (consumed[i]) continue;
+            var head = sorted[i];
+            for (var j = i + 1; j < sorted.Count; j++)
+            {
+                if (consumed[j]) continue;
+                if (sorted[j].Time - head.Time > windowSec) break;
+                if (UpcomingTimelinePolicy.ShouldDeduplicateDisplayItem(
+                        head.EventType, sorted[j].EventType,
+                        head.Label, sorted[j].Label,
+                        head.Source, sorted[j].Source))
+                {
+                    consumed[j] = true; // 同名直後は隠す
+                }
+            }
+            result.Add(SelectPreferredDuplicate(sorted, consumed, i, head, windowSec));
+        }
+        return result;
+    }
+
+    private static UpcomingItem SelectPreferredDuplicate(
+        IReadOnlyList<UpcomingItem> sorted,
+        bool[] consumed,
+        int headIndex,
+        UpcomingItem head,
+        double windowSec)
+    {
+        var best = head;
+        var bestScore = DuplicatePreferenceScore(best);
+        for (var i = headIndex + 1; i < sorted.Count; i++)
+        {
+            if (!consumed[i] && sorted[i].Time - head.Time > windowSec) break;
+            if (!UpcomingTimelinePolicy.ShouldDeduplicateDisplayItem(
+                    head.EventType, sorted[i].EventType,
+                    head.Label, sorted[i].Label,
+                    head.Source, sorted[i].Source))
+            {
+                continue;
+            }
+
+            var score = DuplicatePreferenceScore(sorted[i]);
+            if (score > bestScore ||
+                (score == bestScore && sorted[i].Time < best.Time))
+            {
+                best = sorted[i];
+                bestScore = score;
+            }
+        }
+
+        return best;
+    }
+
+    private static int DuplicatePreferenceScore(UpcomingItem item)
+    {
+        var group = UpcomingTimelinePolicy.SourceGroupName(item.Source, item.Label);
+        var score = UpcomingTimelinePolicy.IsCommonGroup(group) ? 0 : 10;
+        if (string.Equals(item.EventType, "cast_start", StringComparison.OrdinalIgnoreCase))
+        {
+            score += 2;
+        }
+        if (string.Equals(item.EventType, "note", StringComparison.OrdinalIgnoreCase))
+        {
+            score += 1;
+        }
+        return score;
     }
 
     private List<UpcomingItem> CollectUpcoming(double nowRel)
@@ -194,22 +417,109 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
 
         var list = new List<UpcomingItem>();
         var offset = _syncOffset.CurrentOffsetSec;
-        // 発動後も 3 秒は表示し続ける（「すぐ消えると困る」要望）
-        const double KeepAfterFireSec = 3.0;
         foreach (var template in templates)
         {
-            var t = template.RelativeTime + offset;
-            if (t < nowRel - KeepAfterFireSec) continue;
+            var t = template.RelativeTime + (template.ApplySyncOffset ? offset : 0.0);
+            if (!UpcomingTimelinePolicy.ShouldDisplayUpcomingItem(t, nowRel)) continue;
             list.Add(new UpcomingItem(
                 Time: t,
                 Icon: template.Icon,
                 Label: template.Label,
                 Sub: template.Sub,
+                EventType: template.EventType,
+                Source: template.Source,
                 Color: template.Color));
+        }
+
+        UpcomingTemplate[] liveAutoAttacks;
+        lock (_cacheGate)
+        {
+            var staleBefore = nowRel;
+            foreach (var key in _liveAutoAttackTemplates
+                         .Where(kv => kv.Value.RelativeTime <= staleBefore)
+                         .Select(kv => kv.Key)
+                         .ToArray())
+            {
+                _liveAutoAttackTemplates.Remove(key);
+            }
+            liveAutoAttacks = _liveAutoAttackTemplates.Values.ToArray();
+        }
+
+        foreach (var live in liveAutoAttacks)
+        {
+            list.RemoveAll(i =>
+                UpcomingTimelinePolicy.IsAutoAttack(i.EventType) &&
+                Math.Abs(i.Time - live.RelativeTime) <= 0.75);
+        }
+        foreach (var live in liveAutoAttacks)
+        {
+            if (!UpcomingTimelinePolicy.ShouldDisplayUpcomingItem(live.RelativeTime, nowRel)) continue;
+            list.Add(new UpcomingItem(
+                Time: live.RelativeTime,
+                Icon: live.Icon,
+                Label: live.Label,
+                Sub: live.Sub,
+                EventType: live.EventType,
+                Source: live.Source,
+                Color: live.Color));
         }
 
         list.Sort((a, b) => a.Time.CompareTo(b.Time));
         return list.Take(MaxItems).ToList();
+    }
+
+    private void TrackLiveAutoAttackTimer(TriggerFiredEvent ev)
+    {
+        if (!_inCombat)
+        {
+            return;
+        }
+
+        var duration = ExtractTimerDuration(ev);
+        if (duration is null)
+        {
+            return;
+        }
+
+        var sourceEvent = ev.SourceEvent as ActionUsedEvent;
+        var timestamp = sourceEvent?.Timestamp ?? ev.Timestamp;
+        var baseRel = _combatClock.RelativeSecondsAt(timestamp);
+        if (baseRel is null)
+        {
+            return;
+        }
+
+        var sourceId = sourceEvent?.SourceId ?? 0;
+        var key = sourceId == 0 ? ev.TriggerId : $"aa:{sourceId}";
+        var expectedRel = baseRel.Value + duration.Value;
+        var sourceName = sourceEvent?.SourceName;
+        var sub = string.IsNullOrWhiteSpace(sourceName) ? "live" : $"live: {sourceName}";
+        lock (_cacheGate)
+        {
+            _liveAutoAttackTemplates[key] = new UpcomingTemplate(
+                RelativeTime: expectedRel,
+                Icon: "AA",
+                Label: "AA",
+                Sub: sub,
+                EventType: "auto_attack",
+                Source: sourceName,
+                Color: 0xFFB6D9F0u,
+                ApplySyncOffset: false);
+        }
+    }
+
+    private static double? ExtractTimerDuration(TriggerFiredEvent ev)
+    {
+        foreach (var action in ev.Actions)
+        {
+            if (string.Equals(action.Type, "timer_bar", StringComparison.OrdinalIgnoreCase) &&
+                action.Duration is { } duration &&
+                duration > 0)
+            {
+                return duration;
+            }
+        }
+        return null;
     }
 
     private void EnsureCache()
@@ -252,24 +562,44 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
             var partyMembers = new HashSet<string>(
                 _recordings.ListPartyMembers(_currentZone),
                 StringComparer.OrdinalIgnoreCase);
-            var predictions = RecordingPredictionPlanner.BuildTimelinePredictions(agg, partyMembers: partyMembers);
+            // タイムラインは「キャストバー付きの予測技 + AA」だけに絞る。
+            // includeActions=true だと action_used（ボスのインスタント技：phase 移行 / 連続短攻撃 等）
+            // までタイムラインに乗ってしまい、「ソディアーク」「パラディグマ」のような同じ technic 名が
+            // 3 回も並んでノイズになる。AA は別軸の重要情報なので明示的に残す。
+            var predictions = RecordingPredictionPlanner.BuildTimelinePredictions(
+                agg, partyMembers: partyMembers,
+                includeActions: false,
+                includeAutoAttacks: true);
 
-            foreach (var prediction in predictions)
+            var displayPredictions = UpcomingTimelinePolicy.FilterDisplayPredictions(predictions);
+            foreach (var prediction in displayPredictions)
             {
-                var label = prediction.Label;
+                var isAa = UpcomingTimelinePolicy.IsAutoAttack(prediction.EventType);
+                var label = isAa ? "AA" : UpcomingTimelinePolicy.FormatRowLabel(prediction.Label, prediction.Source);
+                var color = isAa
+                    ? 0xFFB6D9F0u                                 // AA：淡い青
+                    : 0xFFFAA560u;                                // cast_start：オレンジ
                 list.Add(new UpcomingTemplate(
                     RelativeTime: prediction.RelativeSeconds,
-                    Icon: GuessIconForCast(label),
+                    Icon: isAa ? "AA" : GuessIconForCast(label),
                     Label: label,
                     Sub: FormatPredictionSub(prediction),
-                    Color: 0xFFFAA560));
+                    EventType: prediction.EventType,
+                    Source: prediction.Source,
+                    Color: color));
             }
         }
 
         var file = _store.GetByZone(_currentZone);
         if (file is not null)
         {
-            foreach (var note in file.Notes.Concat(StrategyPlanResolver.BuildTimelineNotes(file)))
+            // 分岐確定状態を反映：rejected branch の mechanic はタイムラインから除外、
+            // pending（未確定）の branch も非表示で「共通 mechanic だけ見せる」既定ポリシー。
+            Func<string?, bool>? branchCheck = _branchObserver is { } bo
+                ? bo.IsActiveOrCommon
+                : null;
+            var strategyNotes = StrategyPlanResolver.BuildTimelineNotes(file, branchCheck);
+            foreach (var note in file.Notes.Concat(strategyNotes))
             {
                 var resolved = TimelineNoteResolver.ResolveTime(note, agg);
                 if (resolved is null) continue;
@@ -279,66 +609,14 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
                     Icon: icon,
                     Label: note.Label,
                     Sub: note.Role is { Length: > 0 } r ? $"role: {r}" : "note",
+                    EventType: "note",
+                    Source: null,
                     Color: 0xFF34D34Du));
             }
         }
 
         list.Sort((a, b) => a.RelativeTime.CompareTo(b.RelativeTime));
         return list;
-    }
-
-    private List<UpcomingItem> CollectUpcomingSlow(double nowRel)
-    {
-        var list = new List<UpcomingItem>();
-        var offset = _syncOffset.CurrentOffsetSec;
-
-        // 1. 録画ベースの予測キャスト
-        try
-        {
-            var agg = _recordings.Aggregate(_currentZone);
-            var partyMembers = new HashSet<string>(_recordings.ListPartyMembers(_currentZone),
-                StringComparer.OrdinalIgnoreCase);
-            var predictions = RecordingPredictionPlanner.BuildTimelinePredictions(agg, partyMembers: partyMembers);
-            foreach (var prediction in predictions)
-            {
-                var t = prediction.RelativeSeconds + offset;
-                if (t < nowRel - 1.0) continue;
-                var label = prediction.Label;
-                list.Add(new UpcomingItem(
-                    Time: t,
-                    Icon: GuessIconForCast(label),
-                    Label: label,
-                    Sub: FormatPredictionSub(prediction),
-                    Color: 0xFFFAA560));
-            }
-        }
-        catch { }
-
-        // 2. ノート（軽減/LB 等）
-        var file = _store.GetByZone(_currentZone);
-        if (file is not null)
-        {
-            AggregatedEvents? aggForNotes = null;
-            try { aggForNotes = _recordings.Aggregate(_currentZone); } catch { }
-
-            foreach (var note in file.Notes.Concat(StrategyPlanResolver.BuildTimelineNotes(file)))
-            {
-                var resolved = TimelineNoteResolver.ResolveTime(note, aggForNotes);
-                if (resolved is null) continue;
-                var t = resolved.Value + offset;
-                if (t < nowRel - 1.0) continue;
-                var icon = note.Icons.FirstOrDefault() ?? "📌";
-                list.Add(new UpcomingItem(
-                    Time: t,
-                    Icon: icon,
-                    Label: note.Label,
-                    Sub: note.Role is { Length: > 0 } r ? $"role: {r}" : "note",
-                    Color: 0xFF34D34Du));
-            }
-        }
-
-        list.Sort((a, b) => a.Time.CompareTo(b.Time));
-        return list.Take(MaxItems).ToList();
     }
 
     private static string GuessIconForCast(string castName)
@@ -355,14 +633,29 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
         return "⚡";
     }
 
+    /// <summary>
+    /// 行下段の sub テキスト。視覚ノイズを避けるため、デフォルトで信頼度 100% / 0x ID は隠す。
+    /// </summary>
+    /// <remarks>
+    /// 旧表示「cast_start:0x67BF / 100%」のように毎行に技術情報が並んで読みづらかった。
+    /// 表示ポリシー：
+    /// ・信頼度が 100% より低い場合だけ %、それ未満は 1 戦のみで観測など信用度低い指標として有用
+    /// ・タイミングのブレ（jitter）が 0.5 秒以上ある場合だけ ±X.Xs 表示
+    /// ・上記どちらも無ければ sub は空（行高だけ消費しない）
+    /// </remarks>
     private static string FormatPredictionSub(RecordingTimelinePrediction prediction)
     {
         var percent = Math.Clamp((int)Math.Round(prediction.Confidence * 100.0), 0, 100);
-        var jitter = prediction.TimeJitterSeconds >= 0.5
-            ? $" / +/-{prediction.TimeJitterSeconds:0.0}s"
-            : string.Empty;
-        var id = string.IsNullOrEmpty(prediction.Id) ? prediction.EventType : $"{prediction.EventType}:{prediction.Id}";
-        return $"{id} / {percent}%{jitter}";
+        var parts = new List<string>(2);
+        if (percent < 100)
+        {
+            parts.Add($"信頼 {percent}%");
+        }
+        if (prediction.TimeJitterSeconds >= 0.5)
+        {
+            parts.Add($"±{prediction.TimeJitterSeconds:0.0}s");
+        }
+        return string.Join(" / ", parts);
     }
 
     private static string Truncate(string s, int maxChars)
@@ -376,6 +669,8 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
         string Icon,
         string Label,
         string Sub,
+        string EventType,
+        string? Source,
         uint Color);
 
     private readonly record struct UpcomingTemplate(
@@ -383,5 +678,8 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
         string Icon,
         string Label,
         string Sub,
-        uint Color);
+        string EventType,
+        string? Source,
+        uint Color,
+        bool ApplySyncOffset = true);
 }

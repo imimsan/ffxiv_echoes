@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 using Dalamud.Game.ClientState.Objects.Enums;
+using Dalamud.Game.ClientState.Objects.SubKinds;
+using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
 using FfxivEchoes.Events;
 
@@ -20,14 +22,38 @@ public sealed class ObjectCapture : IDisposable
     private readonly IObjectTable _objectTable;
     private readonly IEventBus _bus;
     private readonly IPluginLog _log;
+    private readonly LuminaPcDetector _pcDetector;
     private readonly Dictionary<ulong, ObjectSnapshot> _seen = new();
+    private readonly IDisposable _combatStartSub;
+    private readonly IDisposable _zoneSub;
 
-    public ObjectCapture(IFramework framework, IObjectTable objectTable, IEventBus bus, IPluginLog log)
+    /// <summary>戦闘開始 / ゾーン変更時に「次フレームで _seen をクリアして全オブジェクトを
+    /// 改めて出現として publish する」フラグ。
+    /// 旧実装：戦闘開始 *前* に画面に存在するオブジェクトは pre-combat 時点で publish 済 →
+    /// _seen に入ってしまい、戦闘開始後は「既知」扱いで再 publish されない。
+    /// 結果、BattleRecorder（戦闘中だけ録画）に object_appear が 1 件も入らない問題があった。
+    /// 戦闘開始のたびに resnap して、戦闘中録画に最低 1 回は全オブジェクトの位置が入るよう保証する。</summary>
+    private bool _pendingResnapshot;
+
+    public ObjectCapture(IFramework framework, IObjectTable objectTable, IEventBus bus, IPluginLog log,
+        LuminaPcDetector pcDetector)
     {
         _framework = framework;
         _objectTable = objectTable;
         _bus = bus;
         _log = log;
+        _pcDetector = pcDetector ?? throw new ArgumentNullException(nameof(pcDetector));
+
+        _combatStartSub = bus.Subscribe<CombatStartedEvent>(_ =>
+        {
+            _pendingResnapshot = true;
+            _log.Debug("[FfxivEchoes] ObjectCapture: combat start → 次フレームで resnapshot");
+        });
+        _zoneSub = bus.Subscribe<ZoneChangedEvent>(_ =>
+        {
+            // ゾーン変わったら _seen を即座にクリア（古いゾーンのオブジェクトを混ぜない）
+            _seen.Clear();
+        });
 
         _framework.Update += OnUpdate;
     }
@@ -35,11 +61,19 @@ public sealed class ObjectCapture : IDisposable
     public void Dispose()
     {
         _framework.Update -= OnUpdate;
+        _combatStartSub.Dispose();
+        _zoneSub.Dispose();
         _seen.Clear();
     }
 
     private void OnUpdate(IFramework _)
     {
+        if (_pendingResnapshot)
+        {
+            _pendingResnapshot = false;
+            _seen.Clear();
+        }
+
         var now = DateTimeOffset.UtcNow;
         var current = new HashSet<ulong>();
 
@@ -49,6 +83,11 @@ public sealed class ObjectCapture : IDisposable
             {
                 continue;
             }
+
+            // PC のペット（フェアリー・エオス / カーバンクル / クイーン / バハムート 等）を
+            // 判定。LuminaPcDetector で BattleNpcSubKind.Pet 一次判定 + OwnerId 二次判定を一括。
+            // ボスの召喚物（owner=boss）は通常 mechanic として価値があるので IsPlayer=false で通す。
+            var isPlayerOwned = obj is IBattleNpc bnpc && _pcDetector.IsPetBnpc(bnpc);
 
             var key = obj.GameObjectId;
             current.Add(key);
@@ -66,7 +105,9 @@ public sealed class ObjectCapture : IDisposable
                 ObjectId: (uint)key,
                 ObjectName: obj.Name.TextValue,
                 DataId: obj.BaseId,
-                Position: pos));
+                Position: pos,
+                IsPlayer: isPlayerOwned,
+                EntityId: obj.EntityId));
         }
 
         // 消失検知

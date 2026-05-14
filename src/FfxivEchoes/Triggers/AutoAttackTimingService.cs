@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Dalamud.Game.ClientState.Objects.Enums;
 using Dalamud.Plugin.Services;
 using FfxivEchoes.Events;
 using FfxivEchoes.Triggers.Models;
+using FfxivEchoes.Utils;
 
 namespace FfxivEchoes.Triggers;
 
@@ -64,7 +66,7 @@ public sealed class AutoAttackTimingService : IDisposable
             return;
         }
 
-        if (IsFriendlyActor(ev.SourceId))
+        if (ev.IsPlayer || IsFriendlyActor(ev.SourceId))
         {
             return;
         }
@@ -91,7 +93,7 @@ public sealed class AutoAttackTimingService : IDisposable
             return;
         }
 
-        var text = warnings.Count == 1 ? "AA" : $"AA x{warnings.Count}";
+        var text = BuildWarningText(warnings, ResolveActorName);
         var first = warnings[0];
         _bus.Publish(new TriggerFiredEvent(
             Timestamp: DateTimeOffset.UtcNow,
@@ -117,7 +119,7 @@ public sealed class AutoAttackTimingService : IDisposable
             SourceEvent: new ActionUsedEvent(
                 DateTimeOffset.UtcNow,
                 first.SourceId,
-                "AA prediction",
+                ResolveActorName(first.SourceId) ?? "AA prediction",
                 0,
                 "AA prediction",
                 first.TargetId,
@@ -133,7 +135,7 @@ public sealed class AutoAttackTimingService : IDisposable
         _bus.Publish(new TriggerFiredEvent(
             Timestamp: DateTimeOffset.UtcNow,
             Zone: _currentZone,
-            TriggerId: $"__auto_attack_timer_{ev.SourceId}_{ev.TargetId ?? 0}",
+            TriggerId: BuildTimerTriggerId(ev.SourceId, ev.TargetId, prediction.NextAt),
             TriggerName: label,
             Actions: new List<ActionDefinition>
             {
@@ -160,8 +162,44 @@ public sealed class AutoAttackTimingService : IDisposable
 
     private bool IsFriendlyActor(uint id)
     {
-        var obj = _objectTable.SearchById(id);
+        var obj = _objectTable.FindByEntityOrObjectId(id);
         return obj?.ObjectKind == ObjectKind.Pc;
+    }
+
+    private string? ResolveActorName(uint id)
+    {
+        var obj = _objectTable.FindByEntityOrObjectId(id);
+        var name = obj?.Name.TextValue;
+        return string.IsNullOrWhiteSpace(name) ? null : name;
+    }
+
+    public static string BuildWarningText(
+        IReadOnlyList<AutoAttackWarning> warnings,
+        Func<uint, string?> sourceNameLookup)
+    {
+        if (warnings.Count == 0)
+        {
+            return "AA";
+        }
+
+        var names = warnings
+            .Select(w => sourceNameLookup(w.SourceId))
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Select(n => TrimLabel(n!, 14))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (names.Length == 1)
+        {
+            return $"AA: {names[0]}";
+        }
+
+        if (names.Length > 1)
+        {
+            return $"AA x{warnings.Count}: {string.Join(" / ", names.Take(2))}";
+        }
+
+        return warnings.Count == 1 ? "AA" : $"AA x{warnings.Count}";
     }
 
     private static string TrimLabel(string value, int maxLength)
@@ -173,4 +211,7 @@ public sealed class AutoAttackTimingService : IDisposable
 
         return value[..maxLength];
     }
+
+    public static string BuildTimerTriggerId(uint sourceId, uint? targetId, DateTimeOffset nextAt)
+        => $"__auto_attack_timer_{sourceId}_{targetId ?? 0}_{nextAt:O}";
 }

@@ -23,6 +23,7 @@ public sealed class NoteReminderService : IDisposable
     private readonly RecordingScanner _recordings;
     private readonly SyncOffsetTracker _syncOffset;
     private readonly IPluginLog _log;
+    private readonly Func<string?, bool>? _branchActiveCheck;
 
     private readonly IDisposable _combatStartSub;
     private readonly IDisposable _combatEndSub;
@@ -34,7 +35,8 @@ public sealed class NoteReminderService : IDisposable
 
     public NoteReminderService(
         IFramework framework, IEventBus bus, TriggerStore store, CombatClock combatClock,
-        IPlayerState playerState, RecordingScanner recordings, SyncOffsetTracker syncOffset, IPluginLog log)
+        IPlayerState playerState, RecordingScanner recordings, SyncOffsetTracker syncOffset, IPluginLog log,
+        Func<string?, bool>? branchActiveCheck = null)
     {
         _framework = framework;
         _bus = bus;
@@ -44,6 +46,7 @@ public sealed class NoteReminderService : IDisposable
         _recordings = recordings;
         _syncOffset = syncOffset;
         _log = log;
+        _branchActiveCheck = branchActiveCheck;
 
         _combatStartSub = bus.Subscribe<CombatStartedEvent>(_ => Schedule());
         _combatEndSub = bus.Subscribe<CombatEndedEvent>(_ =>
@@ -105,7 +108,10 @@ public sealed class NoteReminderService : IDisposable
             {
                 foreach (var mechanic in strategyProfile.Mechanics)
                 {
-                    if (!mechanic.Enabled || mechanic.AdvanceWarningSec is not { } warn || warn <= 0)
+                    if (!mechanic.Enabled ||
+                        !IsBranchAllowed(mechanic) ||
+                        mechanic.AdvanceWarningSec is not { } warn ||
+                        warn <= 0)
                     {
                         continue;
                     }
@@ -132,12 +138,15 @@ public sealed class NoteReminderService : IDisposable
                         note.Id,
                         fireTime,
                         note,
-                        StrategyPlanResolver.BuildReminderActions(strategyProfile, mechanic)));
+                        StrategyPlanResolver.BuildReminderActions(file, strategyProfile, mechanic)));
                 }
             }
         }
         _log.Debug("[FfxivEchoes] NoteReminder: {Count} 件をスケジュール", _pending.Count);
     }
+
+    private bool IsBranchAllowed(MechanicStrategy mechanic)
+        => _branchActiveCheck?.Invoke(mechanic.BranchId) ?? true;
 
     private bool MatchesPlayer(TimelineNote note)
     {
@@ -233,6 +242,14 @@ public sealed class NoteReminderService : IDisposable
         if (customActions is not null)
         {
             actions = customActions;
+        }
+        var file = _store.GetByZone(_currentZone);
+        actions = AutoSafeCallPlanner
+            .RemoveMinimapActionsForRaidWideMatch(file, actions, note.AttachedTo)
+            .ToList();
+        if (actions.Count == 0)
+        {
+            return;
         }
         _bus.Publish(new TriggerFiredEvent(
             Timestamp: DateTimeOffset.UtcNow,

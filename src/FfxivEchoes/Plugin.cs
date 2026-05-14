@@ -38,6 +38,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IPartyList PartyList { get; private set; } = null!;
     [PluginService] internal static IPlayerState PlayerState { get; private set; } = null!;
     [PluginService] internal static IGameGui GameGui { get; private set; } = null!;
+    [PluginService] internal static IGameInteropProvider HookProvider { get; private set; } = null!;
 
     public Configuration Configuration { get; }
     public WindowSystem WindowSystem { get; } = new("FfxivEchoes");
@@ -56,7 +57,15 @@ public sealed class Plugin : IDalamudPlugin
     private readonly StatusCapture _statusCapture;
     private readonly HpCapture _hpCapture;
     private readonly ObjectCapture _objectCapture;
+    private readonly PlayerPositionCapture _playerPositionCapture;
+    private readonly ActionEffectCapture _actionEffectCapture;
     private readonly DebugChatEcho _debugChatEcho;
+
+    // ── Splatoon 流：キャスト開始時の rotation スナップショット ──────
+    private CastRotationSnapshot? _castRotationSnapshot;
+
+    // ── Lumina ベースの PC / pet 判定（IsPlayer フラグ付与に使う共用サービス）──
+    private LuminaPcDetector? _pcDetector;
 
     // ── M4: ロガー（録画） ────────────────────────────────
     private readonly RecordingController _recordingController;
@@ -79,12 +88,23 @@ public sealed class Plugin : IDalamudPlugin
     // ── タイムラインノート（軽減等メモ） ──────────────────
     private NoteReminderService? _noteReminder;
 
-    // ── 録画ベースの予測アドバンス警告 ──────────────────
+    // ── 自動 AoE 描画 ──────────────────────────────────
+    private AutoTelegraphService? _autoTelegraph;
+    private AddObjectAoeService? _addObjectAoe;
+    private AutoAttackTimingService? _autoAttackTiming;
+
+    // ── Splatoon 流 actor 追跡型 AoE 床塗り（per-frame ライブ描画）──
+    private ActorTrackedAoeService? _actorTrackedAoe;
+
+    // ── 録画予測に基づく cast 予告（音声・オーバーレイ・床塗り）──────
     private PredictedCastReminderService? _predictedCastReminder;
 
-    // ── 自動 AoE テレグラフ ──────────────────────────────
-    private AutoTelegraphService? _autoTelegraph;
-    private AutoAttackTimingService? _autoAttackTiming;
+    // ── タイムライン分岐の判定サービス（パターン1 / パターン2 を観測で確定）────
+    private BranchObserverService? _branchObserver;
+
+    // ── メカニクス発動条件評価（cast / status / rotation 統合）──────
+    private MechanicTriggerService? _mechanicTrigger;
+    private AutoArenaCalibrationService? _autoArenaCalibration;
 
     // ── 同期オフセットトラッカー ──────────────────────────
     private SyncOffsetTracker? _syncOffset;
@@ -95,6 +115,9 @@ public sealed class Plugin : IDalamudPlugin
     // ── 学習辞書 + 同時発火検知 ──────────────────────────
     private SafeCallDictionary? _safeCallDictionary;
     private MultiCastDetector? _multiCastDetector;
+
+    // ── 全体攻撃検知（HP 相関で raid-wide マーク） ──────
+    private RaidWideDetector? _raidWideDetector;
 
     // ── P1+P2: 状態変数 ──────────────────────────────────
     private readonly VariableStore _variableStore;
@@ -114,8 +137,9 @@ public sealed class Plugin : IDalamudPlugin
     private readonly TtsHandler _ttsHandler;
     private readonly ActionDispatcher _actionDispatcher;
 
-    // ── F3: ライブHUD ────────────────────────────────────
-    private readonly LiveTimelineWindow _liveTimelineWindow;
+    // ── F3: ライブHUD（タイムライン）────────────────────
+    // LiveTimelineWindow（横スクロール式）と CombatTimerHudWindow（戦闘時間カウント）は
+    // ユーザー要望「不要」に基づき撤去済み。タイムラインは UpcomingEventsWindow（cactbot 風）に統合。
     private UpcomingEventsWindow? _upcomingWindow;
 
     // ── F4-F7: 安置計算プリセット ─────────────────────────
@@ -124,6 +148,9 @@ public sealed class Plugin : IDalamudPlugin
 
     // ── F8: 位置情報出力 ─────────────────────────────────
     private readonly WorldOverlayWindow _worldOverlayWindow;
+
+    // ── 計測ツール（アリーナ寸法をユーザーに見せる） ────
+    private readonly ArenaRulerWindow _arenaRulerWindow;
 
     // ── M9: オーディオデバイス ────────────────────────────
     private readonly AudioDeviceEnumerator _audioDevices;
@@ -170,11 +197,22 @@ public sealed class Plugin : IDalamudPlugin
         _combatClock = new CombatClock(_eventBus);
         _combatStateCapture = new CombatStateCapture(Condition, _eventBus, Log);
         _zoneCapture = new ZoneCapture(ClientState, DataManager, _eventBus, Log);
+        // Lumina ベースの PC / pet 決定論判定。Capture 群に共通注入して
+        // status / object_appear に IsPlayer フラグを付与し、BattleRecorder で録画を skip する。
+        _pcDetector = new LuminaPcDetector(DataManager, ObjectTable, Log);
+
         _castCapture = new CastCapture(Framework, ObjectTable, DataManager, _eventBus, Log);
-        _statusCapture = new StatusCapture(Framework, ObjectTable, DataManager, _eventBus, Log);
-        _hpCapture = new HpCapture(Framework, ObjectTable, _eventBus, Log);
-        _objectCapture = new ObjectCapture(Framework, ObjectTable, _eventBus, Log);
+        _statusCapture = new StatusCapture(Framework, ObjectTable, DataManager, _eventBus, Log, _pcDetector);
+        _hpCapture = new HpCapture(Framework, ObjectTable, _eventBus, Log, _pcDetector);
+        _objectCapture = new ObjectCapture(Framework, ObjectTable, _eventBus, Log, _pcDetector);
+        _playerPositionCapture = new PlayerPositionCapture(Framework, ObjectTable, _eventBus, Log);
+        _actionEffectCapture = new ActionEffectCapture(HookProvider, ObjectTable, DataManager, _eventBus, Log);
         _debugChatEcho = new DebugChatEcho(_eventBus, Configuration, ChatGui, _combatClock);
+
+        // Splatoon 流：cast 開始時の actor.Rotation を保持。
+        // 後段の ActorTrackedAoeService が cone / rect AoE の向きとして参照する
+        // （boss が cast 開始で向き lock するゲーム挙動に追従するための snapshot）。
+        _castRotationSnapshot = new CastRotationSnapshot(_eventBus, ObjectTable, Log);
 
         // M4: ロガー
         _recordingController = new RecordingController(Log, _triggerStore);
@@ -202,7 +240,8 @@ public sealed class Plugin : IDalamudPlugin
 
         // 学習辞書 + 同時発火検知（AutoSafeCallPlanner 経由で参照される）
         _safeCallDictionary = new SafeCallDictionary(PluginInterface.ConfigDirectory.FullName, Log);
-        AutoSafeCallPlanner.Dictionary = _safeCallDictionary;
+        // Initialize は null セット禁止 + 二重初期化警告。fail-fast で初期化漏れを起動時検出。
+        AutoSafeCallPlanner.Initialize(_safeCallDictionary, Log);
         _multiCastDetector = new MultiCastDetector();
         // 録画解析 → 同時発火グループを学習辞書に書き戻す（バックグラウンド）
         // 戦闘終了時にも実行されるが、起動時にも 1 回実行
@@ -215,20 +254,24 @@ public sealed class Plugin : IDalamudPlugin
             Log.Warning(ex, "[FfxivEchoes] 起動時の同時発火学習に失敗");
         }
 
-        // タイムラインノート：advance_warning_sec で先行通知
+        // タイムライン分岐の観測サービス：UpcomingEventsWindow がタイムライン構築時に
+        // 参照するので、Window より前に構築する。Plugin 全体の他のサービスとは独立。
+        _branchObserver = new BranchObserverService(_eventBus, _triggerStore, _combatClock, Log);
+
+        // タイムラインノート：advance_warning_sec で先行通知。
+        // branch_id が Rejected/Pending のメカニクスは実通知からも外す。
         _noteReminder = new NoteReminderService(
-            Framework, _eventBus, _triggerStore, _combatClock, PlayerState, _recordingScanner, _syncOffset, Log);
+            Framework, _eventBus, _triggerStore, _combatClock, PlayerState, _recordingScanner, _syncOffset, Log,
+            _branchObserver.IsActiveOrCommon);
 
         // 予測アドバンス警告は _worldOverlayWindow に依存するので、後段で構築する
 
         // 自動 AoE テレグラフ（auto_settings.show_auto_telegraphs で有効化、後段で _worldOverlayWindow 構築後に再設定）
 
-        // F3: ライブタイムライン HUD（録画ベースの予定キャストを未来側に描く）
-        _liveTimelineWindow = new LiveTimelineWindow(_eventBus, _combatClock, _triggerStore, _recordingScanner, _syncOffset);
-        WindowSystem.AddWindow(_liveTimelineWindow);
-
-        // 「次に来るイベント」HUD（録画予測 + ノートを縦並び表示）
-        _upcomingWindow = new UpcomingEventsWindow(_eventBus, _combatClock, _triggerStore, _recordingScanner, _syncOffset);
+        // 「次に来るイベント」HUD（cactbot 風の縮むバー縦積み形式）
+        _upcomingWindow = new UpcomingEventsWindow(
+            _eventBus, _combatClock, _triggerStore, _recordingScanner, _syncOffset,
+            branchObserver: _branchObserver);
         WindowSystem.AddWindow(_upcomingWindow);
 
         // F4-F7: 安置計算プリセット（合計 15 種）
@@ -270,17 +313,61 @@ public sealed class Plugin : IDalamudPlugin
         _worldOverlayWindow = new WorldOverlayWindow(GameGui, ObjectTable);
         WindowSystem.AddWindow(_worldOverlayWindow);
 
-        // 自動 AoE テレグラフ（敵キャストを Lumina Action 形状で自動描画）
+        // アリーナ寸法計測ツール：プレイヤー位置 / ウェイマーク座標 / 距離をライブ表示
+        _arenaRulerWindow = new ArenaRulerWindow(ObjectTable, GameGui);
+        WindowSystem.AddWindow(_arenaRulerWindow);
+
+        // 自動 AoE 描画は 2 系統あり、性質が大きく違うので扱いも分ける：
+        //
+        //   AutoTelegraphService — 復活。
+        //     ボスキャスト 1 件ごとに Lumina の EffectRange / OmenId を引いて
+        //     **実寸の** AoE を描画する。学習不要で初見からそこそこ正確。
+        //     全体攻撃マーク済キャストは `IsRaidWide` で skip、サイズがアリーナ 90% 超の
+        //     巨大キャストも skip するので、画面が AoE 一面塗りになりにくい。
+        //
+        //   AddObjectAoeService — 学習済み AoE の object_appear 補完。
+        //     半径が辞書または録画から取れる場合だけ、TriggerFiredEvent に変換して
+        //     ミニマップと床描画の両方へ流す。未学習オブジェクトの既定円は出さない。
         _autoTelegraph = new AutoTelegraphService(
             _eventBus, DataManager, ObjectTable, _worldOverlayWindow, _minimapWindow,
             _triggerStore, Log);
+        _addObjectAoe = new AddObjectAoeService(
+            Framework, _eventBus, _minimapWindow, _triggerStore,
+            _safeCallDictionary, _recordingScanner, DataManager, ObjectTable, Log);
+
+        // Splatoon 流ライブ描画サービス。AutoTelegraphService が「キャスト開始時に 1 回」
+        // 床塗りしていたものを、これが「毎フレーム actor 位置・向きを再評価」する形で置換。
+        // ボスがキャスト中にじわじわ動いても AoE が追従する。
+        // Framework を渡すのは内包する AoeSequenceScheduler が Update を踏むため。
+        _actorTrackedAoe = new ActorTrackedAoeService(
+            _eventBus, Framework, DataManager, ObjectTable, _worldOverlayWindow,
+            _castRotationSnapshot, _triggerStore, Log);
+
+        // 録画予測 → 事前警告（TTS / オーバーレイ / ミニマップ / 床塗り）。
+        // 予測時刻の advance_warning_sec 秒前に AoE を Predicted フェーズで先行表示し、
+        // CastStartedEvent が来れば Confirmed 置き換え、来なければ自動消滅。
+        // 「キャストが来てから着弾までしか表示されず避けられない」問題を構造的に解消。
+        _predictedCastReminder = new PredictedCastReminderService(
+            Framework, _eventBus, _triggerStore, _combatClock,
+            _recordingScanner, _syncOffset, DataManager, ObjectTable,
+            _worldOverlayWindow, _minimapWindow, Log,
+            actorTracked: _actorTrackedAoe,
+            branchActiveCheck: _branchObserver.IsActiveOrCommon);
+
         _autoAttackTiming = new AutoAttackTimingService(
             Framework, _eventBus, _triggerStore, ObjectTable, Log);
 
-        // 予測アドバンス警告：TTS + 「予測中」ミニマップ + フィールド円
-        _predictedCastReminder = new PredictedCastReminderService(
-            Framework, _eventBus, _triggerStore, _combatClock, _recordingScanner, _syncOffset,
-            DataManager, ObjectTable, _worldOverlayWindow, _minimapWindow, Log);
+        _raidWideDetector = new RaidWideDetector(_eventBus, PartyList, PlayerState,
+            _triggerStore, Log);
+
+        // メカニクス発動条件サービス（cast / status_gain / status_lose / rotation 統合）
+        _mechanicTrigger = new MechanicTriggerService(
+            Framework, _eventBus, _triggerStore, ObjectTable, Log,
+            _branchObserver.IsActiveOrCommon);
+
+        // アリーナ寸法を戦闘中のプレイヤー位置から自動学習し、初回戦闘終了時にプロファイルへ反映。
+        // 「ユーザーがルーラーで測る」「録画から推定ボタンを押す」を不要にするための自動化。
+        _autoArenaCalibration = new AutoArenaCalibrationService(_eventBus, _triggerStore, Log);
 
         // M7 + F8: アクションディスパッチャ
         _ttsHandler = new TtsHandler(Configuration, Log);
@@ -292,7 +379,8 @@ public sealed class Plugin : IDalamudPlugin
             new ChatEchoHandler(ChatGui),
             new OverlayTextHandler(_overlayWindow),
             new TimerBarHandler(_overlayWindow),
-            new ArenaViewHandler(_minimapWindow, _safeZoneEngine, _safeZoneContextBuilder, ObjectTable, Log),
+            new ArenaViewHandler(_minimapWindow, _safeZoneEngine, _safeZoneContextBuilder, ObjectTable, Log,
+                _triggerStore),
             // F8: 位置情報出力
             new DirectionCallHandler(_safeZoneEngine, _safeZoneContextBuilder,
                 Configuration, _overlayWindow, _ttsHandler, ChatGui, Log),
@@ -304,7 +392,7 @@ public sealed class Plugin : IDalamudPlugin
             // P4: 位置保存
             new StorePositionHandler(_safeZoneEngine, _safeZoneContextBuilder, _variableStore, Log),
         };
-        _actionDispatcher = new ActionDispatcher(_eventBus, handlers, Configuration, Log);
+        _actionDispatcher = new ActionDispatcher(_eventBus, handlers, Configuration, Log, _triggerStore);
 
         // MainWindow（依存：BuildTabs 内で _combatClock / _eventBus を参照する LiveHudTab）
         _mainWindow = new MainWindow(BuildTabs(), _tabContext);
@@ -333,6 +421,30 @@ public sealed class Plugin : IDalamudPlugin
             PluginInterface.Manifest.AssemblyVersion, Configuration.Version);
     }
 
+    /// <summary>外部からアリーナ寸法計測ウィンドウを開閉する。CommandRouter から呼ぶ用。</summary>
+    public void ToggleArenaRuler()
+    {
+        _arenaRulerWindow.IsOpen = !_arenaRulerWindow.IsOpen;
+    }
+
+    /// <summary>
+    /// Dispose を try/catch で隔離する。1 個のサブシステムが例外を投げても他に伝播させない。
+    /// /xlrestart 時に Dispose が中途で死ぬとフックが残ってゲームクラッシュにつながる。
+    /// </summary>
+    private static void SafeDispose(IDisposable? d, string name)
+    {
+        if (d is null) return;
+        try
+        {
+            d.Dispose();
+        }
+        catch (Exception ex)
+        {
+            try { Log.Error(ex, "[FfxivEchoes] Dispose '{Name}' failed", name); }
+            catch { /* Log すら使えない局面では握り潰す */ }
+        }
+    }
+
     public void Dispose()
     {
         Log.Information("[FfxivEchoes] Unloading…");
@@ -341,49 +453,68 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenConfigUi -= OpenSettings;
         PluginInterface.UiBuilder.OpenMainUi -= OpenSettings;
 
-        // アクションディスパッチャを先に止めて新規アクション実行を遮断
-        _actionDispatcher.Dispose();
-        _ttsHandler.Dispose();
+        // 1. ネイティブフック（ActionEffectCapture）を最優先で外す。
+        //    /xlrestart 時、フックが残ったままアセンブリがアンロードされると、
+        //    ゲーム本体が解放済み関数ポインタを呼んでクラッシュする。
+        //    各 Dispose を try/catch で隔離し、1 つの失敗が連鎖しないようにする。
+        SafeDispose(_actionEffectCapture, nameof(_actionEffectCapture));
 
-        // タイムラインノート通知を停止
-        _noteReminder?.Dispose();
-        _predictedCastReminder?.Dispose();
-        _autoAttackTiming?.Dispose();
-        _autoTelegraph?.Dispose();
-        _syncOffset?.Dispose();
+        // 2. アクションディスパッチャを止めて新規 TTS/オーバーレイ等を遮断
+        SafeDispose(_actionDispatcher, nameof(_actionDispatcher));
+        SafeDispose(_ttsHandler, nameof(_ttsHandler));
 
-        // P5: スクリプト群を解放
-        _scriptManager.Dispose();
+        // 3. タイムラインノート通知 / 自動 AoE 等
+        SafeDispose(_noteReminder, nameof(_noteReminder));
+        SafeDispose(_addObjectAoe, nameof(_addObjectAoe));
+        // ActorTrackedAoe は WorldOverlayWindow の live drawer 登録を持つので
+        // _worldOverlayWindow 解放より前に外す。
+        // PredictedCastReminderService は ActorTrackedAoeService に依存するので先に外す。
+        SafeDispose(_predictedCastReminder, nameof(_predictedCastReminder));
+        SafeDispose(_branchObserver, nameof(_branchObserver));
+        SafeDispose(_actorTrackedAoe, nameof(_actorTrackedAoe));
+        SafeDispose(_castRotationSnapshot, nameof(_castRotationSnapshot));
+        SafeDispose(_pcDetector, nameof(_pcDetector));
+        SafeDispose(_autoTelegraph, nameof(_autoTelegraph));
+        SafeDispose(_autoAttackTiming, nameof(_autoAttackTiming));
+        SafeDispose(_mechanicTrigger, nameof(_mechanicTrigger));
+        SafeDispose(_autoArenaCalibration, nameof(_autoArenaCalibration));
+        SafeDispose(_raidWideDetector, nameof(_raidWideDetector));
+        SafeDispose(_syncOffset, nameof(_syncOffset));
 
-        // トリガーエンジンを止めて新規 TriggerFired を発生させない
-        _triggerEngine.Dispose();
-        _variableStore.Dispose();
+        // 4. スクリプト群
+        SafeDispose(_scriptManager, nameof(_scriptManager));
 
-        // ロガーを閉じて録画ファイルを確実にフラッシュ
-        _battleRecorder.Dispose();
+        // 5. トリガーエンジン → 新規 TriggerFired を発生させない
+        SafeDispose(_triggerEngine, nameof(_triggerEngine));
+        SafeDispose(_variableStore, nameof(_variableStore));
 
-        // トリガー監視・ストアの停止
-        _triggerWatcher.Dispose();
+        // 6. ロガー（録画ファイルを確実にフラッシュ）
+        SafeDispose(_battleRecorder, nameof(_battleRecorder));
 
-        // キャプチャ群を逆順で破棄（DebugEcho が他のキャプチャに依存していないが念のため）
-        _debugChatEcho.Dispose();
-        _objectCapture.Dispose();
-        _hpCapture.Dispose();
-        _statusCapture.Dispose();
-        _castCapture.Dispose();
-        _zoneCapture.Dispose();
-        _combatStateCapture.Dispose();
-        _combatClock.Dispose();
+        // 7. トリガー監視・ストア
+        SafeDispose(_triggerWatcher, nameof(_triggerWatcher));
 
-        WindowSystem.RemoveAllWindows();
-        _mainWindow.Dispose();
-        _overlayWindow.Dispose();
-        _minimapWindow.Dispose();
-        _liveTimelineWindow.Dispose();
-        _upcomingWindow?.Dispose();
-        _worldOverlayWindow.Dispose();
+        // 8. キャプチャ群（イベントバス購読者）。Framework.Update から外れる
+        SafeDispose(_debugChatEcho, nameof(_debugChatEcho));
+        SafeDispose(_playerPositionCapture, nameof(_playerPositionCapture));
+        SafeDispose(_objectCapture, nameof(_objectCapture));
+        SafeDispose(_hpCapture, nameof(_hpCapture));
+        SafeDispose(_statusCapture, nameof(_statusCapture));
+        SafeDispose(_castCapture, nameof(_castCapture));
+        SafeDispose(_zoneCapture, nameof(_zoneCapture));
+        SafeDispose(_combatStateCapture, nameof(_combatStateCapture));
+        SafeDispose(_combatClock, nameof(_combatClock));
 
-        CommandManager.RemoveHandler(CommandRouter.RootCommand);
+        try { WindowSystem.RemoveAllWindows(); } catch { /* ignore */ }
+        SafeDispose(_mainWindow, nameof(_mainWindow));
+        SafeDispose(_overlayWindow, nameof(_overlayWindow));
+        SafeDispose(_minimapWindow, nameof(_minimapWindow));
+        SafeDispose(_upcomingWindow, nameof(_upcomingWindow));
+        SafeDispose(_worldOverlayWindow, nameof(_worldOverlayWindow));
+        SafeDispose(_arenaRulerWindow, nameof(_arenaRulerWindow));
+
+        try { CommandManager.RemoveHandler(CommandRouter.RootCommand); }
+        catch (Exception ex) { try { Log.Warning(ex, "[FfxivEchoes] CommandManager.RemoveHandler failed"); } catch { } }
     }
 
     private void OnCommand(string command, string args) => _commandRouter.Dispatch(args);
@@ -446,7 +577,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         new HelpTab(),
         new ContentListTab(_triggerStore, _recordingScanner, _tabContext),
-        new TriggerEditorTab(_triggerStore, _recordingScanner, _tabContext, _eventBus, _autoGenerator),
+        new TriggerEditorTab(_triggerStore, _recordingScanner, _tabContext, _eventBus, _autoGenerator, ObjectTable, ToggleArenaRuler),
         new LiveHudTab(_eventBus, _combatClock),
         new AudioTab(Configuration, _audioDevices),
         new ProfileTab(_profileStore, _triggerStore, Configuration),
@@ -461,8 +592,9 @@ public sealed class Plugin : IDalamudPlugin
         router.Register(new DebugCommand(Configuration, ChatGui));
         router.Register(new RecordCommand(_recordingController, _battleRecorder, ChatGui));
         router.Register(new ReloadCommand(_triggerStore, ChatGui));
-        router.Register(new TimelineCommand(_liveTimelineWindow, ChatGui));
+        // /echoes timeline は LiveTimelineWindow 撤去に伴い廃止
         router.Register(new ProfileCommand(_profileStore, Configuration, ChatGui));
+        router.Register(new RulerCommand(ToggleArenaRuler));
         router.Register(new HelpCommand(router, ChatGui));
 
         return router;

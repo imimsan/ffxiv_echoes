@@ -62,6 +62,16 @@ public static class EventSerializer
     }
 
     public static string Serialize(IGameEvent ev, DateTimeOffset combatStart)
+        => Serialize(ev, combatStart, partyIdToName: null);
+
+    /// <summary>
+    /// party id → name 解決マップを受け取って serialize する。status events に source 名を
+    /// 埋め込んで、aggregation 段階での party_related フィルタ（名前マッチ）を強化する。
+    /// </summary>
+    public static string Serialize(
+        IGameEvent ev,
+        DateTimeOffset combatStart,
+        System.Collections.Generic.IReadOnlyDictionary<uint, string>? partyIdToName)
     {
         using var ms = new MemoryStream();
         using (var writer = new Utf8JsonWriter(ms, WriterOptions))
@@ -101,6 +111,12 @@ public static class EventSerializer
                     {
                         writer.WriteNull("target");
                     }
+                    if (x.TargetWorld is { } tw)
+                    {
+                        writer.WriteNumber("target_x", Math.Round(tw.X, 3));
+                        writer.WriteNumber("target_y", Math.Round(tw.Y, 3));
+                        writer.WriteNumber("target_z", Math.Round(tw.Z, 3));
+                    }
                     writer.WriteNumber("cast_time", Math.Round(x.CastTime, 2));
                     break;
 
@@ -135,6 +151,12 @@ public static class EventSerializer
                     {
                         writer.WriteNull("target");
                     }
+                    if (x.TargetWorld is { } aw)
+                    {
+                        writer.WriteNumber("target_x", Math.Round(aw.X, 3));
+                        writer.WriteNumber("target_y", Math.Round(aw.Y, 3));
+                        writer.WriteNumber("target_z", Math.Round(aw.Z, 3));
+                    }
                     break;
 
                 case StatusGainedEvent x:
@@ -142,6 +164,18 @@ public static class EventSerializer
                     if (x.SourceId != 0)
                     {
                         writer.WriteNumber("source_id", x.SourceId);
+                        // party メタの id → name で source 名を解決して書く。
+                        // これにより aggregation の名前マッチが PC 自己バフ・PC DoT を確実に拾える。
+                        // 自己付与（source==target）の場合は target 名を使う（lookup 不要）。
+                        if (x.SourceId == x.TargetId && !string.IsNullOrEmpty(x.TargetName))
+                        {
+                            writer.WriteString("source", x.TargetName);
+                        }
+                        else if (partyIdToName is { } map && map.TryGetValue(x.SourceId, out var srcName) &&
+                                 !string.IsNullOrEmpty(srcName))
+                        {
+                            writer.WriteString("source", srcName);
+                        }
                     }
                     writer.WriteString("target", x.TargetName);
                     writer.WriteNumber("target_id", x.TargetId);
@@ -179,6 +213,10 @@ public static class EventSerializer
                     writer.WriteString("type", "object_appear");
                     writer.WriteString("object_name", x.ObjectName);
                     writer.WriteNumber("object_id", x.ObjectId);
+                    if (x.EntityId is { } entityId && entityId != 0)
+                    {
+                        writer.WriteNumber("entity_id", entityId);
+                    }
                     writer.WriteNumber("data_id", x.DataId);
                     writer.WriteStartObject("position");
                     writer.WriteNumber("x", Math.Round(x.Position.X, 3));
@@ -191,6 +229,15 @@ public static class EventSerializer
                     writer.WriteString("type", "object_disappear");
                     writer.WriteString("object_name", x.ObjectName);
                     writer.WriteNumber("object_id", x.ObjectId);
+                    break;
+
+                case LocalPlayerPositionEvent x:
+                    writer.WriteString("type", "player_pos");
+                    writer.WriteStartObject("position");
+                    writer.WriteNumber("x", Math.Round(x.Position.X, 3));
+                    writer.WriteNumber("y", Math.Round(x.Position.Y, 3));
+                    writer.WriteNumber("z", Math.Round(x.Position.Z, 3));
+                    writer.WriteEndObject();
                     break;
 
                 default:

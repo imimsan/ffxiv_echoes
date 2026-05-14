@@ -260,3 +260,30 @@ Square Enix の方針変更でDalamudプラグイン全般が利用制限され�
 ### 開発工数の超過
 仕様が肥大化しているため、MVPだけで時間切れの可能性。
 **対策**：フェーズ分割を厳格に運用、MVPで動くものを早期に確保してから機能追加。
+
+---
+
+## 既知の技術的負債（絶妖星乱舞後に対処）
+
+リリース可能な状態だが、長期メンテナンス性の観点から将来整理したい項目。
+それぞれ単体では実害がないため、**MVP / フェーズ2 のスコープ外**として記録。
+
+### TD-1：`Recording` 名前空間 ↔ `Triggers` 名前空間の双方向依存
+
+- `RecordingController` が `TriggerStore` を参照（auto_record 設定読み）
+- `Triggers/StrategyDraftGenerator` 等 10+ ファイルが `Recording/AggregatedEvents` 等を参照
+
+論理的な双方向依存が成立している。コンパイル循環ではないが、変更影響範囲が読みにくい。
+**対処案**：`TriggerStore` から `auto_record` 設定値だけ取り出して `RecordingController` のコンストラクタに渡す DI に変更。所要 4-8 時間。
+
+### TD-2：`AutoSafeCallPlanner` の `static class` + `static Dictionary`
+
+`coding-rules.md` の「サービスロケータパターン禁止」のグレーゾーン。
+**現状の対処**：`Initialize()` メソッドで null セット禁止 + 二重初期化警告ログ済み。
+**完全 DI 化案**：`IAutoSafeCallPlanner` interface 化 + 30+ callsite を instance 経由に変更。所要 2-3 時間。
+
+### TD-3：`StatusCapture.IsPlayerStatus` のユニットテスト不足
+
+`IObjectTable.SearchById` 経由の動的判定パスは Dalamud 依存のため Program.cs（コンソールテストランナー）からテストできない。
+**対処案**：`ILuminaPcDetector` インターフェース化と FakeObjectTable 導入。所要 3-5 時間。
+**現状の代替**：イベント値オブジェクトレベルの契約テスト（`StatusGainedEvent_BossDebuffOnPc_IsNotPlayer` 等）と手動の Dalamud 動作確認。

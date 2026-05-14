@@ -18,6 +18,10 @@ public static class RecordingPredictionPlanner
 
         foreach (var ev in aggregate.Events)
         {
+            // 予測警告は cast_start のみに限定する。
+            // action_used は「既に発動した」イベントなので、録画から予測 AoE に使うと
+            // 実ダメージ ID / tick / 派生 action を拾って、範囲が大きくズレやすい。
+            // cast バー無しギミックはタイムライン下書きや手動 mechanic で扱う。
             if (ev.Key.Type != "cast_start")
             {
                 continue;
@@ -34,6 +38,13 @@ public static class RecordingPredictionPlanner
                 (!string.IsNullOrEmpty(ev.Key.Source) &&
                  partyMembers is not null &&
                  partyMembers.Contains(ev.Key.Source)))
+            {
+                continue;
+            }
+
+            // PC スキル / ペット名は除外（名前パターン filter）
+            var labelForFilter = !string.IsNullOrEmpty(ev.Key.Name) ? ev.Key.Name! : ev.Key.Id ?? string.Empty;
+            if (PcSkillNameFilter.LooksLikePcSkillOrPet(labelForFilter, ev.Key.Type))
             {
                 continue;
             }
@@ -62,10 +73,40 @@ public static class RecordingPredictionPlanner
             }
         }
 
-        return predictions
+        // 同名の重複を集約：FFXIV では同じ技に複数の cast_id が割り当てられるケースが
+        // ある（テレグラフ用 ID と実ダメージ用 ID 等）。同 Label が ±1 秒以内に複数並ぶと
+        // 「アニア × 2」と冗長表示になる。最も観測回数が多いものを 1 件残してまとめる。
+        var deduped = predictions
             .OrderBy(p => p.RelativeSeconds)
             .ThenBy(p => p.Label, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+            .ThenBy(p => p.Source, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var result = new List<RecordingPrediction>(deduped.Count);
+        var consumed = new bool[deduped.Count];
+        const double DedupWindowSec = 1.0;
+        for (var i = 0; i < deduped.Count; i++)
+        {
+            if (consumed[i]) continue;
+            var head = deduped[i];
+            var bestIdx = i;
+            var bestCount = head.ObservedCount;
+            for (var j = i + 1; j < deduped.Count; j++)
+            {
+                if (consumed[j]) continue;
+                var c = deduped[j];
+                if (c.RelativeSeconds - head.RelativeSeconds > DedupWindowSec) break;
+                if (!string.Equals(c.Label, head.Label, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!SameSourceForDedup(c.Source, head.Source)) continue;
+                consumed[j] = true;
+                if (c.ObservedCount > bestCount)
+                {
+                    bestCount = c.ObservedCount;
+                    bestIdx = j;
+                }
+            }
+            result.Add(deduped[bestIdx]);
+        }
+        return result.ToArray();
     }
 
     public static IReadOnlyList<RecordingTimelinePrediction> BuildTimelinePredictions(
@@ -73,15 +114,24 @@ public static class RecordingPredictionPlanner
         IReadOnlySet<string>? coveredCastIds = null,
         IReadOnlySet<string>? partyMembers = null,
         bool includeActions = false,
+        bool includeAutoAttacks = false,
         bool includeStatusGains = false,
         bool includeStatusUpdates = false,
-        bool includeHpChanges = false)
+        bool includeHpChanges = false,
+        bool includeObjects = false)
     {
         var predictions = new List<RecordingTimelinePrediction>();
 
         foreach (var ev in aggregate.Events)
         {
-            if (!IsTimelineCandidate(ev, includeActions, includeStatusGains, includeStatusUpdates, includeHpChanges))
+            if (!IsTimelineCandidate(
+                    ev,
+                    includeActions,
+                    includeAutoAttacks,
+                    includeStatusGains,
+                    includeStatusUpdates,
+                    includeHpChanges,
+                    includeObjects))
             {
                 continue;
             }
@@ -95,6 +145,12 @@ public static class RecordingPredictionPlanner
             }
 
             if (ev.IsPartySource || IsPartyRelated(ev, partyMembers))
+            {
+                continue;
+            }
+            // 名前パターン filter：source/id 解決が漏れても PC スキル / ペット名は確実に除外。
+            // 古い録画 (IsPlayer フラグ未記録) でも cast_start / action_used を pattern match できる。
+            if (PcSkillNameFilter.LooksLikePcSkillOrPet(BuildTimelineLabel(ev.Key), ev.Key.Type))
             {
                 continue;
             }
@@ -118,11 +174,42 @@ public static class RecordingPredictionPlanner
             }
         }
 
-        return predictions
+        var sorted = predictions
             .OrderBy(p => p.RelativeSeconds)
             .ThenBy(p => TimelineTypeSort(p.EventType))
             .ThenBy(p => p.Label, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+            .ThenBy(p => p.Source, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // 同名（cast_id 違い・テレグラフと本体で 2 ID 等）を ±1.0 秒以内で集約。
+        // 観測回数が多い方を残す。type が違う場合は別物として残す（cast_start と action_used は分ける）。
+        var consumed = new bool[sorted.Count];
+        var deduped = new List<RecordingTimelinePrediction>(sorted.Count);
+        const double DedupWindowSec = 1.0;
+        for (var i = 0; i < sorted.Count; i++)
+        {
+            if (consumed[i]) continue;
+            var head = sorted[i];
+            var bestIdx = i;
+            var bestCount = head.ObservedCount;
+            for (var j = i + 1; j < sorted.Count; j++)
+            {
+                if (consumed[j]) continue;
+                var c = sorted[j];
+                if (c.RelativeSeconds - head.RelativeSeconds > DedupWindowSec) break;
+                if (!string.Equals(c.EventType, head.EventType, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!string.Equals(c.Label, head.Label, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!SameSourceForDedup(c.Source, head.Source)) continue;
+                consumed[j] = true;
+                if (c.ObservedCount > bestCount)
+                {
+                    bestCount = c.ObservedCount;
+                    bestIdx = j;
+                }
+            }
+            deduped.Add(sorted[bestIdx]);
+        }
+        return deduped.ToArray();
     }
 
     public static IReadOnlyList<double> GetObservedTimes(AggregatedEvent ev)
@@ -239,18 +326,21 @@ public static class RecordingPredictionPlanner
     private static bool IsTimelineCandidate(
         AggregatedEvent ev,
         bool includeActions,
+        bool includeAutoAttacks,
         bool includeStatusGains,
         bool includeStatusUpdates,
-        bool includeHpChanges)
+        bool includeHpChanges,
+        bool includeObjects)
     {
         return ev.Key.Type switch
         {
             "cast_start" => true,
             "action_used" => includeActions,
+            "auto_attack" => includeActions || includeAutoAttacks,
             "status_gain" => includeStatusGains,
             "status_update" => includeStatusUpdates,
             "hp_change" => includeHpChanges,
-            "object_appear" => true,
+            "object_appear" => includeObjects,
             _ => false,
         };
     }
@@ -292,11 +382,19 @@ public static class RecordingPredictionPlanner
         {
             "cast_start" => 0,
             "action_used" => 1,
-            "status_gain" => 2,
-            "object_appear" => 3,
-            "hp_change" => 4,
+            "auto_attack" => 2,
+            "status_gain" => 3,
+            "object_appear" => 4,
+            "hp_change" => 5,
             _ => 9,
         };
+    }
+
+    private static bool SameSourceForDedup(string? left, string? right)
+    {
+        var a = string.IsNullOrWhiteSpace(left) ? string.Empty : left.Trim();
+        var b = string.IsNullOrWhiteSpace(right) ? string.Empty : right.Trim();
+        return string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
     }
 }
 

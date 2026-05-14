@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
+using System.Text.Json;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility;
 using FfxivEchoes.Recording;
@@ -25,6 +26,8 @@ public sealed class ContentListTab : ITab
     private string _newZoneName = string.Empty;
     private string? _saveError;
     private string? _pendingDeleteZone;
+    private string? _pendingDeleteRecordingsZone;
+    private bool _shouldOpenDeleteRecordingsPopup;
     // BeginTable 内から OpenPopup を呼ぶと ID stack 不一致で開かないため、
     // テーブル外で開けるようフラグで遅延させる
     private bool _shouldOpenDeletePopup;
@@ -55,6 +58,7 @@ public sealed class ContentListTab : ITab
         }
         DrawNewZonePopup();
         DrawDeleteConfirmPopup();
+        DrawDeleteRecordingsPopup();
 
         ImGui.Spacing();
         ImGui.Separator();
@@ -128,9 +132,25 @@ public sealed class ContentListTab : ITab
                     if (ImGui.Button($"削除##{zone}"))
                     {
                         _pendingDeleteZone = zone;
-                        // テーブル内では ID stack の都合で OpenPopup できないので
-                        // フラグだけ立てて、テーブル外で開く
                         _shouldOpenDeletePopup = true;
+                    }
+                }
+                if (recordings.Count > 0)
+                {
+                    ImGui.SameLine();
+                    if (ImGui.Button($"録画削除##{zone}"))
+                    {
+                        _pendingDeleteRecordingsZone = zone;
+                        _deleteAlsoClearMechanics = true;
+                        _deleteAlsoClearTriggers = true;
+                        _deleteAlsoClearArenaShape = true;
+                        _deleteAlsoClearNotes = true;
+                        _shouldOpenDeleteRecordingsPopup = true;
+                    }
+                    if (ImGui.IsItemHovered())
+                    {
+                        ImGui.SetTooltip($"このゾーンの録画 {recordings.Count} 件をすべて削除する。\n" +
+                                          "学習データもリセットされる（次戦闘から再学習）。");
                     }
                 }
             }
@@ -138,11 +158,16 @@ public sealed class ContentListTab : ITab
             ImGui.EndTable();
         }
 
-        // BeginTable の外で OpenPopup を呼ぶ。BeginPopupModal と同じ ID stack で開く必要がある
+        // BeginTable の外で OpenPopup を呼ぶ
         if (_shouldOpenDeletePopup)
         {
             _shouldOpenDeletePopup = false;
             ImGui.OpenPopup("delete-zone-popup");
+        }
+        if (_shouldOpenDeleteRecordingsPopup)
+        {
+            _shouldOpenDeleteRecordingsPopup = false;
+            ImGui.OpenPopup("delete-recordings-popup");
         }
     }
 
@@ -212,6 +237,109 @@ public sealed class ContentListTab : ITab
         ImGui.EndPopup();
     }
 
+    private bool _deleteAlsoClearMechanics;
+    private bool _deleteAlsoClearTriggers;
+    private bool _deleteAlsoClearArenaShape;
+    private bool _deleteAlsoClearNotes;
+
+    private void DrawDeleteRecordingsPopup()
+    {
+        ImGui.SetNextWindowSize(new Vector2(440f * ImGuiHelpers.GlobalScale, 0f));
+        if (!ImGui.BeginPopupModal("delete-recordings-popup", ImGuiWindowFlags.AlwaysAutoResize))
+        {
+            return;
+        }
+
+        var zone = _pendingDeleteRecordingsZone ?? "";
+        var recordings = _recordingScanner.ListRecordings(zone);
+        ImGui.TextWrapped(
+            $"ゾーン \"{zone}\" の録画 {recordings.Count} 件を削除します。\n" +
+            "下のチェックで関連データも一緒にクリア可能：");
+        ImGui.Spacing();
+
+        ImGui.Checkbox("攻略登録のメカニクスも全削除##del-mech", ref _deleteAlsoClearMechanics);
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip(
+            "「攻略登録」タブのメカニクス（コキュートス／パラデイグマ等）を全件削除する。\n" +
+            "録画から作ったエントリも、テンプレートから作ったエントリも、手動で作ったエントリも全部消える。");
+
+        ImGui.Checkbox("トリガー一覧も全削除##del-trig", ref _deleteAlsoClearTriggers);
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip(
+            "「トリガー一覧」タブの個別トリガーを全件削除する。");
+
+        ImGui.Checkbox("アリーナ形状・寸法・中心もリセット##del-arena", ref _deleteAlsoClearArenaShape);
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip(
+            "プロファイルのアリーナ形状・寸法・中心座標を未設定に戻す。\n" +
+            "次回エディタを開いたときに録画から再推定される（録画も消すなら再推定はできない）。");
+
+        ImGui.Checkbox("ノートも全削除##del-notes", ref _deleteAlsoClearNotes);
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip(
+            "「ノート」タブのタイムラインメモを全件削除する。\n" +
+            "録画キャストから一括追加したメモを最初から作り直すときに使う。");
+
+        ImGui.Spacing();
+        if (ImGui.Button("削除を実行", new Vector2(140f * ImGuiHelpers.GlobalScale, 0f)))
+        {
+            try
+            {
+                _recordingScanner.DeleteAllRecordings(zone);
+
+                var existing = _triggerStore.GetByZone(zone);
+                var file = existing is null ? null : Clone(existing);
+                if (file is not null && (_deleteAlsoClearMechanics || _deleteAlsoClearTriggers || _deleteAlsoClearArenaShape || _deleteAlsoClearNotes))
+                {
+                    if (_deleteAlsoClearMechanics)
+                    {
+                        foreach (var profile in file.StrategyProfiles)
+                        {
+                            profile.Mechanics.Clear();
+                            profile.PhaseArenaShapes.Clear();
+                        }
+                    }
+                    if (_deleteAlsoClearTriggers)
+                    {
+                        file.Triggers.Clear();
+                    }
+                    if (_deleteAlsoClearNotes)
+                    {
+                        file.Notes.Clear();
+                    }
+                    if (_deleteAlsoClearArenaShape)
+                    {
+                        foreach (var profile in file.StrategyProfiles)
+                        {
+                            profile.ArenaShape = "circle";
+                            profile.ArenaRadius = null;
+                            profile.ArenaWidth = null;
+                            profile.ArenaDepth = null;
+                            profile.ArenaCenterX = null;
+                            profile.ArenaCenterZ = null;
+                        }
+                    }
+                    _triggerStore.SaveZone(zone, file);
+                }
+
+                _pendingDeleteRecordingsZone = null;
+                _deleteAlsoClearMechanics = false;
+                _deleteAlsoClearTriggers = false;
+                _deleteAlsoClearArenaShape = false;
+                _deleteAlsoClearNotes = false;
+                ImGui.CloseCurrentPopup();
+            }
+            catch (Exception ex)
+            {
+                _saveError = $"削除に失敗：{ex.Message}";
+            }
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("キャンセル", new Vector2(120f * ImGuiHelpers.GlobalScale, 0f)))
+        {
+            _pendingDeleteRecordingsZone = null;
+            ImGui.CloseCurrentPopup();
+        }
+
+        ImGui.EndPopup();
+    }
+
     private void DrawDeleteConfirmPopup()
     {
         ImGui.SetNextWindowSize(new Vector2(380f * ImGuiHelpers.GlobalScale, 0f));
@@ -229,6 +357,11 @@ public sealed class ContentListTab : ITab
             try
             {
                 _triggerStore.DeleteZone(zone);
+                if (string.Equals(_tabContext.SelectedZone, zone, StringComparison.OrdinalIgnoreCase))
+                {
+                    _tabContext.SelectedZone = null;
+                    _tabContext.PendingCreateFromRecording = false;
+                }
                 _pendingDeleteZone = null;
                 ImGui.CloseCurrentPopup();
             }
@@ -245,5 +378,11 @@ public sealed class ContentListTab : ITab
         }
 
         ImGui.EndPopup();
+    }
+
+    private static TriggerFile Clone(TriggerFile src)
+    {
+        var json = JsonSerializer.Serialize(src);
+        return JsonSerializer.Deserialize<TriggerFile>(json)!;
     }
 }

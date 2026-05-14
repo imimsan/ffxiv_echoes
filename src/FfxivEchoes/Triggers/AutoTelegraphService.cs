@@ -5,6 +5,7 @@ using Dalamud.Plugin.Services;
 using FfxivEchoes.Capture;
 using FfxivEchoes.Events;
 using FfxivEchoes.Triggers.Models;
+using FfxivEchoes.Utils;
 using FfxivEchoes.Windows;
 using LuminaAction = Lumina.Excel.Sheets.Action;
 
@@ -34,8 +35,14 @@ public sealed class AutoTelegraphService : IDisposable
     private readonly IDisposable _castStartSub;
     private readonly IDisposable _actionSub;
     private readonly IDisposable _zoneSub;
+    private readonly IDisposable _combatStartSub;
+    private readonly IDisposable _combatEndSub;
 
     private string _currentZone = "Unknown";
+
+    // pre-pull の演出キャスト等でミニマップに AoE が出ないように、戦闘中だけ描画する。
+    // 同パターン：MechanicTriggerService / AddObjectAoeService。
+    private bool _inCombat;
 
     // 同時多発キャストの重複表示防止：(cast_id, source_id) ペアごとに最後の発火時刻を覚える。
     // 同じ cast_id でもソースが違う（左翼 vs 右翼）場合は別物として両方描画する。
@@ -62,7 +69,13 @@ public sealed class AutoTelegraphService : IDisposable
         _castStartSub = bus.Subscribe<CastStartedEvent>(OnCastStart);
         _actionSub = bus.Subscribe<ActionUsedEvent>(OnActionUsed);
         _zoneSub = bus.Subscribe<ZoneChangedEvent>(z =>
-            _currentZone = string.IsNullOrEmpty(z.ZoneName) ? "Unknown" : z.ZoneName);
+        {
+            _currentZone = string.IsNullOrEmpty(z.ZoneName) ? "Unknown" : z.ZoneName;
+            // ゾーン跨ぎは強制 pre-combat 扱い（テレポ等で _inCombat が残らないように）。
+            _inCombat = false;
+        });
+        _combatStartSub = bus.Subscribe<CombatStartedEvent>(_ => _inCombat = true);
+        _combatEndSub = bus.Subscribe<CombatEndedEvent>(_ => _inCombat = false);
     }
 
     public void Dispose()
@@ -70,13 +83,28 @@ public sealed class AutoTelegraphService : IDisposable
         _castStartSub.Dispose();
         _actionSub.Dispose();
         _zoneSub.Dispose();
+        _combatStartSub.Dispose();
+        _combatEndSub.Dispose();
     }
 
     private void OnCastStart(CastStartedEvent ev)
     {
-        // 注意：ゾーンファイルが無くても AoE 描画は行う。極ゾディアーク等で
-        // 初見ゾーンに突入したばかりのユーザーでも警告を出すため。
+        // 戦闘外の演出キャスト（zone 入った直後のボス登場演出など）でミニマップに AoE を
+        // 描かない。CastCapture は ICondition.InCombat と独立に publish するため、ここでゲート。
+        if (!_inCombat)
+        {
+            return;
+        }
+
         var file = _store.GetByZone(_currentZone);
+        if (!AutoAoeDisplayPolicy.IsEnabled(file))
+        {
+            // 「AoE が出ない」相談のときに最初に確認すべき設定。明示的にログを残す。
+            _log.Information(
+                "[FfxivEchoes] AutoTelegraph: SKIP — show_auto_telegraphs=OFF（ファイル設定タブで ON にしてください） cast={Name} id=0x{Id:X4}",
+                ev.CastActionName, ev.CastActionId);
+            return;
+        }
 
         var isFriendly = IsFriendlyActor(ev.SourceId);
         if (isFriendly)
@@ -92,36 +120,51 @@ public sealed class AutoTelegraphService : IDisposable
         if (_lastDrawnAt.TryGetValue(key, out var prev) &&
             (now - prev).TotalSeconds < DedupWindowSeconds)
         {
-            _log.Debug("[FfxivEchoes] AutoTelegraph: skip duplicate cast id={Id:X4} src={Src} within {Sec}s",
+            _log.Information("[FfxivEchoes] AutoTelegraph: skip duplicate cast id=0x{Id:X4} src={Src} within {Sec}s",
                 ev.CastActionId, ev.SourceId, DedupWindowSeconds);
             return;
         }
         _lastDrawnAt[key] = now;
 
-        if (file is not null && file.AutoSettings.EnableTriggers)
+        // 全体攻撃マーク済はミニマップに範囲を描いても意味がない（回避不能）のでスキップ。
+        if (AutoSafeCallPlanner.IsRaidWide(file, ev.CastActionId, ev.CastActionName))
         {
-            var strategy = StrategyPlanResolver.FindMechanicForCast(file, ev.CastActionId, ev.CastActionName);
-            if (strategy.Profile is not null && strategy.Mechanic is not null)
-            {
-                var actions = StrategyPlanResolver.BuildReminderActions(strategy.Profile, strategy.Mechanic);
-                if (actions.Count > 0)
-                {
-                    _bus.Publish(new TriggerFiredEvent(
-                        Timestamp: DateTimeOffset.UtcNow,
-                        Zone: _currentZone,
-                        TriggerId: $"__strategy_{strategy.Profile.Id}_{strategy.Mechanic.Id}",
-                        TriggerName: strategy.Mechanic.Label,
-                        Actions: actions,
-                        SourceEvent: ev));
-                    return;
-                }
-            }
+            _log.Information("[FfxivEchoes] AutoTelegraph: SKIP — 全体攻撃マーク済 {Name} (id=0x{Id:X4}) 解除するには「全体攻撃マーク済キャスト」一覧から",
+                ev.CastActionName, ev.CastActionId);
+            return;
         }
 
-        var aoe = AoeResolver.Resolve(_dataManager, ev.CastActionId, _log);
+        var arena = AutoAoeDisplayPolicy.ResolveArena(file);
+
+        // 旧実装では「アリーナ半径の 90% 超えは描画スキップ」していたが、
+        // 大きな AoE もユーザーは見たい（ZoNDIARK 級の巨大円も視覚補助として有用）。
+        // ノイズと感じたら「全体攻撃にマーク」で個別に隠す運用に統一する。
+        // 例外的に「アリーナの 1.5 倍超」など明らかに raid-wide 相当のものだけ skip。
+        var preview = AoeResolver.Resolve(_dataManager, ev.CastActionId, _log);
+        if (preview is not null &&
+            preview.CastType is 2 or 5 &&
+            preview.Radius >= arena.ArenaRadius * 1.5)
+        {
+            _log.Information(
+                "[FfxivEchoes] AutoTelegraph: skip raid-wide-equivalent AoE {Name} radius={R}m castType={Ct}",
+                ev.CastActionName, preview.Radius, preview.CastType);
+            return;
+        }
+
+        var aoe = preview;
         var namedSafeCall = AutoSafeCallPlanner.CreateKnown(ev.CastActionId, ev.CastActionName);
-        // ゾーン file が無い場合は default の auto_settings を使う（show_auto_telegraphs=true）
-        var autoSettings = file?.AutoSettings ?? new AutoSettings { ShowAutoTelegraphs = true };
+        if (aoe is null && namedSafeCall is null)
+        {
+            // Lumina に EffectRange が無く、辞書 override も無いキャストは、適当な 10m 円を
+            // 出すと実ギミックと矛盾する。手動 mechanic / AoE Zone に任せる。
+            _log.Information(
+                "[FfxivEchoes] AutoTelegraph: skip {Name} (id=0x{Id:X4}) — Lumina に AoE 情報無し / 辞書 override 無し。\n" +
+                "  対処：集計タブでキャスト選択 → 攻略登録 mechanic を作成し、AoE Zone を手動追加",
+                ev.CastActionName, ev.CastActionId);
+            return;
+        }
+
+        var autoSettings = file!.AutoSettings;
         var decision = AttackDisplayPolicy.Decide(
             autoSettings,
             new AttackDisplayRequest(
@@ -135,22 +178,21 @@ public sealed class AutoTelegraphService : IDisposable
             return;
         }
 
-        var src = _objectTable.SearchById(ev.SourceId);
+        var src = _objectTable.FindByEntityOrObjectId(ev.SourceId);
         var sourceWorld = src is null
             ? (Vector3?)null
             : new Vector3(src.Position.X, src.Position.Y, src.Position.Z);
-
-        if (aoe is null && namedSafeCall is null)
-        {
-            DrawAttackPulse(ev.CastActionName, ev.CastTime, sourceWorld, "Cast");
-            return;
-        }
 
         if (aoe is null && namedSafeCall is not null)
         {
             var knownFacingAngleRad = ArenaProjection.UsesFacing(namedSafeCall.Gimmick) && src is not null
                 ? ArenaProjection.RotationToMapAngleRad(src.Rotation)
                 : (float?)null;
+            var knownGeometry = KnownAoeGeometry.TryCreate(
+                namedSafeCall,
+                AutoSafeCallPlanner.RadiusOverride(ev.CastActionId, ev.CastActionName),
+                arena,
+                out var knownSpec);
 
             _minimap.AddArenaView(
                 gimmick: namedSafeCall.Gimmick,
@@ -159,26 +201,31 @@ public sealed class AutoTelegraphService : IDisposable
                 durationSec: ev.CastTime + 3.0,
                 direction: ArenaProjection.UsesFacing(namedSafeCall.Gimmick) ? "N" : null,
                 fanDeg: namedSafeCall.FanDeg,
-                arenaRadius: 20.0,
+                arenaRadius: arena.ArenaRadius,
                 directionAngleRad: knownFacingAngleRad,
-                sourceWorld: sourceWorld);
+                sourceWorld: sourceWorld,
+                arenaShape: arena.ArenaShape,
+                arenaWidth: arena.ArenaWidth,
+                arenaDepth: arena.ArenaDepth,
+                lockedArenaCenter: arena.LockedArenaCenter,
+                aoeRadius: knownGeometry ? knownSpec.RadiusM : null,
+                aoeCastType: knownGeometry ? knownSpec.CastType : null,
+                autoLuminaCastId: ev.CastActionId);
             PublishAutoSafeCall(ev, namedSafeCall);
             return;
         }
 
-        var radius = aoe!.Radius;
+        var resolvedAoe = aoe!;
+        var radius = AoeResolver.EffectiveRadius(resolvedAoe, src?.HitboxRadius ?? 0f);
         var shape = "circle";
-        var inferredFromCaster = aoe.FromCaster;
+        var inferredFromCaster = resolvedAoe.FromCaster;
 
-        var worldPos = sourceWorld;
-        if (!inferredFromCaster && ev.TargetId is { } tid && tid != 0)
-        {
-            var target = _objectTable.SearchById(tid);
-            if (target is not null)
-            {
-                worldPos = new Vector3(target.Position.X, target.Position.Y, target.Position.Z);
-            }
-        }
+        var worldPos = ResolveAoeWorldPosition(
+            inferredFromCaster,
+            sourceWorld,
+            ev.TargetId,
+            ev.TargetWorld,
+            ResolveObjectWorld);
         if (worldPos is null)
         {
             _log.Warning("[FfxivEchoes] AutoTelegraph: 位置不明 cast={Name} src={SrcId} tgt={TgtId}",
@@ -190,8 +237,8 @@ public sealed class AutoTelegraphService : IDisposable
             ev.CastActionName, radius, shape, worldPos.Value.X, worldPos.Value.Z);
 
         // 1. ミニマップ（俯瞰アリーナ図）に確定/推定ギミック表示
-        var safeCall = namedSafeCall ?? AutoSafeCallPlanner.Create(aoe, ev.CastActionName);
-        var visualCall = safeCall ?? AutoSafeCallPlanner.CreateVisual(aoe, ev.CastActionName);
+        var safeCall = namedSafeCall ?? AutoSafeCallPlanner.Create(resolvedAoe, ev.CastActionName);
+        var visualCall = SelectVisualCall(resolvedAoe, safeCall, ev.CastActionName);
         // cone / half_plane はソース（ボス）の rotation から実方向を計算
         float? facingAngleRad = null;
         if (ArenaProjection.UsesFacing(visualCall?.Gimmick) && src is not null)
@@ -215,12 +262,24 @@ public sealed class AutoTelegraphService : IDisposable
                 durationSec: ev.CastTime + 3.0,
                 direction: ArenaProjection.UsesFacing(visualCall.Gimmick) ? "N" : null,
                 fanDeg: visualCall.FanDeg,
-                arenaRadius: 20.0,
+                arenaRadius: arena.ArenaRadius,
                 directionAngleRad: facingAngleRad,
                 sourceWorld: worldPos,
-                aoeRadius: aoe?.Radius,
-                aoeCastType: aoe?.CastType);
+                aoeRadius: radius,
+                aoeCastType: resolvedAoe.CastType,
+                aoeOmenId: resolvedAoe.OmenId,
+                arenaShape: arena.ArenaShape,
+                arenaWidth: arena.ArenaWidth,
+                arenaDepth: arena.ArenaDepth,
+                lockedArenaCenter: arena.LockedArenaCenter,
+                autoLuminaCastId: ev.CastActionId);
         }
+
+        // 2. ワールドオーバーレイの「床塗り」描画は ActorTrackedAoeService が
+        //    毎フレーム actor 位置・向きを再評価する形で肩代わりする（Splatoon 流ライブ描画）。
+        //    ここでは描画しない。AutoTelegraphService はミニマップ表示と TTS の責務のみに集中。
+        //    ActorTrackedAoeService は CastStartedEvent を購読して登録、CastCanceledEvent で
+        //    即時消去、cast time + 3s 後に自動失効する。
 
         if (safeCall is not null)
         {
@@ -228,20 +287,51 @@ public sealed class AutoTelegraphService : IDisposable
         }
     }
 
+    public static AutoSafeCall? SelectVisualCall(
+        AoeResolver.AoeInfo? aoe,
+        AutoSafeCall? safeCall,
+        string actionName)
+    {
+        if (aoe is not null)
+        {
+            return AutoSafeCallPlanner.CreateVisual(aoe, actionName) ?? safeCall;
+        }
+
+        return safeCall;
+    }
+
     private void OnActionUsed(ActionUsedEvent ev)
     {
-        var file = _store.GetByZone(_currentZone);
-        if (file is null)
+        // 戦闘外のインスタント発動（NPC のアイドル動作など）でミニマップに AoE を描かない。
+        if (!_inCombat)
         {
             return;
         }
 
-        var isFriendly = IsFriendlyActor(ev.SourceId);
+        var file = _store.GetByZone(_currentZone);
+        var isFriendly = ev.IsPlayer || IsFriendlyActor(ev.SourceId);
+        var isRaidWide = AutoSafeCallPlanner.IsRaidWide(file, ev.ActionId, ev.ActionName);
+        if (ShouldSkipActionUsedTelegraph(file, ev, isFriendly, isRaidWide))
+        {
+            if (isRaidWide)
+            {
+                _log.Debug("[FfxivEchoes] AutoTelegraph(ActionUsed): skip raid-wide {Name} id={Id:X4}",
+                    ev.ActionName, ev.ActionId);
+            }
+            return;
+        }
+
+        var autoSettings = file!.AutoSettings;
+        var arena = AutoAoeDisplayPolicy.ResolveArena(file);
+
+        // Lumina から AoE 情報を引く（cast 無しの瞬間アクションでも EffectRange は取得可能）
+        var aoe = AoeResolver.Resolve(_dataManager, ev.ActionId, _log);
+
         var decision = AttackDisplayPolicy.Decide(
-            file.AutoSettings,
+            autoSettings,
             new AttackDisplayRequest(
                 IsFriendly: isFriendly,
-                HasAoe: false,
+                HasAoe: aoe is not null,
                 IsAutoAttack: ev.IsAutoAttack,
                 IsCast: false));
         if (decision == AttackDisplayDecision.None)
@@ -249,11 +339,100 @@ public sealed class AutoTelegraphService : IDisposable
             return;
         }
 
-        var src = _objectTable.SearchById(ev.SourceId);
+        var src = _objectTable.FindByEntityOrObjectId(ev.SourceId);
         var sourceWorld = src is null
             ? (Vector3?)null
             : new Vector3(src.Position.X, src.Position.Y, src.Position.Z);
-        DrawAttackPulse(ev.ActionName, 1.8, sourceWorld, ev.IsAutoAttack ? "AA" : "Action");
+
+        if (aoe is null)
+        {
+            return;
+        }
+        var radius = AoeResolver.EffectiveRadius(aoe, src?.HitboxRadius ?? 0f);
+        var worldPos = ResolveAoeWorldPosition(
+            aoe.FromCaster,
+            sourceWorld,
+            ev.TargetId,
+            ev.TargetWorld,
+            ResolveObjectWorld);
+
+        // AoE 持ちの瞬間アクション：Lumina の正確な半径と形状でミニマップに描く。
+        // キャスト時間が無い分、表示は短め（3 秒）。発動済みなので「次の予告」ではなく
+        // 「今この範囲が爆発した」のフィードバック表示。
+        var visualCall = AutoSafeCallPlanner.CreateVisual(aoe, ev.ActionName);
+        if (visualCall is null)
+        {
+            return;
+        }
+
+        float? facingAngleRad = null;
+        if (ArenaProjection.UsesFacing(visualCall.Gimmick) && src is not null)
+        {
+            facingAngleRad = ArenaProjection.RotationToMapAngleRad(src.Rotation);
+        }
+
+        _minimap.AddArenaView(
+            gimmick: visualCall.Gimmick,
+            callout: $"発動: {ev.ActionName}",
+            durationSec: 3.0,
+            direction: ArenaProjection.UsesFacing(visualCall.Gimmick) ? "N" : null,
+            fanDeg: visualCall.FanDeg,
+            arenaRadius: arena.ArenaRadius,
+            directionAngleRad: facingAngleRad,
+            sourceWorld: worldPos,
+            aoeRadius: radius,
+            aoeCastType: aoe.CastType,
+            arenaShape: arena.ArenaShape,
+            arenaWidth: arena.ArenaWidth,
+            arenaDepth: arena.ArenaDepth,
+            lockedArenaCenter: arena.LockedArenaCenter,
+            aoeOmenId: aoe.OmenId,
+            autoLuminaCastId: ev.ActionId);
+    }
+
+    public static bool ShouldSkipActionUsedTelegraph(
+        TriggerFile? file,
+        ActionUsedEvent ev,
+        bool sourceIsFriendly,
+        bool isRaidWide)
+    {
+        if (!AutoAoeDisplayPolicy.IsEnabled(file))
+        {
+            return true;
+        }
+
+        if (!AutoAoeDisplayPolicy.ShouldDrawInstantActionTelegraph(file))
+        {
+            return true;
+        }
+
+        return ev.IsPlayer || sourceIsFriendly || isRaidWide;
+    }
+
+    public static Vector3? ResolveAoeWorldPosition(
+        bool fromCaster,
+        Vector3? sourceWorld,
+        uint? targetId,
+        Vector3? targetWorld,
+        Func<uint, Vector3?> targetLookup)
+    {
+        if (fromCaster)
+        {
+            return sourceWorld;
+        }
+
+        if (targetWorld is { } snapshot)
+        {
+            return snapshot;
+        }
+
+        return targetId is { } tid && tid != 0 ? targetLookup(tid) : sourceWorld;
+    }
+
+    private Vector3? ResolveObjectWorld(uint entityOrObjectId)
+    {
+        var obj = _objectTable.FindByEntityOrObjectId(entityOrObjectId);
+        return obj is null ? null : new Vector3(obj.Position.X, obj.Position.Y, obj.Position.Z);
     }
 
     private void DrawAttackPulse(string label, double durationSec, Vector3? sourceWorld, string prefix)
@@ -290,7 +469,7 @@ public sealed class AutoTelegraphService : IDisposable
 
     private bool IsFriendlyActor(uint id)
     {
-        var obj = _objectTable.SearchById(id);
+        var obj = _objectTable.FindByEntityOrObjectId(id);
         if (obj is null) return false;
         // ObjectKind: Pc=プレイヤー、BattleNpc=敵/NPC など。
         // PC（プレイヤーキャラ）なら友軍とみなしてスキップ。

@@ -42,6 +42,40 @@ public sealed class AudioTab : ITab
                 v => _configuration.WavVolume = v);
             DrawVolume("フィードバック音量", () => _configuration.FeedbackVolume,
                 v => _configuration.FeedbackVolume = v);
+
+            // TTS ブースト：1.0 = SAPI 標準、最大 5.0（≒ +14dB）
+            ImGui.Spacing();
+            var boost = _configuration.TtsBoost;
+            ImGui.AlignTextToFramePadding();
+            ImGui.Text("TTS ブースト");
+            ImGui.SameLine(180f * ImGuiHelpers.GlobalScale);
+            ImGui.SetNextItemWidth(220f * ImGuiHelpers.GlobalScale);
+            if (ImGui.SliderFloat("##tts-boost", ref boost, 1.0f, 5.0f, "%.2fx"))
+            {
+                _configuration.TtsBoost = Math.Clamp(boost, 1.0f, 5.0f);
+            }
+            if (ImGui.IsItemDeactivatedAfterEdit())
+            {
+                _configuration.Save();
+            }
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip(
+                    "SAPI（Windows 音声合成）の音量上限を超えて TTS をさらに増幅する。\n" +
+                    "1.0x = 既定（SAPI そのまま）\n" +
+                    "2.0x ≒ +6dB\n" +
+                    "3.0x ≒ +9.5dB\n" +
+                    "5.0x ≒ +14dB（最大）\n" +
+                    "「TTS が小さい」ときはここを上げる。\n" +
+                    "ただし 3.0x を超えると元音源によってクリッピング（音割れ）の可能性あり。");
+            }
+            // 3.0 超え時は警告表示
+            if (_configuration.TtsBoost > 3.0f)
+            {
+                ImGui.SameLine();
+                ImGui.TextColored(new System.Numerics.Vector4(1.0f, 0.7f, 0.2f, 1.0f),
+                    "⚠ 音割れ可能性");
+            }
         }
 
         ImGui.Spacing();

@@ -1,9 +1,11 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using Dalamud.Game.ClientState.Objects.SubKinds;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
+using FfxivEchoes.Capture;
 using FfxivEchoes.Events;
 
 namespace FfxivEchoes.SafeZone;
@@ -70,26 +72,24 @@ public sealed class SafeZoneContextBuilder
             party.Insert(0, localPlayer);
         }
 
-        var markers = new Dictionary<string, Vector3>();
-        var centerAnchors = new List<Vector3>();
-        if (localPlayer is not null)
+        var markers = BuildFieldMarkers();
+        // 動的アリーナ中心：ジッタを避けるため、PT メンバー全員の bbox は使わない。
+        // 優先度：ボス（1 体に絞れば動いても遥かに安定）→ デフォルト座標。
+        // 校正済中心（StrategyProfile.ArenaCenterX/Z）はミニマップ描画側で
+        // 上書きするのでここでは関与しない。
+        Vector3 arenaCenter;
+        if (boss is not null)
         {
-            centerAnchors.Add(selfPos);
+            arenaCenter = new Vector3(boss.Position.X, boss.Position.Y, boss.Position.Z);
         }
-        foreach (var pc in party)
+        else if (castActor is not null)
         {
-            centerAnchors.Add(new Vector3(pc.Position.X, pc.Position.Y, pc.Position.Z));
+            arenaCenter = new Vector3(castActor.Position.X, castActor.Position.Y, castActor.Position.Z);
         }
-        foreach (var npc in bosses)
+        else
         {
-            centerAnchors.Add(new Vector3(npc.Position.X, npc.Position.Y, npc.Position.Z));
+            arenaCenter = DefaultArenaCenter;
         }
-        if (castActor is not null)
-        {
-            centerAnchors.Add(new Vector3(castActor.Position.X, castActor.Position.Y, castActor.Position.Z));
-        }
-
-        var arenaCenter = ArenaCenterResolver.Resolve(DefaultArenaCenter, centerAnchors);
 
         return new SafeZoneContext(
             SelfPosition: selfPos,
@@ -112,5 +112,35 @@ public sealed class SafeZoneContextBuilder
         {
             return npc.MaxHp > 0;
         }
+    }
+
+    private static Dictionary<string, Vector3> BuildFieldMarkers()
+    {
+        var markers = new Dictionary<string, Vector3>(StringComparer.OrdinalIgnoreCase);
+        var aliases = new (string Letter, string Key)[]
+        {
+            ("A", "marker_a"),
+            ("B", "marker_b"),
+            ("C", "marker_c"),
+            ("D", "marker_d"),
+            ("1", "marker_1"),
+            ("2", "marker_2"),
+            ("3", "marker_3"),
+            ("4", "marker_4"),
+        };
+
+        foreach (var (letter, key) in aliases)
+        {
+            var pos = WaymarkProvider.TryGetPosition(letter);
+            if (pos is null)
+            {
+                continue;
+            }
+
+            markers[key] = pos.Value;
+            markers[letter] = pos.Value;
+        }
+
+        return markers;
     }
 }

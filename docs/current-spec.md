@@ -1,6 +1,6 @@
 # FFXIV Echoes — 現在の仕様
 
-最終更新: 2026-05-06。
+最終更新: 2026-05-09。
 ブランチ: `feature/minimap-boss-roles`（develop に未マージの作業ブランチ）。
 DLL: `src/FfxivEchoes/bin/x64/Debug/FfxivEchoes.dll`
 
@@ -18,17 +18,16 @@ DLL: `src/FfxivEchoes/bin/x64/Debug/FfxivEchoes.dll`
 │  ↓                                                              │
 │ Plugin: イベントを JSONL に保存（cast_id / 時刻 / 発動者 等）  │
 │  ↓                                                              │
-│ プレイヤー: コンテンツ一覧 → 編集 → 「✨ 録画から自動生成」    │
+│ プレイヤー: コンテンツ一覧 → 編集 → 録画から自動生成/攻略下書き │
 │  ↓                                                              │
 │ Plugin: Lumina の Action データを読んで AoE 形状を判定         │
-│         → TTS + ミニマップ ギミック + フィールド円の           │
-│         トリガー一式を一発生成                                  │
+│         → TTS + 通常トリガー、または PT 攻略メカニクス下書きを生成│
 │  ↓                                                              │
 │ プレイヤー: 同コンテンツに再突入                                │
 │  ↓                                                              │
 │ Plugin:                                                          │
-│  - 予測時刻の N 秒前にミニマップに「次：〇〇」を表示            │
-│  - キャスト開始で「確定：〇〇」に切り替わり、フィールド円も追加│
+│  - ライブタイムラインに録画予測、AA、ノートを表示              │
+│  - 攻略メカニクス発動で TTS + ユーザー作成ミニマップを表示     │
 │  - 同期オフセットで実時刻ズレを自動補正                         │
 │  - 自分・PT・他の敵 をミニマップ上にプロット                    │
 └────────────────────────────────────────────────────────────────┘
@@ -53,7 +52,7 @@ DLL: `src/FfxivEchoes/bin/x64/Debug/FfxivEchoes.dll`
 |---|---|
 | **使い方** | 初回利用ガイド・コマンド一覧・トラブルシュート（HelpTab） |
 | **コンテンツ一覧** | ゾーン一覧。新規作成 / 編集 / 削除。録画ありゾーンも表示 |
-| **トリガー編集** | サブタブ：トリガー一覧 / 集計（観測イベント） / ファイル設定 / ノート / バックアップ |
+| **トリガー編集** | サブタブ：トリガー一覧 / 集計（観測イベント） / 攻略登録 / ファイル設定 / ノート / バックアップ |
 | **ライブイベント** | キャプチャ済みイベントを直近 300 件リアルタイム表示・カテゴリ別フィルタ |
 | **音声** | TTS / WAV のデバイス選択とボリューム |
 | **プロファイル** | コンテンツ別にトリガー有効/無効を切替 |
@@ -71,6 +70,8 @@ DLL: `src/FfxivEchoes/bin/x64/Debug/FfxivEchoes.dll`
 - 中央が現在時刻、左 10 秒（過去）、右 30 秒（未来）
 - 過去側：実発火した cast / trigger を点付きラベルで表示
 - 未来側：録画 aggregate にあった cast を点線 + ラベル ピルで予測表示（同期オフセット適用済）
+- `show_auto_attacks = true` なら録画由来の `auto_attack` も `AA` として未来側に表示
+- `object_appear` は攻略下書き生成とメカニクス条件には使うが、LiveTimeline / Upcoming HUD には raw 表示しない。敵名・出現オブジェクト名の羅列を避け、必要なものは攻略登録メカニクスやノートとして表示する
 - 各イベントを最大 4 行に縦スタックして重なり回避
 - ラベルは 14 文字でトランケート、半透明背景ピルで重なっても読める
 - 右上に `MODE` と `SYNC: +X.Xs rec:〇〇` を表示
@@ -78,9 +79,11 @@ DLL: `src/FfxivEchoes/bin/x64/Debug/FfxivEchoes.dll`
 ### 4.2 MinimapWindow （俯瞰アリーナ図）
 
 - ギミック発生時のみポップアップ。デモの右パネル相当
-- gimmick タイプ: `outer_ring` / `inner_circle` / `scatter` / `stack` / `cone`
+- gimmick タイプ: `outer_ring` / `inner_circle` / `scatter` / `stack` / `cone` / `half_plane` / `two_side_cleave` / `user_layout` 等
 - 各 gimmick で固有の描画パターン（中央安置 / 外周安置 / 4方向散開 / 中央集合 / 扇形）
-- ボス（中央）+ 自分（明緑 + 白リング）+ PT メンバー（ロール別色） + 他の敵（赤ドット）を同時にプロット
+- ボス + 自分（明緑 + 白リング）+ PT メンバー（ロール別色）を同時にプロット
+- 攻略登録の `object_markers` / `aoe_zones` / `spread_positions` を重畳描画
+- A/B/C/D/1/2/3/4 のウェイマーク位置を読み取り、`marker_relative` と waymark 連動マーカーに利用
 - cone はボスの **実際の Rotation** を読んで方向を決定
 - safe_zone（F4-F7 の SafeZoneCalculation）が指定されていれば緑の点線円で重畳描画
 - callout テキスト + 残り秒数を画面下部に表示
@@ -206,35 +209,24 @@ DLL: `src/FfxivEchoes/bin/x64/Debug/FfxivEchoes.dll`
 
 戦闘中に常駐して動く解析器群。
 
-### 8.1 PredictedCastReminderService
-- `auto_settings.predict_advance_warning_sec > 0` で有効化
-- CombatStarted で録画 aggregate を読み、各 cast_start を予測としてスケジュール
-- 予測時刻の N 秒前に：
-  - TTS「次、〇〇」
-  - MinimapWindow に「次：〇〇」のミニマップ ポップアップ（gimmick 自動推測）
-- 同じ cast_id を扱う既存 trigger があればスキップ（重複排除）
+### 8.1 MechanicTriggerService
+- `strategy_profiles[].mechanics[]` の発動条件を監視する主経路
+- 対応条件: `cast` / `action_used` / `status_gain` / `status_lose` / `rotation` / `hp_pct` / `object_appear` / `object_group`
+- `object_group` は短時間に同じオブジェクトが N 個出た分岐を扱う。例: 小ブラックホール 2 個で別 mechanic を発火
+- 発火すると `StrategyPlanResolver` が TTS + `arena_view` を生成し、PT 固有の処理法はユーザー編集のレイアウトを表示する
 
-### 8.2 AutoTelegraphService
-- `auto_settings.show_auto_telegraphs = true` で有効化
-- 敵キャスト開始時に Lumina Action の `EffectRange` / `CastType` を読んで：
-  - WorldOverlay にフィールド円（実半径）を描画
-  - MinimapWindow にも「確定：〇〇」のミニマップ表示
-  - cone の場合はボスの Rotation で方向決定
-- EffectRange > 50m はスキップ（誤データ対策）
-- PC（プレイヤー）のキャストは無視
-
-### 8.3 NoteReminderService
+### 8.2 NoteReminderService
 - ノートの `advance_warning_sec` に従い先行 TTS 通知
 - `attached_to` 指定があれば録画 aggregate から時刻解決
 - 同期オフセット適用済
 
-### 8.4 SyncOffsetTracker
+### 8.3 SyncOffsetTracker
 - 録画予測 vs 実戦の時刻ズレを自動追跡
 - 録画で t=180s だった cast が実戦で t=192s なら offset = +12s
-- `LiveTimelineWindow` / `PredictedCastReminderService` / `NoteReminderService` 全てが時刻表示・通知に offset を加算
+- `LiveTimelineWindow` / `NoteReminderService` が時刻表示・通知に offset を加算
 - 30 秒以上の急ジャンプは誤検知扱いで破棄
 
-### 8.5 TriggerAutoGenerator
+### 8.4 TriggerAutoGenerator
 - 「✨ 録画から自動生成」ボタンの裏側
 - 録画 aggregate の各 cast_start に対し：
   - Lumina で AoE 形状判定 → CastType に応じたアクション組合せを生成
@@ -245,6 +237,30 @@ DLL: `src/FfxivEchoes/bin/x64/Debug/FfxivEchoes.dll`
 - PT 内のキャストはスキップ
 - 既存 trigger と cast_id 重複ならスキップ
 - 生成プレビュー modal で確認 → 「N 件を作業コピーに追加」
+
+### 8.5 StrategyDraftGenerator
+- 「録画から攻略下書きを一括作成」ボタンの裏側
+- 録画 aggregate の `cast_start` / `object_appear` / `status_gain` / `status_update` / `hp_change` から `MechanicStrategy` 下書きを作成
+- PT 固有の散開、処理法、AoE 図形は空のまま残し、ユーザーが攻略登録 UI で調整する
+- 既存 mechanic と event type / ID / occurrence が重複するものはスキップ
+- 攻略登録 UI では、プロファイル基本情報のアリーナ形状・寸法・中心を、既存 mechanic へ個別または一括でコピーできる。正方形/長方形や中心補正をあとから直した場合でも、1 件ずつ手入力しなくてよい
+
+### 8.6 AutoTelegraphService / AddObjectAoeService / PredictedCastReminderService
+- `show_auto_telegraphs = true` のコンテンツで、敵キャストの Action 情報から AoE 形状を自動表示する
+- `AutoTelegraphService` は `CastStartedEvent` を監視し、Lumina の `EffectRange` / `CastType` / `Omen` から円・ドーナツ・扇・直線系の表示を作る
+- caster-origin の自動 AoE 床描画は cast start 時点の source 座標を固定保持する。短命なギミックオブジェクトが despawn しても発動まで範囲が消えたり別位置に追従したりしない
+- `ActionUsedEvent` は発動後に届くため、自動 AoE 表示には使わない。無詠唱ギミックの範囲表示は攻略登録 UI の手動 `aoe_zones` / `arena_view` で設定する
+- 自動 AoE ミニマップはアクティブな `strategy_profile` の `arena_center_x/z`、`arena_radius`、`arena_width/depth` を使う。未設定なら戦闘中スナップショットの中心にフォールバックする
+- 「全体攻撃マーク済みキャスト」（`safe_call_dictionary.json` の `raid_wide = true`）は、AutoTelegraph / 録画からの自動トリガー生成 / 攻略登録メカニクスのいずれでもミニマップを出さない。TTS やタイムライン通知だけを残す
+- 攻略登録の手動 mechanic 発火は `MechanicTriggerService` が担当するため、AutoTelegraph は strategy 発火を行わない
+- `AddObjectAoeService` はアクティブ profile の `object_aoe_rules` を最優先に使う。パラデイグマ系のように「出現位置は毎回違うが、オブジェクト種別で AoE 形状が決まる」ギミックは、`object_name` / `data_id` に対して形状・半径・線幅・表示時間を登録し、出現座標へ即時展開する
+- `object_aoe_rules` は攻略登録 UI の「オブジェクトAoEルール（ランダムギミック）」で管理する。録画/辞書から学習されたものも同じ一覧に保存され、開いたままの編集画面にも learned rule をマージする
+- 録画からの自動学習は、オブジェクト出現直後の action 候補が一意に近い場合だけ保存する。候補が割れている場合は誤った多数派固定を避け、自動確定しない
+- `AddObjectAoeService` は辞書または録画から AoE 形状を学習できるオブジェクトだけを補完する。未学習オブジェクトに既定円を出すことはしない。補完時は `TriggerFiredEvent` 経由で `aoe_zones` を流し、ミニマップと床描画を同じ入力に揃える
+- `object_appear` / `object_group` 起点の `aoe_zones` は、イベントに記録された出現座標を静的アンカーとして使う。対象オブジェクトが短時間で消えても、ミニマップと床描画の起点はずれない
+- 既知 safe call / 辞書 override 由来で Lumina 範囲が無い場合も、`KnownAoeGeometry` でミニマップ用と床描画用のジオメトリを共通化する
+- ゾーンファイルが無い、または `show_auto_telegraphs = false` の場合は自動 AoE を出さない
+- `PredictedCastReminderService` は録画から次の `cast_start` タイミングを警告する。全体攻撃マーク済みはミニマップを抑制し、それ以外で Lumina から形状が取れるものは先行ミニマップ / 予測床 AoE を出す
 
 ---
 
@@ -258,6 +274,7 @@ DLL: `src/FfxivEchoes/bin/x64/Debug/FfxivEchoes.dll`
 - 「集計（観測イベント）」タブでタイムライン or 表で閲覧
 - 「自分・PT のイベントを隠す」フィルタ（録画 meta の party 名と照合）
 - 「このイベントからトリガー作成」で 1-click 化
+- `action_used` のうち `auto_attack=true` は集計上 `auto_attack` として独立扱い。source を保持し、PT AA とボス AA を混ぜない
 
 ---
 
@@ -296,6 +313,8 @@ DLL: `src/FfxivEchoes/bin/x64/Debug/FfxivEchoes.dll`
 | `MergeToleranceSeconds` | 2.0 | 録画マージ判定の許容秒数 |
 | `LogRetentionDays` | null | 録画ログの自動削除日数 |
 
+コンテンツ別の `auto_settings.show_all_enemy_casts` は既定 `false`。不明 AoE には推測円を描かず、手動 AoE Zone で補正する。
+
 ---
 
 ## 13. コマンド一覧
@@ -325,9 +344,8 @@ JSON 値は英語キーで保つ（互換性のため）。UI ドロップダウ
 
 ## 15. 未実装 / 既知の制約
 
-- Cone / Line の AoE 形状は cone gimmick で代替表現（具体的な扇形角度は arena_view の `fan_deg` で手動指定）
-- フィールドマーカー（A/B/C/D ウェイマーク）の位置取得は未実装（マーカー基準の SafeZone は手動座標指定が必要）
-- AutoTelegraph は CastType=2/5/3/4/6 のみ対応。それ以外（特殊形状）はスキップ
+- 動的 AoE は `anchor = source_actor / matched_object / each_matched_object / waymark` で基本対応。完全な特殊形状は `aoe_zones` の手動編集が必要
+- AutoTelegraph / 攻略登録 AoE は画像認識ではなく、ゲーム内イベント・Lumina・録画学習から推定する。特殊な床エフェクトで元イベントが取れない場合は手動レイアウトが必要
 - カータライズ等で Lumina の `EffectRange` が異常値（80m 以上）の場合はスキップ（誤動作防止）
 - `set_variable` / `store_position` のアクション編集 UI は最小限（JSON 直編集推奨）
 - 多人数 PT（8 人）でロール解決失敗時は灰色ドット フォールバック
@@ -354,13 +372,13 @@ src/FfxivEchoes/
 │   ├── TriggerEngine.cs
 │   ├── Matching/                      # EventMatcher / ConditionEvaluator / TargetResolver
 │   ├── Models/                        # JSON ↔ POCO
+│   ├── MechanicTriggerService.cs      # 攻略登録 mechanic の発火条件監視
 │   ├── NoteReminderService.cs
-│   ├── PredictedCastReminderService.cs
-│   ├── AutoTelegraphService.cs
 │   ├── SyncOffsetTracker.cs
 │   ├── TimelineNoteResolver.cs
 │   ├── AoeResolver.cs                 # Lumina Action から AoE 形状を判定
-│   └── TriggerAutoGenerator.cs        # 「✨ 録画から自動生成」のロジック
+│   ├── TriggerAutoGenerator.cs        # 「✨ 録画から自動生成」のロジック
+│   └── StrategyDraftGenerator.cs      # 録画から攻略登録下書き生成
 ├── Actions/                           # M7: アクションディスパッチ
 │   ├── ActionDispatcher.cs
 │   └── Handlers/                      # 14 種のアクションハンドラ
@@ -380,7 +398,7 @@ src/FfxivEchoes/
     └── Tabs/
         ├── HelpTab.cs                 # 使い方
         ├── ContentListTab.cs          # ゾーン一覧 + 新規/削除
-        ├── TriggerEditorTab.cs        # 編集 UI（5 サブタブ）
+        ├── TriggerEditorTab.cs        # 編集 UI（攻略登録含む）
         ├── LiveHudTab.cs              # ライブイベント表示
         ├── AudioTab.cs / ProfileTab.cs / ImportExportTab.cs / GeneralSettingsTab.cs
         ├── TimelineRenderer.cs        # 集計タブの水平ビュー
@@ -417,7 +435,7 @@ src/FfxivEchoes/
 - **JSON 値は英語キー固定**: 互換性とコピペ可搬性のため。UI だけ日本語化
 - **同期オフセットは加算方式**: 全コンポーネントで `predicted + offset` を見るだけで追従できる単純さを優先
 - **AutoVisualForTts は OFF 既定**: 中央テキストは画面が埋まりやすいため、明示設定したトリガーのみ表示
-- **AutoTelegraph は ObjectTable 直読**: 録画には位置情報を載せていないため、実戦時のみ有効
+- **AutoTelegraph は ObjectTable 直読**: 録画には位置情報を載せていないため、実戦時のみ有効。表示は `show_auto_telegraphs` が true のコンテンツだけに限定し、中心・サイズはアクティブ攻略プロファイルの校正値を使う
 - **PT 内キャストは予測対象外**: 自分の使ったスキルで通知が鳴るのを防ぐ
 - **EffectRange > 50m はスキップ**: Lumina データの異常値（特殊アクション）対策
 
