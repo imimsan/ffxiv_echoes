@@ -1009,6 +1009,20 @@ public sealed class AddObjectAoeService : IDisposable
                 continue;
             }
 
+            // 全体攻撃ガード：学習済み zone の半径がアリーナ半径とほぼ同じ以上なら、
+            // 4 体出現時に各位置中心で巨大ドーナツが重なって「中央に正体不明の安置エリア」
+            // が出る現象（ユーザー報告「画面中央にケツァクウァトル AoE が表示される」）を防ぐ。
+            // AutoTelegraphService / ActorTrackedAoeService / MinimapWindow の 0.9 ガードと
+            // 揃える。半径不明 (0 or null) の zone は通す（既存挙動）。
+            if (learned.Value.Zone.RadiusM is { } r && r > 0 &&
+                arena.ArenaRadius > 0 && r >= arena.ArenaRadius * 0.9)
+            {
+                _log.Information(
+                    "[FfxivEchoes] AddObjectAoe: skip oversized {Name} r={R}m arena={A}m",
+                    memberName, r, arena.ArenaRadius);
+                continue;
+            }
+
             // OnAppear 時点の position は出現直後の placeholder / 仮位置の場合があるため、
             // 発火タイミングで ObjectTable から actor の現在位置を取り直す。
             // 例：ゾディアーク add (data_id=9020) は (100, 0, 79) で出現後にケツァクウァトル化
