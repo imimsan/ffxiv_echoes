@@ -123,21 +123,22 @@ public sealed class LuminaPcDetector : IDisposable
 
     /// <summary>
     /// BNpc が PC 召喚物（フェアリー / カーバンクル / クイーン / バハムート / 妖精 等）かどうか判定。
-    /// 一次判定：<see cref="BattleNpcSubKind.Pet"/> = 2。
-    /// 二次判定：<c>OwnerId</c> から実 actor を引いて <see cref="IPlayerCharacter"/> なら PC 召喚物。
+    /// 判定条件：<c>OwnerId</c> から実 actor を引いて <see cref="IPlayerCharacter"/> なら PC 召喚物。
     /// </summary>
+    /// <remarks>
+    /// 注意：以前は <see cref="BattleNpcSubKind.Pet"/> 単独で判定していたが、FFXIV の一部ボス
+    /// 召喚 add（例：月の底のケツァクウァトル）が SubKind=Pet を持つケースがあり、それらが
+    /// PC 召喚物扱いされて ObjectCapture の IsPlayer=true → BattleRecorder で録画除外、
+    /// AddObjectAoeService で AoE 描画除外、攻略登録タブから消失する regression を起こす。
+    /// 真の PC ペット（フェアリー/カーバンクル等）は必ず OwnerId が PC を指すので、OwnerId 経由
+    /// での判定に統一する。SubKind=Pet だが OwnerId=0 or OwnerId=ボス の NPC はギミック add として扱う。
+    /// </remarks>
     public bool IsPetBnpc(IBattleNpc bnpc)
     {
         if (bnpc is null) return false;
-        // 一次：SubKind が Pet なら確定
-        if (bnpc.BattleNpcKind == BattleNpcSubKind.Pet) return true;
-        // 二次：OwnerId が PC を指していたら PC 召喚物
-        if (bnpc.OwnerId != 0)
-        {
-            var owner = _objectTable.SearchById(bnpc.OwnerId);
-            if (owner is IPlayerCharacter) return true;
-        }
-        return false;
+        if (bnpc.OwnerId == 0) return false;
+        var owner = _objectTable.SearchById(bnpc.OwnerId);
+        return owner is IPlayerCharacter;
     }
 
     /// <summary>
