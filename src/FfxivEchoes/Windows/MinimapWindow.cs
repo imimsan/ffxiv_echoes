@@ -899,13 +899,16 @@ public sealed class MinimapWindow : Window, IDisposable
         if (item.AoeRadius is not { } radiusM || radiusM <= 0) return;
         if (item.AoeCastType is not { } castType) return;
 
-        // 全体攻撃判定：半径がアリーナ半径とほぼ同じ（または超える）円形 AoE は
+        // 全体攻撃判定：半径がアリーナ半径とほぼ同じ（または超える）AoE は
         // 「アリーナ全体が危険」を意味し、ミニマップで形を描いても意味がない
-        // （画面が真っ赤になるだけ）。callout だけ残して形状描画はスキップ。
-        // 閾値 0.9 はコキュートス等「半径≒アリーナ半径」の全体攻撃を捉えるための値。
+        // （画面が真っ赤になるだけ、または中央に巨大ドーナツが居座る）。
+        // callout だけ残して形状描画はスキップする。
+        // CastType を問わず適用：円 (2/5)・Donut (6/7/10)・コーン (3/13)・矩形 (4/12) 全部。
+        // 月の底のパラデイグマ (0x67BF) のような Donut 形状全体演出 cast がここで止まる。
+        // AutoTelegraphService.OnCastStart と ActorTrackedAoeService.OnCastStarted の
+        // 入口ガード (d00bf88) と完全一致させ、描画層でも漏れなく止める。
         if (item.ArenaRadius > 0 &&
-            radiusM >= item.ArenaRadius * 0.9f &&
-            (castType == 2 || castType == 5))
+            radiusM >= item.ArenaRadius * 0.9f)
         {
             return;
         }
