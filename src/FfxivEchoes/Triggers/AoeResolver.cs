@@ -53,15 +53,29 @@ public static class AoeResolver
             //   3  = Cone, caster 中心、caster 正面向き、+ HitboxRadius
             //   4  = Rect, caster 中心、caster 正面向き、+ HitboxRadius
             //   5  = Circle (PBAoE), caster 中心、+ HitboxRadius
-            //   6  = Donut, caster 中心（特殊：内安置外危）
-            //   7  = 特殊 Donut（caster 中心）
+            //   6  = Donut（旧定義）caster 中心：**Splatoon は意図的に未対応** ←
+            //   7  = 特殊 Donut（caster 中心）：**Splatoon は意図的に未対応** ←
             //   10 = Donut
             //   11 = Cross, caster 中心
             //   12 = Rect, **地面（target 中心）**、HitboxRadius 加算なし
             //   13 = Cone, **地面（target 中心）**、HitboxRadius 加算なし
-            // 旧実装は 12/13 を caster 中心にしていたため、ground-targeted 技
-            // （プレイヤー位置中心の rect/cone）が caster 位置に間違って描画されていた。
-            var fromCaster = castType is 3 or 4 or 5 or 6 or 7 or 10 or 11;
+            //
+            // CastType 6/7 を自動推測対象から除外する：
+            // 月の底のパラデイグマ (0x67BF) など、Lumina 上 CastType=6/7 / EffectRange > 0 を
+            // 持つ「演出系 / バフ系 / add 召喚系 cast」が caster 中心 Donut として自動描画され、
+            // ゾディアーク本体位置（アリーナ中央付近）に「正体不明のドーナツ」が出る regression
+            // の根本対策。Splatoon が同じ判断（コメント「custom/player ground」と明記）。
+            // 正規 Donut AoE はユーザー定義 mechanic / KnownAoeGeometry / Omen path 解析で
+            // 別途取得する必要があるが、ユーザー報告の最優先課題（中央誤発火）を即時解消する。
+            if (castType is 6 or 7)
+            {
+                log?.Information(
+                    "[FfxivEchoes] AoE skip CastType=6/7 (Donut 自動推測除外) id={Id:X4} range={R}m omen={Om}",
+                    actionId, effectRange, 0u);
+                return null;
+            }
+
+            var fromCaster = castType is 3 or 4 or 5 or 10 or 11;
             // Omen ID（テレグラフのアセット参照）を取得。失敗時は 0
             uint omenId = 0;
             try
