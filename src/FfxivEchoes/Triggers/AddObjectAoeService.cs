@@ -919,6 +919,21 @@ public sealed class AddObjectAoeService : IDisposable
             }
 
             var pos = new Vector3(obj.Position.X, obj.Position.Y, obj.Position.Z);
+
+            // FFXIV: actor が ObjectTable に登録された直後（戦闘開始の resnap 等）は
+            // 位置が実位置に初期化されておらず、ゾーン共通の placeholder 座標 (100, *, 100)
+            // が返る。ObjectCapture.OnUpdate ではこれを skip して ObjectAppearedEvent を
+            // 発行しないが、TryFireLiveObjectSnapshot は ObjectTable を直接走査するため
+            // 同じフィルタを通らず、placeholder 位置の actor が発火対象になる。
+            // 月の底のケツァクウァトル 4 体が time=32 出現より前のパラデイグマ詠唱中
+            // (戦闘 time≒18s) に「AddObjectAoe fired: ケツァクウァトル ×4 zones=4」が
+            // 発火し、4 体すべて (100, 100) placeholder で誤描画される regression の原因。
+            // ObjectCapture と同じ判定を借りて placeholder actor を skip する。
+            if (Capture.ObjectCapture.IsUninitializedPlaceholderPosition(pos))
+            {
+                continue;
+            }
+
             if (!IsUsableObjectAoePosition(pos, arena.LockedArenaCenter))
             {
                 continue;

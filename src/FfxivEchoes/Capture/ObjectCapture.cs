@@ -101,25 +101,25 @@ public sealed class ObjectCapture : IDisposable
             // 判定。LuminaPcDetector の OwnerId 経由判定で確実に PC 召喚物のみを除外。
             // ボスの召喚物（owner=boss）は通常 mechanic として価値があるので IsPlayer=false で通す。
             var isPlayerOwned = obj is IBattleNpc bnpc && _pcDetector.IsPetBnpc(bnpc);
+            var objectName = obj.Name.TextValue;
+            var dataId = obj.BaseId;
 
             var key = obj.GameObjectId;
             current.Add(key);
 
-            if (_seen.ContainsKey(key))
+            if (_seen.TryGetValue(key, out var previous))
             {
+                if (ShouldRepublishIdentityChange(previous.Name, previous.DataId, objectName, dataId))
+                {
+                    _seen[key] = new ObjectSnapshot(objectName, dataId);
+                    PublishAppeared(now, key, objectName, dataId, pos, isPlayerOwned, obj.EntityId);
+                }
                 continue;
             }
 
             // 新規出現
-            _seen[key] = new ObjectSnapshot(obj.Name.TextValue, obj.BaseId);
-            _bus.Publish(new ObjectAppearedEvent(
-                Timestamp: now,
-                ObjectId: (uint)key,
-                ObjectName: obj.Name.TextValue,
-                DataId: obj.BaseId,
-                Position: pos,
-                IsPlayer: isPlayerOwned,
-                EntityId: obj.EntityId));
+            _seen[key] = new ObjectSnapshot(objectName, dataId);
+            PublishAppeared(now, key, objectName, dataId, pos, isPlayerOwned, obj.EntityId);
         }
 
         // 消失検知
@@ -150,10 +150,48 @@ public sealed class ObjectCapture : IDisposable
     /// position として「ゾーン共通の placeholder 座標 (100, *, 100)」を返すことがある。
     /// 戦闘開始の resnap タイミングで取得すると未初期化の placeholder が返るため、
     /// 実位置に初期化されるまで publish を遅延させる必要がある。
+    /// AddObjectAoeService.TryFireLiveObjectSnapshot のように ObjectTable を直接走査する
+    /// 経路でも同じ skip ロジックを使いたいので public に昇格。
     /// </summary>
-    private static bool IsUninitializedPlaceholderPosition(in Vector3 pos)
+    public static bool IsUninitializedPlaceholderPosition(in Vector3 pos)
     {
         return MathF.Abs(pos.X - 100f) < 0.01f && MathF.Abs(pos.Z - 100f) < 0.01f;
+    }
+
+    public static bool ShouldRepublishIdentityChange(
+        string? previousName,
+        uint previousDataId,
+        string? currentName,
+        uint currentDataId)
+    {
+        var current = (currentName ?? string.Empty).Trim();
+        if (string.IsNullOrEmpty(current))
+        {
+            return false;
+        }
+
+        var previous = (previousName ?? string.Empty).Trim();
+        return previousDataId != currentDataId ||
+               !string.Equals(previous, current, StringComparison.Ordinal);
+    }
+
+    private void PublishAppeared(
+        DateTimeOffset now,
+        ulong objectId,
+        string objectName,
+        uint dataId,
+        Vector3 position,
+        bool isPlayerOwned,
+        uint entityId)
+    {
+        _bus.Publish(new ObjectAppearedEvent(
+            Timestamp: now,
+            ObjectId: (uint)objectId,
+            ObjectName: objectName,
+            DataId: dataId,
+            Position: position,
+            IsPlayer: isPlayerOwned,
+            EntityId: entityId));
     }
 
     private static bool IsInteresting(ObjectKind kind) => kind switch
