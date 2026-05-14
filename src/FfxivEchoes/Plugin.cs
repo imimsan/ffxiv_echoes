@@ -595,6 +595,7 @@ public sealed class Plugin : IDalamudPlugin
         // /echoes timeline は LiveTimelineWindow 撤去に伴い廃止
         router.Register(new ProfileCommand(_profileStore, Configuration, ChatGui));
         router.Register(new RulerCommand(ToggleArenaRuler));
+        router.Register(new TestAoeCommand(_minimapWindow, ObjectTable, ChatGui, Log));
         router.Register(new HelpCommand(router, ChatGui));
 
         return router;
