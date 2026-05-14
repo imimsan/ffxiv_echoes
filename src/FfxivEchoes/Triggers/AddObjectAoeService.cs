@@ -28,8 +28,12 @@ public sealed class AddObjectAoeService : IDisposable
     /// <summary>同時出現とみなす時間窓（秒）。</summary>
     private const double WindowSec = 1.5;
 
-    /// <summary>最後の追加からこの時間ラジオサイレンスが続いたら確定して描画。</summary>
-    private const double StabilityDelaySec = 0.15;
+    /// <summary>最後の追加からこの時間ラジオサイレンスが続いたら確定して描画。
+    /// 録画ログ実測：月の底パラデイグマ・ケツァクウァトルは出現後 82ms で即時アクション発動
+    /// （cast バー無し）。旧 150ms 待ちでは発火が AoE 着弾と同時になり予告にならなかったため
+    /// 30ms に短縮。同フレーム同時 publish の group（add 召喚）は ~17ms（1 フレーム）以内に
+    /// 全 member が揃うので 30ms 待てば十分。</summary>
+    private const double StabilityDelaySec = 0.03;
 
     /// <summary>同じ DataId の再発火を抑制する時間（秒）。</summary>
     private const double DedupSec = 6.0;
