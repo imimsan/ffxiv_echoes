@@ -140,6 +140,16 @@ public sealed class StrategyProfile
     [JsonPropertyName("object_aoe_rules")]
     public List<ObjectAoeRule> ObjectAoeRules { get; set; } = new();
 
+    /// <summary>
+    /// 「特定の cast が起きると、N 秒後に Object が出現して即時 AoE 発動」のパターンを録画から
+    /// 学習し、cast 検知時点で先取り予告描画するためのデータ。
+    /// 月の底のパラデイグマ → ケツアクアトル 4 体出現のような、Dalamud ObjectTable 登録遅延が
+    /// 大きいギミックを対象に、ObjectTable を待たずに事前描画する。
+    /// docs/predicted-object-spawn-design.md 参照。
+    /// </summary>
+    [JsonPropertyName("predicted_object_spawns")]
+    public List<PredictedObjectSpawn> PredictedObjectSpawns { get; set; } = new();
+
     [JsonPropertyName("mechanics")]
     public List<MechanicStrategy> Mechanics { get; set; } = new();
 }

@@ -98,6 +98,8 @@ public sealed class Plugin : IDalamudPlugin
 
     // ── 録画予測に基づく cast 予告（音声・オーバーレイ・床塗り）──────
     private PredictedCastReminderService? _predictedCastReminder;
+    private PredictedObjectSpawnService? _predictedObjectSpawn;
+    private PredictedObjectSpawnLearner? _predictedObjectSpawnLearner;
 
     // ── タイムライン分岐の判定サービス（パターン1 / パターン2 を観測で確定）────
     private BranchObserverService? _branchObserver;
@@ -354,6 +356,13 @@ public sealed class Plugin : IDalamudPlugin
             actorTracked: _actorTrackedAoe,
             branchActiveCheck: _branchObserver.IsActiveOrCommon);
 
+        // 「Cast → N 秒後に Object 出現 → 即時 AoE」パターンを録画学習し、cast 検知時点で
+        // 先取り予告を描画するサービス。月の底のパラデイグマ → ケツアクアトル 4 体のような
+        // Dalamud ObjectTable 登録遅延が大きいギミックを ObjectTable を待たずに事前可視化。
+        // docs/predicted-object-spawn-design.md 参照。
+        _predictedObjectSpawnLearner = new PredictedObjectSpawnLearner(_recordingScanner, Log);
+        _predictedObjectSpawn = new PredictedObjectSpawnService(_eventBus, _triggerStore, Log);
+
         _autoAttackTiming = new AutoAttackTimingService(
             Framework, _eventBus, _triggerStore, ObjectTable, Log);
 
@@ -470,6 +479,7 @@ public sealed class Plugin : IDalamudPlugin
         // _worldOverlayWindow 解放より前に外す。
         // PredictedCastReminderService は ActorTrackedAoeService に依存するので先に外す。
         SafeDispose(_predictedCastReminder, nameof(_predictedCastReminder));
+        SafeDispose(_predictedObjectSpawn, nameof(_predictedObjectSpawn));
         SafeDispose(_branchObserver, nameof(_branchObserver));
         SafeDispose(_actorTrackedAoe, nameof(_actorTrackedAoe));
         SafeDispose(_castRotationSnapshot, nameof(_castRotationSnapshot));
@@ -596,6 +606,11 @@ public sealed class Plugin : IDalamudPlugin
         router.Register(new ProfileCommand(_profileStore, Configuration, ChatGui));
         router.Register(new RulerCommand(ToggleArenaRuler));
         router.Register(new TestAoeCommand(_minimapWindow, ObjectTable, ChatGui, Log));
+        if (_predictedObjectSpawnLearner is not null)
+        {
+            router.Register(new LearnSpawnsCommand(
+                _predictedObjectSpawnLearner, _triggerStore, ClientState, DataManager, ChatGui, Log));
+        }
         router.Register(new HelpCommand(router, ChatGui));
 
         return router;
