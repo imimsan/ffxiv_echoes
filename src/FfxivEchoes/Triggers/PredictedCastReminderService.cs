@@ -377,9 +377,20 @@ public sealed class PredictedCastReminderService : IDisposable
         safeCall ??= visualCall;
 
         var source = ResolvePredictionSource(p.Source);
-        var sourceWorld = source is null
-            ? (Vector3?)null
-            : new Vector3(source.Position.X, source.Position.Y, source.Position.Z);
+        // source actor を解決できない場合はミニマップ描画スキップ。sourceWorld=null で
+        // AddArenaView を呼ぶと MinimapWindow.DrawActualAoeShape が origin=mapCenter
+        // （= アリーナ中央 (100, 100) ≒ DefaultArenaCenter）にフォールバックし、
+        // 「マップ中央に正体不明のドーナツ」が描画されてしまう。床塗り側 (TryEmitPredictedFloorPaint
+        // L251) は既に source 必須ガードがあるが、ミニマップ側にも同じガードを入れて二重防御。
+        // 月の底のケラノウス・エイドロン (0x67E1) は source 名が変身演出で
+        // ObjectTable から actor を引けないケースが典型で、ここに該当する。
+        if (source is null)
+        {
+            _log.Debug("[FfxivEchoes] PredictedReminder: skip source 未解決 {Name} ({Source})",
+                p.Label, p.Source ?? "?");
+            return;
+        }
+        var sourceWorld = new Vector3(source.Position.X, source.Position.Y, source.Position.Z);
         var radius = aoe is null
             ? (float?)null
             : AoeResolver.EffectiveRadius(aoe, source?.HitboxRadius ?? 0f);
