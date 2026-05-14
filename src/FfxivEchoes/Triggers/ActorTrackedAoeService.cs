@@ -157,10 +157,11 @@ public sealed class ActorTrackedAoeService : IDisposable
         // self-target cast は演出 / バフ / add 召喚系で AoE 攻撃ではないため床塗りしない。
         // 月の底のパラデイグマ (0x67BF, target_id=source_id) はこのパターン。
         // 正規 PB AoE は target_id=null なのでフィルタには引っかからない。
+        // Information で出して dalamud.log から実機検証可能にする。
         if (ev.TargetId is { } tid && tid == ev.SourceId)
         {
-            _log.Debug("[FfxivEchoes] ActorTrackedAoe: skip self-target cast {Name} (id=0x{Id:X4})",
-                ev.CastActionName, ev.CastActionId);
+            _log.Information("[FfxivEchoes] ActorTrackedAoe: skip self-target cast {Name} (id=0x{Id:X4}) src={Src}",
+                ev.CastActionName, ev.CastActionId, ev.SourceId);
             return;
         }
         var file = _store.GetByZone(_currentZone);
