@@ -218,6 +218,21 @@ public sealed class ActorTrackedAoeService : IDisposable
         if (ev.IsAutoAttack) return;
         // 戦闘外のインスタント発動（NPC のアイドル動作など）で床塗りを出さない。
         if (!_inCombat) return;
+
+        // 演出系アクション除外：target_world が placeholder 座標 (~0, *, ~0) の action は
+        // 「AoE 起点を持たない演出系」として描画スキップ。
+        // 月の底のゾディアーク add (data_id=9020) が「ケツァクウァトル」名で発動する
+        // 「ケラノウス・エイドロン」(0x67E1) はこのパターンで、target=null かつ
+        // target_world=(-0.015, -0.015, -0.015) で記録される。これを source actor 位置に
+        // 描画するとマップ中央付近に「正体不明のドーナツ」が誤発火する。
+        if (ev.TargetWorld is { } tw &&
+            MathF.Abs(tw.X) < 0.1f && MathF.Abs(tw.Z) < 0.1f)
+        {
+            _log.Debug("[FfxivEchoes] ActorTrackedAoe: skip 無効座標 action {Name} (id=0x{Id:X4}) src={Src}",
+                ev.ActionName, ev.ActionId, ev.SourceId);
+            return;
+        }
+
         var file = _store.GetByZone(_currentZone);
         if (!AutoAoeDisplayPolicy.IsEnabled(file)) return;
         if (!AutoAoeDisplayPolicy.ShouldDrawInstantActionTelegraph(file)) return;
