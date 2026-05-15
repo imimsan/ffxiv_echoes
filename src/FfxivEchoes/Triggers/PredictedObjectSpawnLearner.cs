@@ -49,10 +49,15 @@ public sealed class PredictedObjectSpawnLearner
     /// <summary>
     /// 指定ゾーンの全録画から学習し、PredictedObjectSpawn のリストを返す。
     /// </summary>
+    /// <param name="zoneName">対象ゾーン名</param>
+    /// <param name="arenaCenterX">アリーナ中心 X（相対座標化に使用）</param>
+    /// <param name="arenaCenterZ">アリーナ中心 Z</param>
+    /// <param name="objectAoeRules">既存の AoE 形状ルール群。形状/半径/内径を継承するため使う。</param>
     public IReadOnlyList<PredictedObjectSpawn> LearnFromRecordings(
         string zoneName,
         double? arenaCenterX,
-        double? arenaCenterZ)
+        double? arenaCenterZ,
+        IReadOnlyList<ObjectAoeRule>? objectAoeRules = null)
     {
         var recordings = _scanner.ListRecordings(zoneName);
         if (recordings.Count == 0)
@@ -84,7 +89,7 @@ public sealed class PredictedObjectSpawnLearner
             var fileCount = obs.Select(o => o.SourceFile).Distinct().Count();
             if (fileCount < MinObservedFileCount) continue;
 
-            var spawn = BuildSpawn(key, obs, fileCount);
+            var spawn = BuildSpawn(key, obs, fileCount, objectAoeRules);
             if (spawn is not null)
             {
                 results.Add(spawn);
@@ -209,7 +214,11 @@ public sealed class PredictedObjectSpawnLearner
         }
     }
 
-    private PredictedObjectSpawn? BuildSpawn(ObsKey key, List<Observation> obs, int fileCount)
+    private PredictedObjectSpawn? BuildSpawn(
+        ObsKey key,
+        List<Observation> obs,
+        int fileCount,
+        IReadOnlyList<ObjectAoeRule>? objectAoeRules)
     {
         // 同時出現体数の最頻値
         var spawnCount = obs
@@ -270,6 +279,10 @@ public sealed class PredictedObjectSpawnLearner
             .FirstOrDefault(n => !string.IsNullOrWhiteSpace(n));
         var triggerEvent = matching.FirstOrDefault()?.CastEvent ?? "cast_start";
 
+        // AoE 形状は object_aoe_rules から同名 + DataId 一致を優先して継承。
+        // 見つからなければ円形 5m のフォールバック（旧挙動）。
+        var (shape, radius, inner, fan, halfWidth) = ResolveShapeFromRules(objectAoeRules, key.ObjectName, key.DataId);
+
         return new PredictedObjectSpawn
         {
             Id = id,
@@ -286,11 +299,12 @@ public sealed class PredictedObjectSpawnLearner
             Positions = clusterCenters,
             PositionVariance = Math.Round(maxStd, 3),
             IsPositionStable = isStable,
-            // 形状・半径はこの学習器では確定しない。AoE 形状は object_aoe_rules / Lumina 経由で
-            // 別途解決する。ここでは既定値を入れ、UI / 発火時に上書きする想定。
-            Shape = "circle",
-            RadiusM = 5.0,
-            DurationSec = 14.0,
+            Shape = shape,
+            RadiusM = radius,
+            InnerRadiusM = inner,
+            FanDeg = fan,
+            HalfWidthM = halfWidth,
+            DurationSec = 8.0,
             Color = "#FFA500",
             ObservedFileCount = fileCount,
             ObservedTotalCount = matching.Count,
@@ -299,6 +313,44 @@ public sealed class PredictedObjectSpawnLearner
             LearnedAt = DateTimeOffset.UtcNow,
             LastObservedAt = DateTimeOffset.UtcNow,
         };
+    }
+
+    private static (string shape, double radius, double? inner, double? fan, double? halfWidth) ResolveShapeFromRules(
+        IReadOnlyList<ObjectAoeRule>? rules,
+        string objectName,
+        uint dataId)
+    {
+        if (rules is null)
+        {
+            return ("circle", 5.0, null, null, null);
+        }
+
+        // DataId 一致を優先。次に名前一致。
+        ObjectAoeRule? best = null;
+        foreach (var rule in rules)
+        {
+            if (!rule.Enabled) continue;
+            if (string.IsNullOrWhiteSpace(rule.ObjectName)) continue;
+            var nameMatch = string.Equals(rule.ObjectName.Trim(), objectName.Trim(), StringComparison.OrdinalIgnoreCase);
+            if (!nameMatch) continue;
+
+            // DataId 一致なら即採用
+            if (rule.DataId is { } ruleDataId && dataId != 0 && ruleDataId == dataId)
+            {
+                return (rule.Shape, rule.RadiusM, rule.InnerRadiusM, rule.FanDeg, rule.HalfWidthM);
+            }
+            // DataId 指定なしルール（名前のみ）は候補に
+            if (rule.DataId is null && best is null)
+            {
+                best = rule;
+            }
+        }
+
+        if (best is not null)
+        {
+            return (best.Shape, best.RadiusM, best.InnerRadiusM, best.FanDeg, best.HalfWidthM);
+        }
+        return ("circle", 5.0, null, null, null);
     }
 
     private static double StandardDeviation(IEnumerable<double> values)

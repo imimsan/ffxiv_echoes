@@ -5,6 +5,7 @@ using System.Linq;
 using Dalamud.Plugin.Services;
 using FfxivEchoes.Events;
 using FfxivEchoes.Triggers.Models;
+using IFramework = Dalamud.Plugin.Services.IFramework;
 
 namespace FfxivEchoes.Triggers;
 
@@ -25,6 +26,7 @@ public sealed class PredictedObjectSpawnService : IDisposable
     /// <summary>同 spawn の連続発火を抑制する dedup ウィンドウ（秒）。</summary>
     private const double DedupWindowSec = 5.0;
 
+    private readonly IFramework _framework;
     private readonly IEventBus _bus;
     private readonly TriggerStore _store;
     private readonly IPluginLog _log;
@@ -42,10 +44,14 @@ public sealed class PredictedObjectSpawnService : IDisposable
     // 発火中の予告：spawn.Id → 直近発火タイムスタンプ。短時間 dedup と
     // ObjectAppearedEvent 検知時の「予告→確定」格上げの dedup に使う。
     private readonly Dictionary<string, DateTimeOffset> _pendingPredictions = new();
+    // 遅延発火スケジュール：cast 検知時点で「いつ発火するか」と発火対象 spawn を予約。
+    // 毎フレーム時刻チェックして fireAt に達したら発火する。
+    private readonly List<ScheduledSpawn> _scheduled = new();
     private readonly object _gate = new();
 
-    public PredictedObjectSpawnService(IEventBus bus, TriggerStore store, IPluginLog log)
+    public PredictedObjectSpawnService(IFramework framework, IEventBus bus, TriggerStore store, IPluginLog log)
     {
+        _framework = framework;
         _bus = bus;
         _store = store;
         _log = log;
@@ -57,24 +63,61 @@ public sealed class PredictedObjectSpawnService : IDisposable
         {
             _currentZone = string.IsNullOrEmpty(z.ZoneName) ? "Unknown" : z.ZoneName;
             _inCombat = false;
-            lock (_gate) { _pendingPredictions.Clear(); }
+            lock (_gate)
+            {
+                _pendingPredictions.Clear();
+                _scheduled.Clear();
+            }
         });
         _combatStartSub = bus.Subscribe<CombatStartedEvent>(_ => _inCombat = true);
         _combatEndSub = bus.Subscribe<CombatEndedEvent>(_ =>
         {
             _inCombat = false;
-            lock (_gate) { _pendingPredictions.Clear(); }
+            lock (_gate)
+            {
+                _pendingPredictions.Clear();
+                _scheduled.Clear();
+            }
         });
+
+        _framework.Update += OnFrameworkUpdate;
     }
 
     public void Dispose()
     {
+        _framework.Update -= OnFrameworkUpdate;
         _castStartSub.Dispose();
         _castCompleteSub.Dispose();
         _objectAppearSub.Dispose();
         _zoneSub.Dispose();
         _combatStartSub.Dispose();
         _combatEndSub.Dispose();
+    }
+
+    private void OnFrameworkUpdate(IFramework framework)
+    {
+        if (!_inCombat) return;
+        var now = DateTimeOffset.UtcNow;
+
+        List<ScheduledSpawn>? due = null;
+        lock (_gate)
+        {
+            for (var i = _scheduled.Count - 1; i >= 0; i--)
+            {
+                if (_scheduled[i].FireAt <= now)
+                {
+                    due ??= new List<ScheduledSpawn>();
+                    due.Add(_scheduled[i]);
+                    _scheduled.RemoveAt(i);
+                }
+            }
+        }
+        if (due is null) return;
+
+        foreach (var item in due)
+        {
+            FireSpawn(item.Profile, item.Spawn, item.SourceEvent);
+        }
     }
 
     private void OnCastStart(CastStartedEvent ev)
@@ -121,9 +164,30 @@ public sealed class PredictedObjectSpawnService : IDisposable
                 }
                 if (spawn.Positions.Count == 0) continue;
 
-                FireSpawn(profile, spawn, sourceEvent);
+                // 「Object 出現の LeadTimeSec 秒前」に発火するよう遅延スケジュール。
+                // 出現 = cast から DelaySec 後 → 発火 = cast から (DelaySec - LeadTimeSec) 後。
+                var leadTime = Math.Clamp(spawn.LeadTimeSec, 0, spawn.DelaySec);
+                var fireAfterSec = Math.Max(0, spawn.DelaySec - leadTime);
+                ScheduleSpawn(profile, spawn, sourceEvent, fireAfterSec);
             }
         }
+    }
+
+    private void ScheduleSpawn(StrategyProfile profile, PredictedObjectSpawn spawn, IGameEvent sourceEvent, double fireAfterSec)
+    {
+        var fireAt = DateTimeOffset.UtcNow.AddSeconds(fireAfterSec);
+        lock (_gate)
+        {
+            // 同 spawn の連続スケジュール防止：既に近い時刻のものがあれば skip
+            if (_scheduled.Any(s => s.Spawn.Id == spawn.Id && (fireAt - s.FireAt).Duration().TotalSeconds < DedupWindowSec))
+            {
+                return;
+            }
+            _scheduled.Add(new ScheduledSpawn(profile, spawn, sourceEvent, fireAt));
+        }
+        _log.Information(
+            "[FfxivEchoes] PredictedObjectSpawn: 予約 cast={Cast} → {Name} 発火まで {Sec:F1}s (delay={Delay}s lead={Lead}s)",
+            spawn.TriggerCastName ?? "?", spawn.ObjectName, fireAfterSec, spawn.DelaySec, spawn.LeadTimeSec);
     }
 
     private static bool MatchesCast(PredictedObjectSpawn spawn, uint actionId, string actionName, string? sourceName)
@@ -194,7 +258,9 @@ public sealed class PredictedObjectSpawnService : IDisposable
                 IsDanger = true,
                 Color = spawn.Color,
                 Anchor = "static",
-                DurationSec = spawn.DelaySec + spawn.DurationSec,
+                // FireSpawn は LeadTime 経過後（出現直前）に呼ばれるため、ここから表示する時間は
+                // DurationSec のみ（DelaySec を足さない）。LeadTime + 出現後の数秒。
+                DurationSec = spawn.DurationSec,
                 LiveFloorPaint = true,
             });
         }
@@ -203,7 +269,7 @@ public sealed class PredictedObjectSpawnService : IDisposable
         {
             Type = "arena_view",
             Callout = $"予告: {spawn.ObjectName} ×{spawn.ObservedSpawnCount}",
-            Duration = spawn.DelaySec + spawn.DurationSec,
+            Duration = spawn.DurationSec,
             AoeZones = zones,
             ArenaRadius = profile.ArenaRadius,
             ArenaShape = profile.ArenaShape,
@@ -226,6 +292,12 @@ public sealed class PredictedObjectSpawnService : IDisposable
             spawn.TriggerCastName ?? "?", spawn.ObjectName, spawn.ObservedSpawnCount,
             zones.Count, spawn.DelaySec, spawn.Confidence);
     }
+
+    private readonly record struct ScheduledSpawn(
+        StrategyProfile Profile,
+        PredictedObjectSpawn Spawn,
+        IGameEvent SourceEvent,
+        DateTimeOffset FireAt);
 
     private void OnObjectAppeared(ObjectAppearedEvent ev)
     {

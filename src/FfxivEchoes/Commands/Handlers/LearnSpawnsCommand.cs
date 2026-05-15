@@ -72,7 +72,7 @@ public sealed class LearnSpawnsCommand : ICommandHandler
 
         _chat.Print($"[FFXIV Echoes] learn-spawns: {zone} の録画を解析中...");
 
-        var learned = _learner.LearnFromRecordings(zone, profile.ArenaCenterX, profile.ArenaCenterZ);
+        var learned = _learner.LearnFromRecordings(zone, profile.ArenaCenterX, profile.ArenaCenterZ, profile.ObjectAoeRules);
         if (learned.Count == 0)
         {
             _chat.Print($"[FFXIV Echoes] learn-spawns: 学習結果なし (録画数不足 or パターン未検出)");

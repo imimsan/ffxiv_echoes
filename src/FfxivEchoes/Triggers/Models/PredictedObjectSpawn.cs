@@ -61,6 +61,15 @@ public sealed class PredictedObjectSpawn
     [JsonPropertyName("delay_sec_jitter")]
     public double DelaySecJitter { get; set; }
 
+    /// <summary>
+    /// 予告 AoE を「Object 出現の何秒前」から表示するか。
+    /// cast 検知から発火までの待機時間は <c>DelaySec - LeadTimeSec</c> 秒。
+    /// 既定 5 秒：出現の 5 秒前から予告表示。0 にすると出現と同時。
+    /// 負値は無効（DelaySec を上回らないようクランプ）。
+    /// </summary>
+    [JsonPropertyName("lead_time_sec")]
+    public double LeadTimeSec { get; set; } = 5.0;
+
     // ── 出現する object ───────────────────────────────
 
     /// <summary>出現 object の name（"ケツアクアトル" 等）。</summary>
@@ -107,7 +116,7 @@ public sealed class PredictedObjectSpawn
     public double? HalfWidthM { get; set; }
 
     [JsonPropertyName("duration_sec")]
-    public double DurationSec { get; set; } = 14.0;
+    public double DurationSec { get; set; } = 8.0;
 
     /// <summary>予告描画の色。確定描画と区別する目的で淡いオレンジ等を既定。</summary>
     [JsonPropertyName("color")]

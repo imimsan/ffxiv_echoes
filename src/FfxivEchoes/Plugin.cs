@@ -361,7 +361,7 @@ public sealed class Plugin : IDalamudPlugin
         // Dalamud ObjectTable 登録遅延が大きいギミックを ObjectTable を待たずに事前可視化。
         // docs/predicted-object-spawn-design.md 参照。
         _predictedObjectSpawnLearner = new PredictedObjectSpawnLearner(_recordingScanner, Log);
-        _predictedObjectSpawn = new PredictedObjectSpawnService(_eventBus, _triggerStore, Log);
+        _predictedObjectSpawn = new PredictedObjectSpawnService(Framework, _eventBus, _triggerStore, Log);
 
         _autoAttackTiming = new AutoAttackTimingService(
             Framework, _eventBus, _triggerStore, ObjectTable, Log);
