@@ -325,30 +325,41 @@ public sealed class PredictedObjectSpawnLearner
             return ("circle", 5.0, null, null, null);
         }
 
-        // DataId 一致を優先。次に名前一致。
-        ObjectAoeRule? best = null;
+        // 名前一致するルールを 3 段階の優先順位で選ぶ：
+        //   ①DataId 完全一致（最優先、確定）
+        //   ②同名で DataId 指定なし（汎用ルール）
+        //   ③同名で DataId 指定済みだが今回の dataId と違う（同名別個体、変身演出含む）
+        // ③を追加することで、変身体 (data_id=9020) のような「同名で別 DataId」の actor も
+        // 本物ルール (DataId=14388) の形状を継承できる。
+        ObjectAoeRule? exactDataIdMatch = null;
+        ObjectAoeRule? nameWithoutDataId = null;
+        ObjectAoeRule? nameOnly = null;
+
         foreach (var rule in rules)
         {
             if (!rule.Enabled) continue;
             if (string.IsNullOrWhiteSpace(rule.ObjectName)) continue;
-            var nameMatch = string.Equals(rule.ObjectName.Trim(), objectName.Trim(), StringComparison.OrdinalIgnoreCase);
-            if (!nameMatch) continue;
+            if (!string.Equals(rule.ObjectName.Trim(), objectName.Trim(), StringComparison.OrdinalIgnoreCase)) continue;
 
-            // DataId 一致なら即採用
-            if (rule.DataId is { } ruleDataId && dataId != 0 && ruleDataId == dataId)
+            if (rule.DataId is { } ruleDataId)
             {
-                return (rule.Shape, rule.RadiusM, rule.InnerRadiusM, rule.FanDeg, rule.HalfWidthM);
+                if (dataId != 0 && ruleDataId == dataId)
+                {
+                    exactDataIdMatch = rule;
+                    break;
+                }
+                nameOnly ??= rule;
             }
-            // DataId 指定なしルール（名前のみ）は候補に
-            if (rule.DataId is null && best is null)
+            else
             {
-                best = rule;
+                nameWithoutDataId ??= rule;
             }
         }
 
-        if (best is not null)
+        var pick = exactDataIdMatch ?? nameWithoutDataId ?? nameOnly;
+        if (pick is not null)
         {
-            return (best.Shape, best.RadiusM, best.InnerRadiusM, best.FanDeg, best.HalfWidthM);
+            return (pick.Shape, pick.RadiusM, pick.InnerRadiusM, pick.FanDeg, pick.HalfWidthM);
         }
         return ("circle", 5.0, null, null, null);
     }
