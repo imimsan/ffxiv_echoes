@@ -15,8 +15,8 @@ namespace FfxivEchoes.Commands.Handlers;
 public sealed class LearnSpawnsCommand : ICommandHandler
 {
     public string Verb => "learn-spawns";
-    public string Usage => "learn-spawns [zone]";
-    public string Description => "録画から「Cast → Object 出現」予告データを学習し、攻略登録に保存";
+    public string Usage => "learn-spawns [zone] [force]";
+    public string Description => "録画から「Cast → Object 出現」予告データを学習し、攻略登録に保存。force で既存自動学習を消去して再学習";
 
     private readonly PredictedObjectSpawnLearner _learner;
     private readonly TriggerStore _store;
@@ -43,7 +43,15 @@ public sealed class LearnSpawnsCommand : ICommandHandler
 
     public void Execute(string args)
     {
-        var zone = args.Trim();
+        // "force" / "--force" は既存自動学習を破棄して再学習。残りトークンを zone 名として結合。
+        var tokens = (args ?? string.Empty)
+            .Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(t => t.Trim())
+            .ToList();
+        var force = tokens.RemoveAll(t =>
+            string.Equals(t, "force", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(t, "--force", StringComparison.OrdinalIgnoreCase)) > 0;
+        var zone = string.Join(" ", tokens).Trim();
         if (string.IsNullOrWhiteSpace(zone))
         {
             zone = ResolveCurrentZoneName();
@@ -68,6 +76,17 @@ public sealed class LearnSpawnsCommand : ICommandHandler
         {
             _chat.PrintError($"[FFXIV Echoes] learn-spawns: '{zone}' に有効な StrategyProfile がありません");
             return;
+        }
+
+        // force：既存の自動学習 (Source != "manual") を破棄してから再学習
+        if (force)
+        {
+            var before = profile.PredictedObjectSpawns?.Count ?? 0;
+            profile.PredictedObjectSpawns = (profile.PredictedObjectSpawns ?? new List<PredictedObjectSpawn>())
+                .Where(s => string.Equals(s.Source, "manual", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            var removed = before - profile.PredictedObjectSpawns.Count;
+            _chat.Print($"[FFXIV Echoes] force: {removed} 件の自動学習を削除（手動分は保持）");
         }
 
         _chat.Print($"[FFXIV Echoes] learn-spawns: {zone} の録画を解析中...");
