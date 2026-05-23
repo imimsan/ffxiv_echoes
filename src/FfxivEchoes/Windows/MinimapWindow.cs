@@ -23,7 +23,7 @@ namespace FfxivEchoes.Windows;
 /// アクションハンドラ（ArenaViewHandler）から AddArenaView で項目を追加し、
 /// duration が経過したら自動で消える。何も無くなったらウィンドウを閉じる。
 /// </remarks>
-public sealed class MinimapWindow : Window, IDisposable
+public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
 {
     private const float ArenaSize = 200f;
     private const float CalloutHeight = 44f;

@@ -23,7 +23,7 @@ public sealed class PredictedCastReminderService : IDisposable
     private readonly SyncOffsetTracker _syncOffset;
     private readonly IDataManager _dataManager;
     private readonly IObjectTable _objectTable;
-    private readonly MinimapWindow _minimap;
+    private readonly IMinimapSink _minimap;
     private readonly ActorTrackedAoeService? _actorTracked;
     private readonly IPluginLog _log;
     private readonly Func<string?, bool>? _branchActiveCheck;
@@ -41,7 +41,7 @@ public sealed class PredictedCastReminderService : IDisposable
         IFramework framework, IEventBus bus, TriggerStore store, CombatClock combatClock,
         RecordingScanner recordings, SyncOffsetTracker syncOffset,
         IDataManager dataManager, IObjectTable objectTable,
-        WorldOverlayWindow worldOverlay, MinimapWindow minimap,
+        WorldOverlayWindow worldOverlay, IMinimapSink minimap,
         IPluginLog log,
         ActorTrackedAoeService? actorTracked = null,
         Func<string?, bool>? branchActiveCheck = null)

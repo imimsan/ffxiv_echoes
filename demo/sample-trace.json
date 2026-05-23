@@ -1,0 +1,338 @@
+{
+    "meta": {
+        "schema_version": "1.0",
+        "recording_path": "demo/sample-trace.json",
+        "zone": "月の底",
+        "boss": "ゾディアーク",
+        "trace_generated_at": "2026-05-24T00:00:00Z",
+        "harness_version": "0.0.0-demo"
+    },
+    "arena": {
+        "center_x": 100.0,
+        "center_z": 100.0,
+        "radius_m": 20.0,
+        "shape": "circle"
+    },
+    "events": [
+        {
+            "t": 0.0,
+            "kind": "cast_start",
+            "cast_id": "0x67BF",
+            "cast_name": "月の底パラデイグマ",
+            "source": "ゾディアーク",
+            "source_id": 3001,
+            "cast_time": 5.0
+        },
+        {
+            "t": 1.0,
+            "kind": "draw_aoe",
+            "id": "predict_67BF_NW",
+            "service": "PredictedObjectSpawnService",
+            "trigger_event": { "type": "cast_start", "cast_id": "0x67BF", "t": 0.0 },
+            "shape": "donut",
+            "anchor": "static",
+            "x_relative": -11.21,
+            "z_relative": -12.64,
+            "x_world": 88.79,
+            "z_world": 87.36,
+            "rotation_rad": 0.0,
+            "radius_m": 6.0,
+            "inner_radius_m": 2.0,
+            "duration_sec": 14.0,
+            "color": "#FFA500",
+            "label": "予告: ケツ NW"
+        },
+        {
+            "t": 1.0,
+            "kind": "draw_aoe",
+            "id": "predict_67BF_NE",
+            "service": "PredictedObjectSpawnService",
+            "trigger_event": { "type": "cast_start", "cast_id": "0x67BF", "t": 0.0 },
+            "shape": "donut",
+            "anchor": "static",
+            "x_relative": 11.21,
+            "z_relative": -12.64,
+            "x_world": 111.21,
+            "z_world": 87.36,
+            "rotation_rad": 0.0,
+            "radius_m": 6.0,
+            "inner_radius_m": 2.0,
+            "duration_sec": 14.0,
+            "color": "#FFA500",
+            "label": "予告: ケツ NE"
+        },
+        {
+            "t": 1.0,
+            "kind": "draw_aoe",
+            "id": "predict_67BF_SW",
+            "service": "PredictedObjectSpawnService",
+            "trigger_event": { "type": "cast_start", "cast_id": "0x67BF", "t": 0.0 },
+            "shape": "donut",
+            "anchor": "static",
+            "x_relative": -11.21,
+            "z_relative": 12.64,
+            "x_world": 88.79,
+            "z_world": 112.64,
+            "rotation_rad": 0.0,
+            "radius_m": 6.0,
+            "inner_radius_m": 2.0,
+            "duration_sec": 14.0,
+            "color": "#FFA500",
+            "label": "予告: ケツ SW"
+        },
+        {
+            "t": 1.0,
+            "kind": "draw_aoe",
+            "id": "predict_67BF_SE",
+            "service": "PredictedObjectSpawnService",
+            "trigger_event": { "type": "cast_start", "cast_id": "0x67BF", "t": 0.0 },
+            "shape": "donut",
+            "anchor": "static",
+            "x_relative": 11.21,
+            "z_relative": 12.64,
+            "x_world": 111.21,
+            "z_world": 112.64,
+            "rotation_rad": 0.0,
+            "radius_m": 6.0,
+            "inner_radius_m": 2.0,
+            "duration_sec": 14.0,
+            "color": "#FFA500",
+            "label": "予告: ケツ SE"
+        },
+        {
+            "t": 4.8,
+            "kind": "object_appear",
+            "object_id": 14388,
+            "name": "ケツアクアトル NW",
+            "x_world": 88.79,
+            "z_world": 87.36
+        },
+        {
+            "t": 4.85,
+            "kind": "object_appear",
+            "object_id": 14389,
+            "name": "ケツアクアトル NE",
+            "x_world": 111.21,
+            "z_world": 87.36
+        },
+        {
+            "t": 4.9,
+            "kind": "object_appear",
+            "object_id": 14390,
+            "name": "ケツアクアトル SW",
+            "x_world": 88.79,
+            "z_world": 112.64
+        },
+        {
+            "t": 4.95,
+            "kind": "object_appear",
+            "object_id": 14391,
+            "name": "ケツアクアトル SE",
+            "x_world": 111.21,
+            "z_world": 112.64
+        },
+        {
+            "t": 5.0,
+            "kind": "cast_complete",
+            "cast_id": "0x67BF",
+            "cast_name": "月の底パラデイグマ"
+        },
+        {
+            "t": 8.0,
+            "kind": "cast_start",
+            "cast_id": "0x179C",
+            "cast_name": "アルゲドン NW",
+            "source": "ケツアクアトル NW",
+            "source_id": 14388,
+            "cast_time": 7.0
+        },
+        {
+            "t": 8.05,
+            "kind": "aoe_skipped",
+            "service": "AutoTelegraphService",
+            "reason": "target_world is null",
+            "action": { "action_id": "0x179C", "source": "ケツアクアトル NW", "t": 8.0 }
+        },
+        {
+            "t": 8.1,
+            "kind": "draw_aoe",
+            "id": "actor_179C_NW",
+            "service": "AddObjectAoeService",
+            "trigger_event": { "type": "cast_start", "cast_id": "0x179C", "t": 8.0 },
+            "shape": "donut",
+            "anchor": "actor",
+            "x_world": 88.79,
+            "z_world": 87.36,
+            "rotation_rad": 0.0,
+            "radius_m": 6.0,
+            "inner_radius_m": 2.0,
+            "duration_sec": 7.0,
+            "color": "#F87171",
+            "label": "アルゲドン NW"
+        },
+        {
+            "t": 8.1,
+            "kind": "draw_aoe",
+            "id": "actor_179C_NE",
+            "service": "AddObjectAoeService",
+            "trigger_event": { "type": "cast_start", "cast_id": "0x179C", "t": 8.0 },
+            "shape": "donut",
+            "anchor": "actor",
+            "x_world": 111.21,
+            "z_world": 87.36,
+            "rotation_rad": 0.0,
+            "radius_m": 6.0,
+            "inner_radius_m": 2.0,
+            "duration_sec": 7.0,
+            "color": "#F87171",
+            "label": "アルゲドン NE"
+        },
+        {
+            "t": 8.1,
+            "kind": "draw_aoe",
+            "id": "actor_179C_SW",
+            "service": "AddObjectAoeService",
+            "shape": "donut",
+            "anchor": "actor",
+            "x_world": 88.79,
+            "z_world": 112.64,
+            "rotation_rad": 0.0,
+            "radius_m": 6.0,
+            "inner_radius_m": 2.0,
+            "duration_sec": 7.0,
+            "color": "#F87171",
+            "label": "アルゲドン SW"
+        },
+        {
+            "t": 8.1,
+            "kind": "draw_aoe",
+            "id": "actor_179C_SE",
+            "service": "AddObjectAoeService",
+            "shape": "donut",
+            "anchor": "actor",
+            "x_world": 111.21,
+            "z_world": 112.64,
+            "rotation_rad": 0.0,
+            "radius_m": 6.0,
+            "inner_radius_m": 2.0,
+            "duration_sec": 7.0,
+            "color": "#F87171",
+            "label": "アルゲドン SE"
+        },
+        {
+            "t": 15.0,
+            "kind": "remove_aoe",
+            "id": "predict_67BF_NW",
+            "reason": "duration_expired"
+        },
+        {
+            "t": 15.0,
+            "kind": "remove_aoe",
+            "id": "predict_67BF_NE",
+            "reason": "duration_expired"
+        },
+        {
+            "t": 15.0,
+            "kind": "remove_aoe",
+            "id": "predict_67BF_SW",
+            "reason": "duration_expired"
+        },
+        {
+            "t": 15.0,
+            "kind": "remove_aoe",
+            "id": "predict_67BF_SE",
+            "reason": "duration_expired"
+        },
+        {
+            "t": 15.1,
+            "kind": "remove_aoe",
+            "id": "actor_179C_NW",
+            "reason": "cast_completed"
+        },
+        {
+            "t": 15.1,
+            "kind": "remove_aoe",
+            "id": "actor_179C_NE",
+            "reason": "cast_completed"
+        },
+        {
+            "t": 15.1,
+            "kind": "remove_aoe",
+            "id": "actor_179C_SW",
+            "reason": "cast_completed"
+        },
+        {
+            "t": 15.1,
+            "kind": "remove_aoe",
+            "id": "actor_179C_SE",
+            "reason": "cast_completed"
+        },
+        {
+            "t": 18.0,
+            "kind": "cast_start",
+            "cast_id": "0x9D32",
+            "cast_name": "中央円形",
+            "source": "ゾディアーク",
+            "source_id": 3001,
+            "cast_time": 4.0
+        },
+        {
+            "t": 18.2,
+            "kind": "draw_aoe",
+            "id": "central_circle",
+            "service": "AutoTelegraphService",
+            "shape": "circle",
+            "anchor": "actor",
+            "x_world": 100.0,
+            "z_world": 100.0,
+            "radius_m": 8.0,
+            "duration_sec": 4.0,
+            "color": "#F87171",
+            "label": "中央円"
+        },
+        {
+            "t": 19.0,
+            "kind": "aoe_skipped",
+            "service": "AddObjectAoeService",
+            "reason": "placeholder position (100,_,100)",
+            "action": { "action_id": "0xDEAD", "source": "unknown placeholder", "t": 19.0 }
+        },
+        {
+            "t": 22.0,
+            "kind": "remove_aoe",
+            "id": "central_circle",
+            "reason": "cast_completed"
+        },
+        {
+            "t": 24.0,
+            "kind": "cast_start",
+            "cast_id": "0x179D",
+            "cast_name": "扇形ブレス",
+            "source": "ゾディアーク",
+            "source_id": 3001,
+            "cast_time": 5.0
+        },
+        {
+            "t": 24.2,
+            "kind": "draw_aoe",
+            "id": "cone_north",
+            "service": "AutoTelegraphService",
+            "shape": "cone",
+            "anchor": "actor",
+            "x_world": 100.0,
+            "z_world": 100.0,
+            "rotation_rad": 3.14159,
+            "radius_m": 18.0,
+            "fan_deg": 90,
+            "duration_sec": 5.0,
+            "color": "#FBBF24",
+            "label": "北扇"
+        },
+        {
+            "t": 29.0,
+            "kind": "remove_aoe",
+            "id": "cone_north",
+            "reason": "cast_completed"
+        }
+    ]
+}

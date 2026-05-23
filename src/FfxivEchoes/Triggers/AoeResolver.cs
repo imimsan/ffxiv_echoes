@@ -1,13 +1,20 @@
 using System;
+using System.Runtime.CompilerServices;
 using Dalamud.Plugin.Services;
-using LuminaAction = Lumina.Excel.Sheets.Action;
 
 namespace FfxivEchoes.Triggers;
 
 /// <summary>
-/// Lumina Action データから AoE 形状（半径と CastType）を解決するヘルパ。
+/// Action データから AoE 形状（半径と CastType）を解決するヘルパ。
 /// AutoTelegraphService と PredictedCastReminderService で共有する。
 /// </summary>
+/// <remarks>
+/// 旧版は <c>IDataManager</c> を直接受け取って Lumina Action sheet を引いていたが、
+/// headless replay（<c>FfxivEchoes.Replay</c>）から Dalamud SDK 非依存で
+/// テストできるよう <see cref="IActionLookup"/> 経由に抽象化した。
+/// <see cref="Resolve(IDataManager, uint, IPluginLog?)"/> は既存呼出し箇所（特に
+/// 触ってはいけない <c>PredictedObjectSpawnLearner</c>）のために残してある後方互換 API。
+/// </remarks>
 public static class AoeResolver
 {
     public const float MaxReliableEffectRangeM = 50f;
@@ -19,24 +26,46 @@ public static class AoeResolver
         uint OmenId = 0,
         bool IncludeCasterHitbox = false);
 
+    // IDataManager 経由の旧呼び出しを薄く吸収するため、IDataManager → IActionLookup を
+    // インスタンスごとにキャッシュする。Plugin.cs では新規サービスに直接 IActionLookup を
+    // 渡すので、このキャッシュは TriggerAutoGenerator / PredictedCastReminderService /
+    // PredictedObjectSpawnLearner / ActorTrackedAoeService 等、既存の IDataManager
+    // ベース呼び出しのフォールバック専用。
+    private static readonly ConditionalWeakTable<IDataManager, IActionLookup> DataManagerAdapters = new();
+
+    private static IActionLookup AdaptDataManager(IDataManager dataManager)
+    {
+        if (DataManagerAdapters.TryGetValue(dataManager, out var existing)) return existing;
+        var adapter = new LuminaActionLookup(dataManager);
+        DataManagerAdapters.Add(dataManager, adapter);
+        return adapter;
+    }
+
     /// <summary>
-    /// Lumina Action から AoE 情報を取得。AoE でない場合や異常値は null。
+    /// 後方互換 API。内部で <see cref="LuminaActionLookup"/> にラップして
+    /// <see cref="Resolve(IActionLookup, uint, IPluginLog?)"/> を呼ぶ。
     /// </summary>
     public static AoeInfo? Resolve(IDataManager dataManager, uint actionId, IPluginLog? log = null)
+        => Resolve(AdaptDataManager(dataManager), actionId, log);
+
+    /// <summary>
+    /// Action 情報から AoE 形状を解決。AoE でない場合や異常値は null。
+    /// </summary>
+    public static AoeInfo? Resolve(IActionLookup actionLookup, uint actionId, IPluginLog? log = null)
     {
         if (actionId == 0) return null;
         try
         {
-            var sheet = dataManager.GetExcelSheet<LuminaAction>();
-            if (!sheet.TryGetRow(actionId, out var row))
+            var geom = actionLookup.TryGet(actionId);
+            if (geom is null)
             {
                 return null;
             }
-            var effectRange = (float)row.EffectRange;
+            var effectRange = geom.EffectRangeM;
             if (effectRange <= 0)
             {
                 log?.Debug("[FfxivEchoes] AoE skip non-AoE id={Id:X4} range={R}m castType={Ct}",
-                    actionId, effectRange, (int)row.CastType);
+                    actionId, effectRange, geom.CastType);
                 return null;
             }
             // 50m 超は全体攻撃・特殊演出・誤データが混ざりやすく、
@@ -47,7 +76,7 @@ public static class AoeResolver
                 return null;
             }
 
-            var castType = (int)row.CastType;
+            var castType = geom.CastType;
             // Splatoon の Projection.GuessShapeAndSize / 描画ルールに準拠：
             //   2  = Circle, **target 中心**（地面/プレイヤー指定）
             //   3  = Cone, caster 中心、caster 正面向き、+ HitboxRadius
@@ -76,13 +105,7 @@ public static class AoeResolver
             }
 
             var fromCaster = castType is 3 or 4 or 5 or 10 or 11;
-            // Omen ID（テレグラフのアセット参照）を取得。失敗時は 0
-            uint omenId = 0;
-            try
-            {
-                omenId = row.Omen.RowId;
-            }
-            catch { /* Omen フィールドが取れない場合は無視 */ }
+            var omenId = geom.OmenId;
 
             log?.Debug("[FfxivEchoes] AoE resolve id={Id:X4} range={R}m castType={Ct} omen={Om}",
                 actionId, effectRange, castType, omenId);

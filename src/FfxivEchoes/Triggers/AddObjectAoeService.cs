@@ -51,11 +51,11 @@ public sealed class AddObjectAoeService : IDisposable
 
     private readonly IFramework _framework;
     private readonly IEventBus _bus;
-    private readonly MinimapWindow _minimap;
+    private readonly IMinimapSink _minimap;
     private readonly TriggerStore _store;
     private readonly SafeCallDictionary? _dictionary;
     private readonly RecordingScanner? _recordings;
-    private readonly IDataManager? _dataManager;
+    private readonly IActionLookup? _actionLookup;
     private readonly IObjectTable? _objectTable;
     private readonly IPluginLog _log;
 
@@ -108,11 +108,11 @@ public sealed class AddObjectAoeService : IDisposable
     public AddObjectAoeService(
         IFramework framework,
         IEventBus bus,
-        MinimapWindow minimap,
+        IMinimapSink minimap,
         TriggerStore store,
         SafeCallDictionary? dictionary,
         RecordingScanner? recordings,
-        IDataManager? dataManager,
+        IActionLookup? actionLookup,
         IObjectTable? objectTable,
         IPluginLog log)
     {
@@ -122,7 +122,7 @@ public sealed class AddObjectAoeService : IDisposable
         _store = store;
         _dictionary = dictionary;
         _recordings = recordings;
-        _dataManager = dataManager;
+        _actionLookup = actionLookup;
         _objectTable = objectTable;
         _log = log;
 
@@ -239,15 +239,15 @@ public sealed class AddObjectAoeService : IDisposable
             _log.Debug(ex, "[FfxivEchoes] AddObjectAoe: 録画 action lookup 失敗 name={Name}", name);
         }
 
-        // 4. 録画から「この NPC の出現直後のアクション」を学習し、Lumina で半径＋形状を引く。
-        if (_recordings is not null && _dataManager is not null && dataId != 0)
+        // 4. 録画から「この NPC の出現直後のアクション」を学習し、action lookup で半径＋形状を引く。
+        if (_recordings is not null && _actionLookup is not null && dataId != 0)
         {
             try
             {
                 var candidates = _recordings.FindNpcActionCandidatesAfterAppearance(_currentZone, dataId, name);
                 if (SelectRecordingActionCandidate(candidates) is { } found)
                 {
-                    var aoe = AoeResolver.Resolve(_dataManager, found.ActionId, _log);
+                    var aoe = AoeResolver.Resolve(_actionLookup, found.ActionId, _log);
                     if (aoe is not null && aoe.Radius > 0)
                     {
                         var zone = CreateAoeZoneFromResolvedAction(aoe, name);
@@ -285,7 +285,7 @@ public sealed class AddObjectAoeService : IDisposable
         out StrategyAoeZone zone)
     {
         zone = default!;
-        if (_recordings is null || _dataManager is null || string.IsNullOrWhiteSpace(name))
+        if (_recordings is null || _actionLookup is null || string.IsNullOrWhiteSpace(name))
         {
             return false;
         }
@@ -336,7 +336,7 @@ public sealed class AddObjectAoeService : IDisposable
                 continue;
             }
 
-            var aoe = AoeResolver.Resolve(_dataManager, candidate.ActionId, _log);
+            var aoe = AoeResolver.Resolve(_actionLookup, candidate.ActionId, _log);
             if (aoe is null || aoe.Radius <= 0)
             {
                 continue;
@@ -597,7 +597,7 @@ public sealed class AddObjectAoeService : IDisposable
     {
         var file = _store.GetByZone(_currentZone);
         if (!AutoAoeDisplayPolicy.IsEnabled(file)) return;
-        if (_dataManager is null || _objectTable is null) return;
+        if (_actionLookup is null || _objectTable is null) return;
         var isRaidWide = AutoSafeCallPlanner.IsRaidWide(file, ev.ActionId, ev.ActionName);
         if (isRaidWide) return;
 
@@ -644,7 +644,7 @@ public sealed class AddObjectAoeService : IDisposable
             return;
         }
 
-        var aoe = AoeResolver.Resolve(_dataManager, ev.ActionId, _log);
+        var aoe = AoeResolver.Resolve(_actionLookup, ev.ActionId, _log);
         if (aoe is null || aoe.Radius <= 0) return;
 
         var zone = CreateAoeZoneFromResolvedAction(aoe, name, src.HitboxRadius);
@@ -703,7 +703,7 @@ public sealed class AddObjectAoeService : IDisposable
 
     private bool IsPlayerAction(uint actionId)
     {
-        if (_dataManager is null || actionId == 0)
+        if (_actionLookup is null || actionId == 0)
         {
             return false;
         }
@@ -719,10 +719,10 @@ public sealed class AddObjectAoeService : IDisposable
         var result = false;
         try
         {
-            var sheet = _dataManager.GetExcelSheet<Lumina.Excel.Sheets.Action>();
-            if (sheet.TryGetRow(actionId, out var row))
+            var geom = _actionLookup.TryGet(actionId);
+            if (geom is not null)
             {
-                result = row.IsPlayerAction;
+                result = geom.IsPlayerAction;
             }
         }
         catch (Exception ex)

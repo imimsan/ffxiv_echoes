@@ -39,6 +39,7 @@ var tests = new List<(string Name, Action Body)>
     ("Auto attacks are separated by source before party filtering", AutoAttacks_AreSeparatedBySourceBeforePartyFiltering),
     ("Object events aggregate by object identity", ObjectEvents_AggregateByIdentity),
     ("ObjectAppearedEvent serializes entity id", ObjectAppearedEvent_SerializesEntityId),
+    ("ObjectCapture republishes object identity changes", ObjectCapture_RepublishesObjectIdentityChanges),
     ("AoeResolver guesses safe minimap gimmicks conservatively", AoeResolver_GuessesGimmicksConservatively),
     ("AoeResolver adds caster hitbox for caster-origin shapes", AoeResolver_AddsCasterHitboxForCasterOriginShapes),
     ("AoeResolver rejects oversized unreliable ranges", AoeResolver_RejectsOversizedRanges),
@@ -88,6 +89,7 @@ var tests = new List<(string Name, Action Body)>
     ("AddObjectAoeService suppresses unknown object group fallback", AddObjectAoeService_SuppressesUnknownObjectGroupFallback),
     ("AddObjectAoeService suppresses mixed object cohort fallback", AddObjectAoeService_SuppressesMixedObjectCohortFallback),
     ("AddObjectAoeService suppresses repeated object AoE for display duration", AddObjectAoeService_SuppressesRepeatedObjectAoeForDisplayDuration),
+    ("AddObjectAoeService shares suppress keys between appear and live scan", AddObjectAoeService_SharesSuppressKeysBetweenAppearAndLiveScan),
     ("AddObjectAoeService scans live objects after instant mechanic actions", AddObjectAoeService_ScansLiveObjectsAfterInstantMechanicActions),
     ("AddObjectAoeService does not scan from known player actions", AddObjectAoeService_DoesNotScanFromKnownPlayerActions),
     ("AddObjectAoeService skips oversized live object cohorts", AddObjectAoeService_SkipsOversizedLiveObjectCohorts),
@@ -106,6 +108,7 @@ var tests = new List<(string Name, Action Body)>
     ("AutoTelegraphService prefers actual AoE visual shape", AutoTelegraphService_PrefersActualAoeVisualShape),
     ("AutoTelegraphService uses target world snapshot", AutoTelegraphService_UsesTargetWorldSnapshot),
     ("AutoTelegraphService skips player action-used telegraphs", AutoTelegraphService_SkipsPlayerActionUsedTelegraphs),
+    ("AutoTelegraphService skips action-used AoE without world position", AutoTelegraphService_SkipsActionUsedWithoutWorldPosition),
     ("AttackPulseLabelPolicy hides action names for combat HUD", AttackPulseLabelPolicy_HidesActionNames),
     ("ArenaCenterResolver uses actor bounds when default center is wrong", ArenaCenterResolver_UsesActorBoundsWhenDefaultCenterWrong),
     ("ArenaCenterResolver keeps trusted default center", ArenaCenterResolver_KeepsTrustedDefaultCenter),
@@ -175,6 +178,9 @@ var tests = new List<(string Name, Action Body)>
     ("StatusGainedEvent PC self-buff IS IsPlayer", StatusGainedEvent_PcSelfBuff_IsPlayer),
     ("HpChangedEvent IsPlayer flag propagates", HpChangedEvent_IsPlayer_DefaultBackwardCompat),
     ("HpChangedEvent boss raid-wide hit must NOT be IsPlayer", HpChangedEvent_BossRaidWide_IsNotPlayer),
+    ("InMemoryActionLookup exposes ActionGeometry via IActionLookup", InMemoryActionLookup_ExposesActionGeometry),
+    ("BuildSpawnId distinguishes object name and trigger event (T1 dup fix)", BuildSpawnId_DistinguishesObjectNameAndTriggerEvent),
+    ("BuildSpawnId is stable across runs (FNV-1a not String.GetHashCode)", BuildSpawnId_StableAcrossRuns),
 };
 
 var failed = 0;
@@ -838,6 +844,41 @@ static void ObjectAppearedEvent_SerializesEntityId()
 
     True(json.Contains("\"object_id\":200745", StringComparison.Ordinal), $"object id serialized: {json}");
     True(json.Contains("\"entity_id\":9001", StringComparison.Ordinal), $"entity id serialized: {json}");
+}
+
+static void ObjectCapture_RepublishesObjectIdentityChanges()
+{
+    True(
+        ObjectCapture.ShouldRepublishIdentityChange(
+            previousName: "ゾディアークの幻影",
+            previousDataId: 9020,
+            currentName: "ケツァクワァトル",
+            currentDataId: 9020),
+        "existing object that becomes a named mechanic object should be published again");
+
+    True(
+        ObjectCapture.ShouldRepublishIdentityChange(
+            previousName: "",
+            previousDataId: 0,
+            currentName: "ケツァクワァトル",
+            currentDataId: 9020),
+        "previously unnamed object gaining a mechanic identity should be published");
+
+    False(
+        ObjectCapture.ShouldRepublishIdentityChange(
+            previousName: "ケツァクワァトル",
+            previousDataId: 9020,
+            currentName: "ケツァクワァトル",
+            currentDataId: 9020),
+        "unchanged object identity should not be republished every frame");
+
+    False(
+        ObjectCapture.ShouldRepublishIdentityChange(
+            previousName: "ケツァクワァトル",
+            previousDataId: 9020,
+            currentName: "",
+            currentDataId: 9020),
+        "empty current names are not useful object AoE anchors");
 }
 
 static void AoeResolver_GuessesGimmicksConservatively()
@@ -1901,6 +1942,15 @@ static void AddObjectAoeService_SuppressesRepeatedObjectAoeForDisplayDuration()
         "same object AoE may fire again after the display duration has elapsed");
 }
 
+static void AddObjectAoeService_SharesSuppressKeysBetweenAppearAndLiveScan()
+{
+    var fromAppear = AddObjectAoeService.MakeObjectAoeSuppressKey(9020, "ケツァクワァトル");
+    var fromLiveScan = AddObjectAoeService.MakeLiveObjectAoeSuppressKey(9020, "ケツァクワァトル");
+
+    Equal(fromAppear, fromLiveScan,
+        "object_appear AoE and later cast-complete live scan must dedupe the same object");
+}
+
 static void AddObjectAoeService_ScansLiveObjectsAfterInstantMechanicActions()
 {
     var ev = new ActionUsedEvent(
@@ -2402,6 +2452,17 @@ static void AutoTelegraphService_SkipsPlayerActionUsedTelegraphs()
             sourceIsFriendly: false,
             isRaidWide: false),
         "non-player enemy action may continue to the AoE resolver");
+}
+
+static void AutoTelegraphService_SkipsActionUsedWithoutWorldPosition()
+{
+    False(
+        AutoTelegraphService.ShouldDrawActionUsedAoeAtWorldPosition(null),
+        "action_used with unresolved source/target position would render at minimap center and must be skipped");
+
+    True(
+        AutoTelegraphService.ShouldDrawActionUsedAoeAtWorldPosition(new Vector3(110, 0, 90)),
+        "resolved object/source positions can be drawn");
 }
 
 static void AttackPulseLabelPolicy_HidesActionNames()
@@ -4085,11 +4146,76 @@ static void ActorTrackedAoe_TowardsTarget_FacesCardinalDirection()
     NearlyEqual(-MathF.PI / 2f, ActorTrackedAoeService.ComputeTowardsTargetRotation(-5f, 0f), "target west → -π/2");
 }
 
+static void InMemoryActionLookup_ExposesActionGeometry()
+{
+    // IActionLookup の最小契約を検証する純粋な POCO テスト。AoeResolver の overload に
+    // 由来する Dalamud assembly ロードを避けるため、AoeResolver.Resolve は直接呼ばない
+    // （AoeResolver はテスト project に Dalamud reference が無い構成で呼ぶと
+    // 「Dalamud.dll が見つからない」で落ちる）。
+    var donutGeom = new ActionGeometry(0x179Cu, "アルゲドン", 7, 6f, 2f, 53u, 0);
+    var lookup = new InMemoryActionLookup
+    {
+        [0x179Cu] = donutGeom,
+        [0x67BFu] = new ActionGeometry(0x67BFu, "パラデイグマ", 1, 0f, 0f, 0u, 5000),
+    };
+
+    var donut = lookup.TryGet(0x179Cu);
+    NotNull(donut, "donut entry resolved");
+    Equal(donutGeom, donut!, "donut geometry roundtrip");
+    Equal(53u, donut!.OmenId, "omen id propagated");
+    Equal(2f, donut.XAxisModifierM, "x axis modifier propagated");
+
+    Null(lookup.TryGet(0xDEADu), "unknown id returns null");
+
+    var all = new List<ActionGeometry>(lookup.ListAll());
+    Equal(2, all.Count, "list all yields registered entries");
+}
+
+static void BuildSpawnId_DistinguishesObjectNameAndTriggerEvent()
+{
+    // T1 録画解析（out/aoe-bug-survey-月の底.md §3）で発覚した「spawn_67BF_233C が 3 重複」
+    // の再発防止。同 cast_id + 同 data_id でも ObjectName/TriggerEvent が違えば別 ID を返すこと。
+    var castStart = PredictedObjectSpawnLearner.BuildSpawnId("0x67BF", 0x233C, "ケツァクウァトル", "cast_start");
+    var castComplete = PredictedObjectSpawnLearner.BuildSpawnId("0x67BF", 0x233C, "ケツァクウァトル", "cast_complete");
+    NotEqual(castStart, castComplete, "trigger event suffix should differ");
+    True(castComplete.EndsWith("_c", StringComparison.Ordinal), "cast_complete suffix is _c");
+
+    var sameName = PredictedObjectSpawnLearner.BuildSpawnId("0x67BF", 0x233C, "ケツァクウァトル", "cast_start");
+    Equal(castStart, sameName, "same key yields stable id");
+
+    var differentName = PredictedObjectSpawnLearner.BuildSpawnId("0x67BF", 0x233C, "ゾディアーク", "cast_start");
+    NotEqual(castStart, differentName, "different object name yields different id (T1 #spawn_67BF_233C dup)");
+
+    var differentCast = PredictedObjectSpawnLearner.BuildSpawnId("0x67F3", 0x233C, "ケツァクウァトル", "cast_start");
+    NotEqual(castStart, differentCast, "different cast id yields different id");
+
+    True(castStart.StartsWith("spawn_67BF_233C_", StringComparison.OrdinalIgnoreCase),
+        "id keeps cast_hex_dataIdHex prefix for compat with existing format");
+}
+
+static void BuildSpawnId_StableAcrossRuns()
+{
+    // FNV-1a を使うため、process 間で同一文字列に対し同一 ID を返すこと（永続化される ID 用）。
+    // .NET の String.GetHashCode はランダム化されるため使えない。
+    var id1 = PredictedObjectSpawnLearner.BuildSpawnId("0x67BF", 0x3834, "ケツァクウァトル", "cast_start");
+    var id2 = PredictedObjectSpawnLearner.BuildSpawnId("0x67BF", 0x3834, "ケツァクウァトル", "cast_start");
+    Equal(id1, id2, "id is stable for same input");
+    True(id1.Length >= "spawn_67BF_3834_XXXX".Length, "id includes 4-hex name hash");
+}
+
 static void Equal<T>(T expected, T actual, string label)
 {
     if (!EqualityComparer<T>.Default.Equals(expected, actual))
     {
         throw new InvalidOperationException($"{label}: expected {expected}, got {actual}.");
+    }
+}
+
+static void NotEqual<T>(T notExpected, T actual, string label)
+{
+    if (EqualityComparer<T>.Default.Equals(notExpected, actual))
+    {
+        throw new InvalidOperationException($"{label}: expected NOT to equal {notExpected}, got {actual}.");
     }
 }
 
@@ -4141,4 +4267,23 @@ static void SequenceEqual<T>(IReadOnlyList<T> expected, IReadOnlyList<T> actual,
             throw new InvalidOperationException($"{label}[{i}]: expected {expected[i]}, got {actual[i]}.");
         }
     }
+}
+
+/// <summary>
+/// <see cref="IActionLookup"/> の単純 in-memory モック。AoeResolver / 3 サービスを
+/// Dalamud / Lumina 抜きでテストできるようにする目的。
+/// </summary>
+internal sealed class InMemoryActionLookup : IActionLookup
+{
+    private readonly Dictionary<uint, ActionGeometry> _map = new();
+
+    public ActionGeometry this[uint id]
+    {
+        set => _map[id] = value;
+    }
+
+    public ActionGeometry? TryGet(uint actionId)
+        => _map.TryGetValue(actionId, out var g) ? g : null;
+
+    public IEnumerable<ActionGeometry> ListAll() => _map.Values;
 }

@@ -67,6 +67,9 @@ public sealed class Plugin : IDalamudPlugin
     // ── Lumina ベースの PC / pet 判定（IsPlayer フラグ付与に使う共用サービス）──
     private LuminaPcDetector? _pcDetector;
 
+    // ── Lumina Action sheet ルックアップ抽象。headless replay でモックに差し替え可能。──
+    private LuminaActionLookup? _luminaActionLookup;
+
     // ── M4: ロガー（録画） ────────────────────────────────
     private readonly RecordingController _recordingController;
     private readonly BattleRecorder _battleRecorder;
@@ -330,12 +333,16 @@ public sealed class Plugin : IDalamudPlugin
         //   AddObjectAoeService — 学習済み AoE の object_appear 補完。
         //     半径が辞書または録画から取れる場合だけ、TriggerFiredEvent に変換して
         //     ミニマップと床描画の両方へ流す。未学習オブジェクトの既定円は出さない。
+        // T3: AoeResolver / AutoTelegraphService が IDataManager 直参照から
+        // IActionLookup 抽象化に切り替わったため、本番では LuminaActionLookup を渡す。
+        _luminaActionLookup = new LuminaActionLookup(DataManager, Log);
+        var actionLookup = _luminaActionLookup;
         _autoTelegraph = new AutoTelegraphService(
-            _eventBus, DataManager, ObjectTable, _worldOverlayWindow, _minimapWindow,
+            _eventBus, actionLookup, ObjectTable, _worldOverlayWindow, _minimapWindow,
             _triggerStore, Log);
         _addObjectAoe = new AddObjectAoeService(
             Framework, _eventBus, _minimapWindow, _triggerStore,
-            _safeCallDictionary, _recordingScanner, DataManager, ObjectTable, Log);
+            _safeCallDictionary, _recordingScanner, actionLookup, ObjectTable, Log);
 
         // Splatoon 流ライブ描画サービス。AutoTelegraphService が「キャスト開始時に 1 回」
         // 床塗りしていたものを、これが「毎フレーム actor 位置・向きを再評価」する形で置換。
@@ -360,7 +367,7 @@ public sealed class Plugin : IDalamudPlugin
         // 先取り予告を描画するサービス。月の底のパラデイグマ → ケツアクアトル 4 体のような
         // Dalamud ObjectTable 登録遅延が大きいギミックを ObjectTable を待たずに事前可視化。
         // docs/predicted-object-spawn-design.md 参照。
-        _predictedObjectSpawnLearner = new PredictedObjectSpawnLearner(_recordingScanner, Log);
+        _predictedObjectSpawnLearner = new PredictedObjectSpawnLearner(_recordingScanner, Log, DataManager);
         _predictedObjectSpawn = new PredictedObjectSpawnService(Framework, _eventBus, _triggerStore, Log);
 
         _autoAttackTiming = new AutoAttackTimingService(
@@ -610,6 +617,11 @@ public sealed class Plugin : IDalamudPlugin
         {
             router.Register(new LearnSpawnsCommand(
                 _predictedObjectSpawnLearner, _triggerStore, ClientState, DataManager, ChatGui, Log));
+        }
+        if (_luminaActionLookup is not null)
+        {
+            router.Register(new DumpActionsCommand(
+                _triggerStore, _recordingScanner, _luminaActionLookup, PluginInterface, ChatGui, Log));
         }
         router.Register(new HelpCommand(router, ChatGui));
 

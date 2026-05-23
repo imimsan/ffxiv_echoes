@@ -7,7 +7,6 @@ using FfxivEchoes.Events;
 using FfxivEchoes.Triggers.Models;
 using FfxivEchoes.Utils;
 using FfxivEchoes.Windows;
-using LuminaAction = Lumina.Excel.Sheets.Action;
 
 namespace FfxivEchoes.Triggers;
 
@@ -24,10 +23,10 @@ namespace FfxivEchoes.Triggers;
 /// </remarks>
 public sealed class AutoTelegraphService : IDisposable
 {
-    private readonly IDataManager _dataManager;
+    private readonly IActionLookup _actionLookup;
     private readonly IObjectTable _objectTable;
     private readonly WorldOverlayWindow _worldOverlay;
-    private readonly MinimapWindow _minimap;
+    private readonly IMinimapSink _minimap;
     private readonly TriggerStore _store;
     private readonly IEventBus _bus;
     private readonly IPluginLog _log;
@@ -51,15 +50,15 @@ public sealed class AutoTelegraphService : IDisposable
 
     public AutoTelegraphService(
         IEventBus bus,
-        IDataManager dataManager,
+        IActionLookup actionLookup,
         IObjectTable objectTable,
         WorldOverlayWindow worldOverlay,
-        MinimapWindow minimap,
+        IMinimapSink minimap,
         TriggerStore store,
         IPluginLog log)
     {
         _bus = bus;
-        _dataManager = dataManager;
+        _actionLookup = actionLookup;
         _objectTable = objectTable;
         _worldOverlay = worldOverlay;
         _minimap = minimap;
@@ -158,7 +157,7 @@ public sealed class AutoTelegraphService : IDisposable
         // 半径級のため、ここで skip しないと「パラデイグマ詠唱と同時に画面中央にドーナツ」
         // が出る（ユーザー報告の典型症状）。MinimapWindow.DrawActualAoeShape の 0.9 ガードと
         // 揃え、かつ CastType=2/5 限定だった条件を撤廃して Donut (6/7/10) も対象に含める。
-        var preview = AoeResolver.Resolve(_dataManager, ev.CastActionId, _log);
+        var preview = AoeResolver.Resolve(_actionLookup, ev.CastActionId, _log);
         if (preview is not null &&
             preview.Radius >= arena.ArenaRadius * 0.9)
         {
@@ -358,8 +357,8 @@ public sealed class AutoTelegraphService : IDisposable
         var autoSettings = file!.AutoSettings;
         var arena = AutoAoeDisplayPolicy.ResolveArena(file);
 
-        // Lumina から AoE 情報を引く（cast 無しの瞬間アクションでも EffectRange は取得可能）
-        var aoe = AoeResolver.Resolve(_dataManager, ev.ActionId, _log);
+        // Action lookup から AoE 情報を引く（cast 無しの瞬間アクションでも EffectRange は取得可能）
+        var aoe = AoeResolver.Resolve(_actionLookup, ev.ActionId, _log);
 
         var decision = AttackDisplayPolicy.Decide(
             autoSettings,
@@ -389,6 +388,12 @@ public sealed class AutoTelegraphService : IDisposable
             ev.TargetId,
             ev.TargetWorld,
             ResolveObjectWorld);
+        if (!ShouldDrawActionUsedAoeAtWorldPosition(worldPos))
+        {
+            _log.Debug("[FfxivEchoes] AutoTelegraph(ActionUsed): skip 位置未解決 action {Name} (id={Id:X4}) src={Src}",
+                ev.ActionName, ev.ActionId, ev.SourceId);
+            return;
+        }
 
         // AoE 持ちの瞬間アクション：Lumina の正確な半径と形状でミニマップに描く。
         // キャスト時間が無い分、表示は短め（3 秒）。発動済みなので「次の予告」ではなく
@@ -463,6 +468,9 @@ public sealed class AutoTelegraphService : IDisposable
         return targetId is { } tid && tid != 0 ? targetLookup(tid) : sourceWorld;
     }
 
+    public static bool ShouldDrawActionUsedAoeAtWorldPosition(Vector3? worldPosition)
+        => worldPosition is not null;
+
     private Vector3? ResolveObjectWorld(uint entityOrObjectId)
     {
         var obj = _objectTable.FindByEntityOrObjectId(entityOrObjectId);
@@ -511,7 +519,7 @@ public sealed class AutoTelegraphService : IDisposable
     }
 
     /// <summary>
-    /// Lumina Action から AoE 形状を推測。circle / donut / square のどれかを返す。
+    /// Action 情報から AoE 形状を推測。circle / donut / square のどれかを返す。
     /// 推測できなければ false。
     /// </summary>
     private bool TryResolveAoe(uint actionId, out float radius, out string shape, out bool fromCaster)
@@ -523,14 +531,14 @@ public sealed class AutoTelegraphService : IDisposable
 
         try
         {
-            var sheet = _dataManager.GetExcelSheet<LuminaAction>();
-            if (!sheet.TryGetRow(actionId, out var row))
+            var geom = _actionLookup.TryGet(actionId);
+            if (geom is null)
             {
                 return false;
             }
-            var effectRange = (float)row.EffectRange;
+            var effectRange = geom.EffectRangeM;
             if (effectRange <= 0) return false;
-            // Lumina の EffectRange が異常に大きい一部の特殊アクション
+            // EffectRange が異常に大きい一部の特殊アクション
             // （アリーナ全域 80m など）は描画しない
             if (effectRange > 50f)
             {
@@ -541,7 +549,7 @@ public sealed class AutoTelegraphService : IDisposable
 
             // CastType: 1=ST, 2=Circle (target-centered), 3=Cone, 4=Line,
             //           5=PBAoE on caster, 6=Donut, 7+=L/Cross 等の特殊
-            var castType = (int)row.CastType;
+            var castType = geom.CastType;
             switch (castType)
             {
                 case 2:
@@ -571,7 +579,7 @@ public sealed class AutoTelegraphService : IDisposable
         }
         catch (Exception ex)
         {
-            _log.Warning(ex, "[FfxivEchoes] AutoTelegraph: Lumina Action 解決失敗 (id={Id})", actionId);
+            _log.Warning(ex, "[FfxivEchoes] AutoTelegraph: Action 解決失敗 (id={Id})", actionId);
             return false;
         }
     }
