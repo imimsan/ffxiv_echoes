@@ -125,9 +125,22 @@ public sealed class LearnSpawnsCommand : ICommandHandler
 
             foreach (var s in learned)
             {
+                var shapeDesc = s.Shape switch
+                {
+                    "donut" => $"donut {s.RadiusM:F1}m / inner {s.InnerRadiusM ?? 0:F1}m",
+                    "rect" => $"rect {s.RadiusM:F1}m × {s.HalfWidthM ?? 0:F1}m",
+                    "cone" => $"cone {s.RadiusM:F1}m / {s.FanDeg ?? 0:F0}°",
+                    _ => $"{s.Shape} r={s.RadiusM:F1}m",
+                };
+                var posDesc = s.Positions.Count > 0
+                    ? $"{s.Positions.Count}pts (e.g. {s.Positions[0].X:F1},{s.Positions[0].Z:F1})"
+                    : "no positions";
                 _chat.Print(
-                    $"  • {s.TriggerCastName ?? "?"} → {s.ObjectName} ×{s.ObservedSpawnCount} " +
-                    $"(delay={s.DelaySec:F1}s, confidence={s.Confidence:F2}, stable={s.IsPositionStable})");
+                    $"  • {s.TriggerCastName ?? "?"} → {s.ObjectName}(id={s.ObjectDataId?.ToString() ?? "?"}) ×{s.ObservedSpawnCount}");
+                _chat.Print(
+                    $"    delay={s.DelaySec:F1}s, lead={s.LeadTimeSec:F1}s, fire@cast+{s.DelaySec - s.LeadTimeSec:F1}s");
+                _chat.Print(
+                    $"    shape={shapeDesc}, {posDesc}, conf={s.Confidence:F2}, stable={s.IsPositionStable}");
             }
         }
         catch (Exception ex)

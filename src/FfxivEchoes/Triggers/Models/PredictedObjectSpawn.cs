@@ -64,11 +64,11 @@ public sealed class PredictedObjectSpawn
     /// <summary>
     /// 予告 AoE を「Object 出現の何秒前」から表示するか。
     /// cast 検知から発火までの待機時間は <c>DelaySec - LeadTimeSec</c> 秒。
-    /// 既定 5 秒：出現の 5 秒前から予告表示。0 にすると出現と同時。
+    /// 既定 3 秒：出現の 3 秒前から予告表示。0 にすると出現と同時。
     /// 負値は無効（DelaySec を上回らないようクランプ）。
     /// </summary>
     [JsonPropertyName("lead_time_sec")]
-    public double LeadTimeSec { get; set; } = 5.0;
+    public double LeadTimeSec { get; set; } = 3.0;
 
     // ── 出現する object ───────────────────────────────
 
