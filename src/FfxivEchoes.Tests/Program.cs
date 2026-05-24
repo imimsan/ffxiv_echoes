@@ -1,6 +1,7 @@
 using FfxivEchoes.Profiles;
 using FfxivEchoes.Actions;
 using FfxivEchoes.Capture;
+using FfxivEchoes.Commands.Handlers;
 using FfxivEchoes.Recording;
 using FfxivEchoes.SafeZone;
 using FfxivEchoes.SafeZone.Presets;
@@ -185,6 +186,9 @@ var tests = new List<(string Name, Action Body)>
     ("IsUsableObjectAoePosition keeps valid positions near arena edge", IsUsableObjectAoePosition_KeepsValidEdgePositions),
     ("HasPlaceholderActionUsedTarget detects -0.015 placeholder (T1 §2 症状B)", HasPlaceholderActionUsedTarget_DetectsPlaceholder),
     ("HasPlaceholderActionUsedTarget passes valid targets", HasPlaceholderActionUsedTarget_PassesValidTargets),
+    ("PredictedObjectSpawnLearner separates cast_start/cast_complete delays (T1 §2 症状A delay ズレ)", PredictedObjectSpawnLearner_SeparatesCastStartAndComplete),
+    ("ReconcileObjectAoeRules updates recording-sourced rules from spawns (T1 §4 優先度1)", ReconcileObjectAoeRules_UpdatesRecordingSourcedRules),
+    ("ReconcileObjectAoeRules protects manual and dictionary rules", ReconcileObjectAoeRules_ProtectsManualAndDictionaryRules),
 };
 
 var failed = 0;
@@ -4268,6 +4272,113 @@ static void HasPlaceholderActionUsedTarget_DetectsPlaceholder()
     var zeroEv = placeholderEv with { TargetWorld = new Vector3(0f, 0f, 0f) };
     True(AutoTelegraphService.HasPlaceholderActionUsedTarget(zeroEv),
         "原点 placeholder も検出される");
+}
+
+static void PredictedObjectSpawnLearner_SeparatesCastStartAndComplete()
+{
+    // T1 §2 症状A: 月の底パラデイグマ (cast_id=0x67BF, cast_time=2.7s) で
+    // cast_start delay = 14.9s、cast_complete delay = 12.2s が ObsKey 共有のため
+    // 平均化されて 13.4s になっていた。
+    //
+    // ObsKey は private record struct のため直接テストできない。代わりに対外契約
+    // (BuildSpawnId が cast_start / cast_complete で別 ID を返す) と、内部で生成される
+    // PredictedObjectSpawn.TriggerEvent が key.CastEvent をそのまま使うことを spawn_id
+    // 規則のテスト ([BuildSpawnId_Distinguishes...] 既存) と合わせて確認する。
+    var castStartId = PredictedObjectSpawnLearner.BuildSpawnId("0x67BF", 14388, "ケツァクウァトル", "cast_start");
+    var castCompleteId = PredictedObjectSpawnLearner.BuildSpawnId("0x67BF", 14388, "ケツァクウァトル", "cast_complete");
+
+    NotEqual(castStartId, castCompleteId, "cast_start / cast_complete 別 ID");
+    True(castCompleteId.EndsWith("_c", StringComparison.Ordinal), "cast_complete に _c suffix");
+    False(castStartId.EndsWith("_c", StringComparison.Ordinal), "cast_start は無印");
+
+    // 通常実装：ObsKey に CastEvent が含まれるため、同 cast の cast_start レコードと
+    // cast_complete レコードはマージされず、各々独立した PredictedObjectSpawn になる。
+    // 平均化が起きないので「13.4s ≈ (14.9 + 12.2) / 2 のズレ」は構造的に再発不能。
+    //
+    // 入出力テスト (jsonl → 学習結果) は Tests project が Dalamud.dll を持たないため
+    // CreateForTesting() factory 経由でも Lumina 関連の type resolution で落ちる。
+    // 別 PR で in-game integration test を整える想定。
+}
+
+static void ReconcileObjectAoeRules_UpdatesRecordingSourcedRules()
+{
+    // T1 §4 優先度1: 月の底 object_aoe_rules で「ケツァクウァトル radius=15, inner=4.5」
+    // が学習されているが、predicted_object_spawns では「radius=6, inner=2」。
+    // 同 actor で乖離があると実出現時の床描画が誤サイズに。
+    // 修正: learn-spawns 実行時に Lumina 由来の predict 値で reconcile。
+    var profile = new StrategyProfile
+    {
+        Id = "default", Name = "test",
+        ObjectAoeRules = new List<ObjectAoeRule>
+        {
+            new()
+            {
+                Id = "obj_aoe_3834", ObjectName = "ケツァクウァトル",
+                DataId = 14388, Shape = "donut", RadiusM = 15.0, InnerRadiusM = 4.5,
+                Source = "recording_action", Enabled = true,
+            },
+        },
+    };
+    var spawns = new[]
+    {
+        new PredictedObjectSpawn
+        {
+            Id = "spawn_test", ObjectName = "ケツァクウァトル", ObjectDataId = 14388,
+            Shape = "donut", RadiusM = 6.0, InnerRadiusM = 2.0, Confidence = 0.95,
+        },
+    };
+
+    var updated = LearnSpawnsCommand.ReconcileObjectAoeRulesFromPredictedSpawns(profile, spawns);
+
+    Equal(1, updated, "1 件 reconcile される");
+    NearlyEqual(6.0f, (float)profile.ObjectAoeRules[0].RadiusM,
+        "radius が spawn 値 (6m) に更新される");
+    NearlyEqual(2.0f, (float)(profile.ObjectAoeRules[0].InnerRadiusM ?? 0),
+        "inner が spawn 値 (2m) に更新される");
+}
+
+static void ReconcileObjectAoeRules_ProtectsManualAndDictionaryRules()
+{
+    // ユーザーが手で編集したルール、辞書由来のルールは触らない。
+    var profile = new StrategyProfile
+    {
+        Id = "default", Name = "test",
+        ObjectAoeRules = new List<ObjectAoeRule>
+        {
+            new()
+            {
+                Id = "manual_rule", ObjectName = "ケツァクウァトル",
+                DataId = 14388, Shape = "donut", RadiusM = 12.0, InnerRadiusM = 3.0,
+                Source = "manual", Enabled = true,
+            },
+            new()
+            {
+                Id = "dict_rule", ObjectName = "ボス", DataId = 1,
+                Shape = "circle", RadiusM = 10.0, Source = "dictionary", Enabled = true,
+            },
+        },
+    };
+    var spawns = new[]
+    {
+        new PredictedObjectSpawn
+        {
+            Id = "s1", ObjectName = "ケツァクウァトル", ObjectDataId = 14388,
+            Shape = "donut", RadiusM = 6.0, InnerRadiusM = 2.0, Confidence = 0.95,
+        },
+        new PredictedObjectSpawn
+        {
+            Id = "s2", ObjectName = "ボス", ObjectDataId = 1,
+            Shape = "circle", RadiusM = 5.0, Confidence = 1.0,
+        },
+    };
+
+    var updated = LearnSpawnsCommand.ReconcileObjectAoeRulesFromPredictedSpawns(profile, spawns);
+
+    Equal(0, updated, "manual と dictionary は触らないので更新数 0");
+    NearlyEqual(12.0f, (float)profile.ObjectAoeRules[0].RadiusM,
+        "manual の radius は保護される");
+    NearlyEqual(10.0f, (float)profile.ObjectAoeRules[1].RadiusM,
+        "dictionary の radius は保護される");
 }
 
 static void HasPlaceholderActionUsedTarget_PassesValidTargets()

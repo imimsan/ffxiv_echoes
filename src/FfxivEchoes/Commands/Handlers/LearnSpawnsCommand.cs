@@ -114,9 +114,21 @@ public sealed class LearnSpawnsCommand : ICommandHandler
 
         profile.PredictedObjectSpawns = merged;
 
+        // ObjectAoeRule reconcile: 同 ObjectName + DataId のルールがあり、source が
+        // recording/recording_action 系なら、predict 側の Lumina 学習値 (radius/shape) で
+        // 上書きする。両者は同じ Lumina action を引いているはずだが、過去バージョンで学習
+        // された ObjectAoeRule が古い値 (例: radius_m=15 で実際は 6m) のまま残ることがあり、
+        // 実出現後の床描画が誤サイズになる原因 (T1 §2 症状C / §4 優先度1)。
+        // source=manual / dictionary は触らない (ユーザー判断や辞書値を尊重)。
+        var reconciledCount = ReconcileObjectAoeRulesFromPredictedSpawns(profile, merged);
+
         try
         {
             _store.SaveZone(zone, file);
+            if (reconciledCount > 0)
+            {
+                _chat.Print($"[FFXIV Echoes] object_aoe_rules の radius/shape を {reconciledCount} 件 reconcile（手動・辞書は保護）");
+            }
             _chat.Print(
                 $"[FFXIV Echoes] learn-spawns: {zone} を更新。学習={learned.Count} 手動保持={manualSpawns.Count} 合計={merged.Count}");
             _log.Information(
@@ -148,6 +160,66 @@ public sealed class LearnSpawnsCommand : ICommandHandler
             _chat.PrintError($"[FFXIV Echoes] learn-spawns: 保存失敗 - {ex.Message}");
             _log.Error(ex, "[FfxivEchoes] LearnSpawnsCommand: save 失敗 zone={Zone}", zone);
         }
+    }
+
+    /// <summary>
+    /// 学習済み PredictedObjectSpawn の (radius/inner/shape) を、同名同 DataId の
+    /// object_aoe_rules に反映する。source=recording/recording_action のみ対象。
+    /// 手動編集 (manual) と辞書 (dictionary) は触らない。
+    /// 戻り値：更新された ObjectAoeRule の件数。
+    /// </summary>
+    public static int ReconcileObjectAoeRulesFromPredictedSpawns(
+        StrategyProfile profile,
+        IReadOnlyList<PredictedObjectSpawn> spawns)
+    {
+        if (profile.ObjectAoeRules is null || profile.ObjectAoeRules.Count == 0) return 0;
+        if (spawns is null || spawns.Count == 0) return 0;
+
+        var updated = 0;
+        foreach (var rule in profile.ObjectAoeRules)
+        {
+            // 手動編集と辞書は保護
+            var srcLower = (rule.Source ?? "").ToLowerInvariant();
+            if (srcLower == "manual" || srcLower == "dictionary") continue;
+            if (string.IsNullOrWhiteSpace(rule.ObjectName)) continue;
+
+            // 同名 + (DataId 一致 or rule の DataId が null) の最高信頼 spawn を選ぶ
+            var spawn = spawns
+                .Where(s => string.Equals(s.ObjectName?.Trim(), rule.ObjectName.Trim(),
+                    StringComparison.OrdinalIgnoreCase))
+                .Where(s => rule.DataId is null || rule.DataId == 0 || s.ObjectDataId == rule.DataId)
+                .OrderByDescending(s => s.Confidence)
+                .FirstOrDefault();
+            if (spawn is null) continue;
+            if (spawn.RadiusM <= 0.1) continue;  // 学習失敗 spawn は無視
+
+            // 変更があれば反映
+            var changed = false;
+            if (!string.Equals(rule.Shape, spawn.Shape, StringComparison.OrdinalIgnoreCase))
+            {
+                rule.Shape = spawn.Shape;
+                changed = true;
+            }
+            if (Math.Abs(rule.RadiusM - spawn.RadiusM) > 0.05)
+            {
+                rule.RadiusM = spawn.RadiusM;
+                changed = true;
+            }
+            if (NotNearlyEqual(rule.InnerRadiusM, spawn.InnerRadiusM, 0.05))
+            {
+                rule.InnerRadiusM = spawn.InnerRadiusM;
+                changed = true;
+            }
+            if (changed) updated++;
+        }
+        return updated;
+    }
+
+    private static bool NotNearlyEqual(double? a, double? b, double tolerance)
+    {
+        if (a is null && b is null) return false;
+        if (a is null || b is null) return true;
+        return Math.Abs(a.Value - b.Value) > tolerance;
     }
 
     private string ResolveCurrentZoneName()

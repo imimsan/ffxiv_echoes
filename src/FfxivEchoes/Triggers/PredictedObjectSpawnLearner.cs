@@ -321,7 +321,7 @@ public sealed class PredictedObjectSpawnLearner
                     var members = nameGroup.ToList();
                     if (members.Count == 0) continue;
                     var first = members[0];
-                    var key = new ObsKey(cast.CastId, cast.CastName, first.ObjectName, first.DataId);
+                    var key = new ObsKey(cast.CastId, cast.CastName, cast.EventType, first.ObjectName, first.DataId);
                     if (!observations.TryGetValue(key, out var list))
                     {
                         list = new List<Observation>();
@@ -410,7 +410,9 @@ public sealed class PredictedObjectSpawnLearner
         var sourceName = matching
             .Select(o => o.SourceName)
             .FirstOrDefault(n => !string.IsNullOrWhiteSpace(n));
-        var triggerEvent = matching.FirstOrDefault()?.CastEvent ?? "cast_start";
+        // ObsKey に CastEvent を含めるようになったため、各 ObsKey 内の observations はすべて
+        // 同じ CastEvent。key から直接取れば良い（FirstOrDefault のフォールバックは不要）。
+        var triggerEvent = key.CastEvent;
 
         // ID 生成: (CastId, DataId) だけだと「同 cast から同 data_id の別 actor 名」や
         // 「cast_start 版と cast_complete 版」が衝突する。ObjectName の安定 hash と
@@ -624,7 +626,12 @@ public sealed class PredictedObjectSpawnLearner
         return (hash & 0xFFFF).ToString("X4");
     }
 
-    private readonly record struct ObsKey(string CastId, string CastName, string ObjectName, uint DataId);
+    /// <summary>
+    /// 学習集計のキー。CastEvent (cast_start / cast_complete) を含めるのは、
+    /// 同一 cast でも cast_start 起点と cast_complete 起点では delay が
+    /// cast_time （例 2.7s）の差で乖離するため。これらを別 spawn として扱う。
+    /// </summary>
+    private readonly record struct ObsKey(string CastId, string CastName, string CastEvent, string ObjectName, uint DataId);
 
     private sealed record CastRecord(double Time, string EventType, string CastId, string CastName, string? SourceName);
     private sealed record ObjectAppearRecord(double Time, string ObjectName, uint DataId, uint ObjectId, float X, float Z);
