@@ -59,6 +59,18 @@ public sealed class CastCapture : IDisposable
                 continue;
             }
 
+            // PC のペット（クイーン / カーバンクル / ソルバハムート / 妖精 / *エギ 等）の
+            // cast を録画から除外する。HpCapture と同じパターン：owner が PlayerCharacter なら skip。
+            // ボスの召喚物（owner=boss）は通常 mechanic として価値があるので維持。
+            if (battleNpc.OwnerId != 0)
+            {
+                var owner = _objectTable.SearchById(battleNpc.OwnerId);
+                if (owner is Dalamud.Game.ClientState.Objects.SubKinds.IPlayerCharacter)
+                {
+                    continue;
+                }
+            }
+
             seen.Add(battleNpc.GameObjectId);
             UpdateActor(battleNpc);
         }
@@ -95,7 +107,7 @@ public sealed class CastCapture : IDisposable
         var actionId = actor.CastActionId;
         var totalCast = actor.TotalCastTime;
         var currentCast = actor.CurrentCastTime;
-        var sourceId = (uint)actor.GameObjectId;
+        var sourceId = actor.EntityId;
         var sourceName = actor.Name.TextValue;
 
         if (!_states.TryGetValue(key, out var prev))
@@ -104,14 +116,17 @@ public sealed class CastCapture : IDisposable
             if (nowCasting)
             {
                 var name = ResolveActionName(actionId);
+                var target = ResolveTargetSnapshot(actor);
                 var ev = new CastStartedEvent(
                     DateTimeOffset.UtcNow, sourceId, sourceName, actionId, name,
-                    totalCast, ResolveTargetId(actor));
+                    totalCast, target.EntityId, target.World);
                 _bus.Publish(ev);
                 _states[key] = CastState.Casting(sourceId, sourceName, actionId, name, totalCast, currentCast);
             }
             else
             {
+                // 即時アクション（cast_time=0）の publish は ActionEffectCapture が担当する。
+                // ここでは状態だけ Idle にする。
                 _states[key] = CastState.Idle(sourceId, sourceName);
             }
             return;
@@ -121,9 +136,10 @@ public sealed class CastCapture : IDisposable
         if (!prev.IsCasting && nowCasting)
         {
             var name = ResolveActionName(actionId);
+            var target = ResolveTargetSnapshot(actor);
             _bus.Publish(new CastStartedEvent(
                 DateTimeOffset.UtcNow, sourceId, sourceName, actionId, name,
-                totalCast, ResolveTargetId(actor)));
+                totalCast, target.EntityId, target.World));
             _states[key] = CastState.Casting(sourceId, sourceName, actionId, name, totalCast, currentCast);
             return;
         }
@@ -154,9 +170,10 @@ public sealed class CastCapture : IDisposable
                 DateTimeOffset.UtcNow, prev.SourceId, prev.SourceName,
                 prev.CastActionId, prev.CastActionName));
             var name = ResolveActionName(actionId);
+            var target = ResolveTargetSnapshot(actor);
             _bus.Publish(new CastStartedEvent(
                 DateTimeOffset.UtcNow, sourceId, sourceName, actionId, name,
-                totalCast, ResolveTargetId(actor)));
+                totalCast, target.EntityId, target.World));
             _states[key] = CastState.Casting(sourceId, sourceName, actionId, name, totalCast, currentCast);
             return;
         }
@@ -165,13 +182,24 @@ public sealed class CastCapture : IDisposable
         if (nowCasting)
         {
             _states[key] = prev with { LastCurrentCastTime = currentCast };
+            return;
         }
+
+        // 非キャスト中の状態維持。ActionEffectCapture がインスタント発動を別経路で publish する。
     }
 
-    private static uint? ResolveTargetId(IBattleNpc actor)
+    private (uint? EntityId, System.Numerics.Vector3? World) ResolveTargetSnapshot(IBattleNpc actor)
     {
         var target = actor.CastTargetObjectId;
-        return target == 0 ? null : (uint)target;
+        if (target == 0)
+        {
+            return (null, null);
+        }
+
+        var targetObject = _objectTable.SearchById(target);
+        return targetObject is null
+            ? (null, null)
+            : (targetObject.EntityId, targetObject.Position);
     }
 
     private string ResolveActionName(uint actionId)
@@ -203,6 +231,10 @@ public sealed class CastCapture : IDisposable
         _actionNameCache[actionId] = fallback;
         return fallback;
     }
+
+    // 旧 UpdateInstantAction / InstantActionState は撤去：
+    // インスタント / オートアタックの ActionUsedEvent 発行は ActionEffectCapture 単独に統一。
+    // ポーリング起源（CastCapture）の publish と並走させると同イベントが二重に流れるため。
 
     private readonly record struct CastState(
         bool IsCasting,

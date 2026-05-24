@@ -36,8 +36,10 @@ public sealed class EventMatcher
             CastStartedEvent x => MatchCastStarted(x, match),
             CastCompletedEvent x => MatchCastEnd(x.SourceName, x.SourceId, x.CastActionId, x.CastActionName, match),
             CastCanceledEvent x => MatchCastEnd(x.SourceName, x.SourceId, x.CastActionId, x.CastActionName, match),
+            ActionUsedEvent x => MatchActionUsed(x, match),
             StatusGainedEvent x => MatchStatusGained(x, match),
             StatusLostEvent x => MatchStatusLost(x, match),
+            StatusUpdatedEvent x => MatchStatusUpdated(x, match),
             HpChangedEvent x => MatchHpChanged(x, match),
             CombatStartedEvent => true,
             CombatEndedEvent => true,
@@ -70,6 +72,7 @@ public sealed class EventMatcher
         CastStartedEvent => "cast_start",
         CastCompletedEvent => "cast_complete",
         CastCanceledEvent => "cast_cancel",
+        ActionUsedEvent => "action_used",
         StatusGainedEvent => "status_gain",
         StatusLostEvent => "status_lose",
         StatusUpdatedEvent => "status_update",
@@ -138,6 +141,35 @@ public sealed class EventMatcher
         return true;
     }
 
+    private bool MatchActionUsed(ActionUsedEvent ev, MatchCondition? m)
+    {
+        if (m is null)
+        {
+            return true;
+        }
+        if (m.ActionId is not null && !MatchHexId(m.ActionId, ev.ActionId))
+        {
+            return false;
+        }
+        if (m.ActionName is not null && !MatchString(m.ActionName, ev.ActionName))
+        {
+            return false;
+        }
+        if (m.Source is not null && !MatchString(m.Source, ev.SourceName))
+        {
+            return false;
+        }
+        if (m.SourceId is { } expected && ev.SourceId != expected)
+        {
+            return false;
+        }
+        if (m.Target is not null && !_targetResolver.Matches(ev.TargetId ?? 0, m.Target))
+        {
+            return false;
+        }
+        return true;
+    }
+
     private bool MatchStatusGained(StatusGainedEvent ev, MatchCondition? m)
     {
         if (m is null)
@@ -191,6 +223,31 @@ public sealed class EventMatcher
             return false;
         }
         if (m.Target is not null && !_targetResolver.Matches(ev.TargetId, m.Target))
+        {
+            return false;
+        }
+        return true;
+    }
+
+    private bool MatchStatusUpdated(StatusUpdatedEvent ev, MatchCondition? m)
+    {
+        if (m is null)
+        {
+            return true;
+        }
+        if (m.StatusId is { } statusId && ev.StatusId != statusId)
+        {
+            return false;
+        }
+        if (m.Target is not null && !_targetResolver.Matches(ev.TargetId, m.Target))
+        {
+            return false;
+        }
+        if (m.DurationRange is { } durRange && !MatchRange(durRange, ev.RemainingTime))
+        {
+            return false;
+        }
+        if (m.Stacks is { } stacks && !MatchStacks(stacks, ev.Stacks))
         {
             return false;
         }

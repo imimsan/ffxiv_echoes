@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>FFXIV Echoes — Replay Inspector</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="replay.css">
+</head>
+<body>
+    <header class="topbar">
+        <h1>FFXIV Echoes <span class="muted">— Replay Inspector</span></h1>
+        <div class="muted small">trace.json を時間軸で再生し、AoE 描画決定を SVG で可視化</div>
+        <div class="muted small" style="margin-left:auto;">
+            <a href="index.html" style="color:var(--accent);">→ Web Demo</a>
+        </div>
+    </header>
+
+    <main class="replay-layout">
+        <!-- ===== 左：制御 + リスト ===== -->
+        <section class="replay-left">
+            <div class="panel">
+                <div class="panel-title">Trace ファイル</div>
+                <label class="drop-zone" id="drop-zone">
+                    <input type="file" id="file-input" accept=".json,application/json">
+                    <div id="drop-zone-text">
+                        クリック or ドロップで trace.json を読み込み<br>
+                        <span class="muted small">（起動時は sample-trace.json を自動ロード）</span>
+                    </div>
+                </label>
+                <div class="meta-row" id="meta-row"></div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-title">再生コントロール</div>
+                <div class="transport">
+                    <button id="btn-prev" title="直前の event">⏮</button>
+                    <button id="btn-play" class="primary play-btn">▶</button>
+                    <button id="btn-pause">⏸</button>
+                    <button id="btn-next" title="次の event">⏭</button>
+                    <button id="btn-reset" title="先頭へ">⟲</button>
+                </div>
+                <div class="time-row">
+                    <span class="now" id="time-now">0.00</span>
+                    <input type="range" id="seek-bar" min="0" max="100" step="0.01" value="0">
+                    <span class="total" id="time-total">/ 0.00s</span>
+                </div>
+                <div class="speed-row">
+                    <span class="muted">speed:</span>
+                    <select id="speed-select">
+                        <option value="0.25">0.25×</option>
+                        <option value="0.5">0.5×</option>
+                        <option value="1" selected>1×</option>
+                        <option value="2">2×</option>
+                        <option value="4">4×</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-title">Active AoE (<span id="active-count">0</span>)</div>
+                <div class="active-aoe-list" id="active-aoe-list">
+                    <div class="muted small">trace 未ロード</div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-title">Skip Reasons (累積)</div>
+                <div class="skip-reasons" id="skip-reasons">
+                    <div class="empty">なし</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===== 右：アリーナ + イベントログ ===== -->
+        <section class="replay-right">
+            <div class="panel">
+                <div class="panel-title">Arena (北 = 上 / +Z = 南 / +X = 東)</div>
+                <div class="arena-stage" id="arena-stage">
+                    <div class="muted small">trace 未ロード</div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-title">Event Log (現在時刻 ±5s)</div>
+                <div class="event-log" id="event-log">
+                    <div class="muted small">trace 未ロード</div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="bottombar muted small">
+        trace.json schema: <code>docs/superpowers/specs/2026-05-24-aoe-fix-and-browser-replay-design.md §3</code> 準拠
+    </footer>
+
+    <script src="lib/arena-svg.js"></script>
+    <script src="lib/trace-player.js"></script>
+    <script src="replay.js"></script>
+</body>
+</html>

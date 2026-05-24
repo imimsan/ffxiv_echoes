@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Dalamud.Plugin.Services;
 using FfxivEchoes.Capture;
 using FfxivEchoes.Events;
+using FfxivEchoes.Recording;
 using FfxivEchoes.Triggers.Models;
 
 namespace FfxivEchoes.Triggers;
@@ -18,7 +20,10 @@ public sealed class NoteReminderService : IDisposable
     private readonly TriggerStore _store;
     private readonly CombatClock _combatClock;
     private readonly IPlayerState _playerState;
+    private readonly RecordingScanner _recordings;
+    private readonly SyncOffsetTracker _syncOffset;
     private readonly IPluginLog _log;
+    private readonly Func<string?, bool>? _branchActiveCheck;
 
     private readonly IDisposable _combatStartSub;
     private readonly IDisposable _combatEndSub;
@@ -30,14 +35,18 @@ public sealed class NoteReminderService : IDisposable
 
     public NoteReminderService(
         IFramework framework, IEventBus bus, TriggerStore store, CombatClock combatClock,
-        IPlayerState playerState, IPluginLog log)
+        IPlayerState playerState, RecordingScanner recordings, SyncOffsetTracker syncOffset, IPluginLog log,
+        Func<string?, bool>? branchActiveCheck = null)
     {
         _framework = framework;
         _bus = bus;
         _store = store;
         _combatClock = combatClock;
         _playerState = playerState;
+        _recordings = recordings;
+        _syncOffset = syncOffset;
         _log = log;
+        _branchActiveCheck = branchActiveCheck;
 
         _combatStartSub = bus.Subscribe<CombatStartedEvent>(_ => Schedule());
         _combatEndSub = bus.Subscribe<CombatEndedEvent>(_ =>
@@ -67,6 +76,10 @@ public sealed class NoteReminderService : IDisposable
             return;
         }
 
+        // AttachedTo 解決のため、現ゾーンの録画 aggregate を一度だけ取得
+        Recording.AggregatedEvents? agg = null;
+        try { agg = _recordings.Aggregate(_currentZone); } catch { /* 失敗時 null */ }
+
         lock (_gate)
         {
             _pending.Clear();
@@ -80,16 +93,60 @@ public sealed class NoteReminderService : IDisposable
                 {
                     continue;
                 }
-                var fireTime = note.Time - warn;
+                var resolved = TimelineNoteResolver.ResolveTime(note, agg);
+                if (resolved is null) continue;
+                var fireTime = resolved.Value - warn;
                 if (fireTime < 0)
                 {
                     fireTime = 0;
                 }
                 _pending.Add(new PendingNote(note.Id, fireTime, note));
             }
+
+            var strategyProfile = StrategyPlanResolver.SelectActiveProfile(file);
+            if (strategyProfile is not null)
+            {
+                foreach (var mechanic in strategyProfile.Mechanics)
+                {
+                    if (!mechanic.Enabled ||
+                        !IsBranchAllowed(mechanic) ||
+                        mechanic.AdvanceWarningSec is not { } warn ||
+                        warn <= 0)
+                    {
+                        continue;
+                    }
+
+                    var note = StrategyPlanResolver.BuildTimelineNote(strategyProfile, mechanic);
+                    if (!MatchesPlayer(note))
+                    {
+                        continue;
+                    }
+
+                    var resolved = TimelineNoteResolver.ResolveTime(note, agg);
+                    if (resolved is null)
+                    {
+                        continue;
+                    }
+
+                    var fireTime = resolved.Value - warn;
+                    if (fireTime < 0)
+                    {
+                        fireTime = 0;
+                    }
+
+                    _pending.Add(new PendingNote(
+                        note.Id,
+                        fireTime,
+                        note,
+                        StrategyPlanResolver.BuildReminderActions(file, strategyProfile, mechanic)));
+                }
+            }
         }
         _log.Debug("[FfxivEchoes] NoteReminder: {Count} 件をスケジュール", _pending.Count);
     }
+
+    private bool IsBranchAllowed(MechanicStrategy mechanic)
+        => _branchActiveCheck?.Invoke(mechanic.BranchId) ?? true;
 
     private bool MatchesPlayer(TimelineNote note)
     {
@@ -131,13 +188,15 @@ public sealed class NoteReminderService : IDisposable
         {
             return;
         }
+        // 同期オフセットを適用：実時刻が「予測時刻 + offset」に達したら発火
+        var offset = _syncOffset.CurrentOffsetSec;
 
         List<PendingNote>? toFire = null;
         lock (_gate)
         {
             for (var i = _pending.Count - 1; i >= 0; i--)
             {
-                if (_pending[i].FireAtRelSec <= nowRel.Value)
+                if (_pending[i].FireAtRelSec + offset <= nowRel.Value)
                 {
                     toFire ??= new List<PendingNote>();
                     toFire.Add(_pending[i]);
@@ -155,7 +214,7 @@ public sealed class NoteReminderService : IDisposable
         {
             try
             {
-                FireNote(p.Note);
+                FireNote(p);
             }
             catch (Exception ex)
             {
@@ -164,19 +223,34 @@ public sealed class NoteReminderService : IDisposable
         }
     }
 
-    private void FireNote(TimelineNote note)
+    private void FireNote(PendingNote pending)
     {
+        var note = pending.Note;
         var text = string.IsNullOrEmpty(note.WarningText) ? note.Label : note.WarningText;
-        if (string.IsNullOrEmpty(text))
+        var customActions = pending.Actions?.ToList();
+        if (customActions is null && string.IsNullOrEmpty(text))
         {
             return;
         }
 
+        // ノートの先行通知も音声のみ。中央オーバーレイは画面が埋まるため出さない。
+        // 視覚通知は LiveTimeline / UpcomingEventsWindow / 「📌 ノート」表示で見える。
         var actions = new List<Models.ActionDefinition>
         {
             new() { Type = "tts", Text = text },
-            new() { Type = "overlay_text", Text = text, Duration = 4.0, Color = note.Color },
         };
+        if (customActions is not null)
+        {
+            actions = customActions;
+        }
+        var file = _store.GetByZone(_currentZone);
+        actions = AutoSafeCallPlanner
+            .RemoveMinimapActionsForRaidWideMatch(file, actions, note.AttachedTo)
+            .ToList();
+        if (actions.Count == 0)
+        {
+            return;
+        }
         _bus.Publish(new TriggerFiredEvent(
             Timestamp: DateTimeOffset.UtcNow,
             Zone: _currentZone,
@@ -186,5 +260,9 @@ public sealed class NoteReminderService : IDisposable
             SourceEvent: new CombatStartedEvent(DateTimeOffset.UtcNow)));
     }
 
-    private readonly record struct PendingNote(string NoteId, double FireAtRelSec, TimelineNote Note);
+    private readonly record struct PendingNote(
+        string NoteId,
+        double FireAtRelSec,
+        TimelineNote Note,
+        IReadOnlyList<Models.ActionDefinition>? Actions = null);
 }

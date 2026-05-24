@@ -4,6 +4,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility;
 using FfxivEchoes.Profiles;
 using FfxivEchoes.Triggers;
+using FfxivEchoes.Triggers.Models;
 
 namespace FfxivEchoes.Windows.Tabs;
 
@@ -127,7 +128,9 @@ public sealed class ProfileTab : ITab
 
         ImGui.Spacing();
         ImGui.TextUnformatted("有効トリガー（ゾーン別）");
-        ImGui.TextDisabled("  チェック ON で有効化。リスト全空白なら全トリガー有効。");
+        ImGui.TextDisabled("  通常は全有効です。個別選択を使うと、チェック ON のトリガーだけ有効になります。");
+
+        ImGui.TextDisabled("  全有効: zone 未設定/従来の空リストは全有効です。個別選択中: チェック ON のIDだけ有効です。");
 
         var snapshot = _triggerStore.Snapshot();
         if (snapshot.Count == 0)
@@ -140,16 +143,40 @@ public sealed class ProfileTab : ITab
             {
                 if (ImGui.CollapsingHeader($"{zone}（{file.Triggers.Count}）"))
                 {
+                    var customSelection = profile.UsesCustomTriggerSelection(zone);
+                    if (ImGui.Checkbox($"個別選択を使う##custom-{zone}", ref customSelection))
+                    {
+                        profile.SetCustomTriggerSelection(zone, customSelection);
+                        if (customSelection)
+                        {
+                            profile.ActiveTriggers[zone] = new List<string>(AllTriggerIds(file.Triggers));
+                        }
+                        else
+                        {
+                            profile.ActiveTriggers.Remove(zone);
+                        }
+                    }
+
+                    ImGui.TextDisabled(customSelection
+                        ? "  個別選択中: チェック ON のトリガーだけ有効です。空なら全無効です。"
+                        : "  全有効: この zone の全トリガーが有効です。");
+
                     var list = profile.ActiveTriggers.TryGetValue(zone, out var ids)
                         ? new HashSet<string>(ids, StringComparer.OrdinalIgnoreCase)
-                        : null;
+                        : new HashSet<string>(AllTriggerIds(file.Triggers), StringComparer.OrdinalIgnoreCase);
 
                     foreach (var t in file.Triggers)
                     {
-                        var active = list?.Contains(t.Id) ?? true;
+                        var active = customSelection ? list.Contains(t.Id) : true;
                         if (ImGui.Checkbox($"{t.Id}{(t.Name is not null ? $" — {t.Name}" : string.Empty)}##{zone}-{t.Id}", ref active))
                         {
-                            list ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                            if (!customSelection)
+                            {
+                                customSelection = true;
+                                profile.SetCustomTriggerSelection(zone, true);
+                                list = new HashSet<string>(AllTriggerIds(file.Triggers), StringComparer.OrdinalIgnoreCase);
+                            }
+
                             if (active) list.Add(t.Id);
                             else list.Remove(t.Id);
                             profile.ActiveTriggers[zone] = new List<string>(list);
@@ -196,6 +223,14 @@ public sealed class ProfileTab : ITab
                 _newProfileName = string.Empty;
                 _newProfileDisplayName = string.Empty;
             }
+        }
+    }
+
+    private static IEnumerable<string> AllTriggerIds(IEnumerable<TriggerDefinition> triggers)
+    {
+        foreach (var trigger in triggers)
+        {
+            yield return trigger.Id;
         }
     }
 

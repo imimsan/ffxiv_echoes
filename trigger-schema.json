@@ -33,6 +33,36 @@
           "type": "boolean",
           "description": "突入時にライブタイムラインを表示",
           "default": false
+        },
+        "predict_advance_warning_sec": {
+          "type": "number",
+          "description": "seconds before learned timeline events to make automatic advance warning; null disables",
+          "minimum": 0
+        },
+        "show_predicted_casts": {
+          "type": "boolean",
+          "description": "show recorded predictions on the timeline",
+          "default": true
+        },
+        "show_auto_telegraphs": {
+          "type": "boolean",
+          "description": "show inferred enemy cast and object-spawn AoE telegraphs",
+          "default": true
+        },
+        "show_floor_paint": {
+          "type": "boolean",
+          "description": "draw inferred AoE shapes directly on the game world floor",
+          "default": true
+        },
+        "show_all_enemy_casts": {
+          "type": "boolean",
+          "description": "debug option: show non-AoE enemy casts as lightweight pulses",
+          "default": false
+        },
+        "show_auto_attacks": {
+          "type": "boolean",
+          "description": "show auto attacks and instant actions as lightweight pulses",
+          "default": true
         }
       }
     },
@@ -45,6 +75,15 @@
         "author": { "type": "string" },
         "notes": { "type": "string" }
       }
+    },
+    "active_strategy_profile_id": {
+      "type": "string",
+      "description": "Active party strategy profile id"
+    },
+    "strategy_profiles": {
+      "type": "array",
+      "description": "Party-specific strategy profiles, spreads, and mechanic handling plans",
+      "items": { "$ref": "#/definitions/strategy_profile" }
     },
     "sync_points": {
       "type": "array",
@@ -73,10 +112,25 @@
         }
       }
     },
+    "raid_wide_markers": {
+      "type": "array",
+      "description": "このコンテンツ内だけで全体攻撃として扱い、ミニマップ AoE を抑止する cast/action",
+      "items": { "$ref": "#/definitions/raid_wide_marker" }
+    },
+    "branches": {
+      "type": "array",
+      "description": "Timeline branch definitions used to filter mechanics by observed pattern",
+      "items": { "$ref": "#/definitions/timeline_branch" }
+    },
     "triggers": {
       "type": "array",
       "description": "トリガー定義の配列",
       "items": { "$ref": "#/definitions/trigger" }
+    },
+    "notes": {
+      "type": "array",
+      "description": "Timeline notes shown independently from trigger actions",
+      "items": { "$ref": "#/definitions/timeline_note" }
     },
     "ignored_events": {
       "type": "array",
@@ -94,6 +148,369 @@
     }
   },
   "definitions": {
+    "raid_wide_marker": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "source": { "type": "string" },
+        "callout": { "type": "string" },
+        "tts": { "type": "string" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "timeline_branch": {
+      "type": "object",
+      "required": ["id", "condition"],
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "group_id": { "type": "string" },
+        "condition": { "$ref": "#/definitions/branch_condition" }
+      }
+    },
+    "branch_condition": {
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["first_cast", "status_gain", "object_appear"] },
+        "cast_id": { "type": "string" },
+        "cast_name": { "type": "string" },
+        "status_id": { "type": "integer", "minimum": 0 },
+        "object_name": { "type": "string" },
+        "window_sec": { "type": "number", "minimum": 0 }
+      }
+    },
+    "strategy_profile": {
+      "type": "object",
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "enabled": { "type": "boolean", "default": true },
+        "description": { "type": "string" },
+        "arena_radius": { "type": "number", "minimum": 1 },
+        "arena_shape": { "type": "string", "enum": ["circle", "square", "rect"], "default": "circle" },
+        "arena_width": { "type": "number", "minimum": 1 },
+        "arena_depth": { "type": "number", "minimum": 1 },
+        "arena_center_x": { "type": "number" },
+        "arena_center_z": { "type": "number" },
+        "spread_positions": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/strategy_position" }
+        },
+        "phase_arena_shapes": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/phase_arena_spec" }
+        },
+        "object_aoe_rules": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/object_aoe_rule" }
+        },
+        "mechanics": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/mechanic_strategy" }
+        }
+      }
+    },
+    "object_aoe_rule": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "enabled": { "type": "boolean", "default": true },
+        "object_name": { "type": "string" },
+        "name_match": { "type": "string", "enum": ["contains", "exact", "startswith"], "default": "contains" },
+        "data_id": { "type": "integer", "minimum": 0 },
+        "label": { "type": "string" },
+        "source": { "type": "string" },
+        "shape": {
+          "type": "string",
+          "enum": ["circle", "donut", "cone", "rect", "line", "cross", "donut_cone", "half_plane"],
+          "default": "circle"
+        },
+        "radius_m": { "type": "number", "minimum": 0 },
+        "inner_radius_m": { "type": "number", "minimum": 0 },
+        "fan_deg": { "type": "number", "minimum": 1, "maximum": 360 },
+        "half_width_m": { "type": "number", "minimum": 0 },
+        "duration_sec": { "type": "number", "minimum": 0 },
+        "color": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "live_floor_paint": { "type": "boolean", "default": true }
+      }
+    },
+    "phase_arena_spec": {
+      "type": "object",
+      "properties": {
+        "shape": { "type": "string", "enum": ["circle", "square", "rect"] },
+        "radius": { "type": "number", "minimum": 1 },
+        "width": { "type": "number", "minimum": 1 },
+        "depth": { "type": "number", "minimum": 1 },
+        "center_x": { "type": "number" },
+        "center_z": { "type": "number" }
+      }
+    },
+    "strategy_position": {
+      "type": "object",
+      "required": ["slot", "x", "z"],
+      "properties": {
+        "slot": { "type": "string" },
+        "label": { "type": "string" },
+        "role": { "type": "string" },
+        "job": { "type": "string" },
+        "x": { "type": "number" },
+        "z": { "type": "number" },
+        "color": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "note": { "type": "string" }
+      }
+    },
+    "mechanic_strategy": {
+      "type": "object",
+      "required": ["id", "label"],
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "enabled": { "type": "boolean", "default": true },
+        "time": { "type": "number" },
+        "duration": { "type": "number" },
+        "attached_to": { "$ref": "#/definitions/match_condition" },
+        "triggers": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/mechanic_trigger" }
+        },
+        "party_status_highlights": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/status_highlight" }
+        },
+        "advance_warning_sec": { "type": "number" },
+        "role": { "type": "string" },
+        "job": { "type": "string" },
+        "warning_text": { "type": "string" },
+        "callout": { "type": "string" },
+        "gimmick": {
+          "type": "string",
+          "enum": ["outer_ring", "inner_circle", "scatter", "stack", "cone", "half_plane", "two_side_cleave", "multi_aoe", "user_layout", "attack", "donut", "towers", "tank_swap", "spread"]
+        },
+        "safe_zone": { "$ref": "#/definitions/safe_zone_calculation" },
+        "positions": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "spread_positions": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/strategy_position" }
+        },
+        "object_markers": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/strategy_object_marker" }
+        },
+        "aoe_zones": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/strategy_aoe_zone" }
+        },
+        "branch_id": { "type": "string" },
+        "aoe_sequence": { "$ref": "#/definitions/aoe_sequence" },
+        "arena_shape": { "type": "string", "enum": ["circle", "square", "rect"] },
+        "arena_radius": { "type": "number", "minimum": 1 },
+        "arena_width": { "type": "number", "minimum": 1 },
+        "arena_depth": { "type": "number", "minimum": 1 },
+        "arena_center_x": { "type": "number" },
+        "arena_center_z": { "type": "number" },
+        "phase": { "type": "string" },
+        "disable_minimap": { "type": "boolean", "default": false },
+        "color": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "source_event_type": { "type": "string" },
+        "observed_count": { "type": "integer", "minimum": 0 },
+        "occurrence_seen_count": { "type": "integer", "minimum": 0 },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "time_jitter_seconds": { "type": "number", "minimum": 0 },
+        "occurrence_index": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "mechanic_trigger": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["cast", "action_used", "status_gain", "status_lose", "rotation", "hp_pct", "object_appear", "object_group"]
+        },
+        "match": { "$ref": "#/definitions/match_condition" },
+        "actor_name": { "type": "string" },
+        "actor_data_id": { "type": "integer" },
+        "object_count_min": { "type": "integer", "minimum": 1 },
+        "object_count_max": { "type": "integer", "minimum": 1 },
+        "object_window_sec": { "type": "number", "minimum": 0.1 },
+        "facing_deg": { "type": "number" },
+        "facing_tolerance_deg": { "type": "number", "minimum": 0 },
+        "hp_pct_below": { "type": "number", "minimum": 0, "maximum": 100 },
+        "hp_pct_above": { "type": "number", "minimum": 0, "maximum": 100 },
+        "dedup_sec": { "type": "number", "minimum": 0 }
+      }
+    },
+    "status_highlight": {
+      "type": "object",
+      "properties": {
+        "status_id": { "type": "integer" },
+        "status_name": { "type": "string" },
+        "color": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "badge": { "type": "string" }
+      }
+    },
+    "strategy_object_marker": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "x": { "type": "number" },
+        "z": { "type": "number" },
+        "color": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "shape": { "type": "string", "enum": ["circle", "square", "triangle", "diamond"] },
+        "note": { "type": "string" },
+        "waymark": { "type": "string", "enum": ["A", "B", "C", "D", "1", "2", "3", "4"] }
+      }
+    },
+    "object_effect_spec": {
+      "type": "object",
+      "properties": {
+        "data1": { "type": "integer", "minimum": 0 },
+        "data2": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "actor_matcher": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "name_match": { "type": "string", "enum": ["exact", "contains", "startswith", "regex"] },
+        "npc_name_id": { "type": "integer", "minimum": 0 },
+        "npc_base_id": { "type": "integer", "minimum": 0 },
+        "model_chara_id": { "type": "integer", "minimum": 0 },
+        "data_id": { "type": "integer", "minimum": 0 },
+        "object_id": { "type": "integer", "minimum": 0 },
+        "vfx_path": { "type": "string" },
+        "object_effect": { "$ref": "#/definitions/object_effect_spec" },
+        "alive_only": { "type": "boolean", "default": true },
+        "targetable_only": { "type": "boolean", "default": false },
+        "match_all": { "type": "boolean", "default": true }
+      }
+    },
+    "state_filter": {
+      "type": "object",
+      "properties": {
+        "hp_pct_min": { "type": "number", "minimum": 0, "maximum": 1 },
+        "hp_pct_max": { "type": "number", "minimum": 0, "maximum": 1 },
+        "distance_max_m": { "type": "number", "minimum": 0 },
+        "only_while_casting": { "type": "boolean" },
+        "require_status_id": { "type": "integer", "minimum": 0 },
+        "require_cast_id": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "rotation_source": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["Live", "CastSnapshot", "Override", "NorthAligned", "TowardsTarget"]
+        },
+        "override_deg": { "type": "number" }
+      }
+    },
+    "strategy_aoe_zone": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "shape": { "type": "string", "enum": ["circle", "donut", "cone", "rect", "line", "cross", "donut_cone", "half_plane"] },
+        "x": { "type": "number" },
+        "z": { "type": "number" },
+        "radius_m": { "type": "number", "minimum": 0 },
+        "inner_radius_m": { "type": "number", "minimum": 0 },
+        "rotation_deg": { "type": "number" },
+        "fan_deg": { "type": "number", "minimum": 1, "maximum": 360 },
+        "half_width_m": { "type": "number", "minimum": 0 },
+        "include_hitbox": { "type": "boolean", "default": false },
+        "rotation_offset_deg": { "type": "number" },
+        "color": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "is_danger": { "type": "boolean", "default": true },
+        "anchor": { "type": "string", "enum": ["static", "source_actor", "matched_object", "each_matched_object", "waymark"] },
+        "anchor_waymark": { "type": "string", "enum": ["A", "B", "C", "D", "1", "2", "3", "4"] },
+        "actor_matcher": { "$ref": "#/definitions/actor_matcher" },
+        "state_filter": { "$ref": "#/definitions/state_filter" },
+        "rotation_source": { "$ref": "#/definitions/rotation_source" },
+        "live_floor_paint": { "type": "boolean", "default": true },
+        "duration_sec": { "type": "number", "minimum": 0 },
+        "suppress_auto_aoe": { "type": "boolean", "default": false }
+      }
+    },
+    "aoe_sequence_step": {
+      "type": "object",
+      "properties": {
+        "delay_sec": { "type": "number", "minimum": 0 },
+        "zones": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/strategy_aoe_zone" }
+        },
+        "duration_sec": { "type": "number", "minimum": 0 },
+        "label": { "type": "string" }
+      }
+    },
+    "aoe_sequence": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "steps": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/aoe_sequence_step" }
+        },
+        "cancel_on_cast_cancel": { "type": "boolean", "default": true }
+      }
+    },
+    "timeline_note": {
+      "type": "object",
+      "required": ["id", "label"],
+      "properties": {
+        "id": { "type": "string" },
+        "time": { "type": "number" },
+        "label": { "type": "string" },
+        "duration": { "type": "number" },
+        "role": { "type": "string" },
+        "job": { "type": "string" },
+        "color": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "attached_to": { "$ref": "#/definitions/match_condition" },
+        "icon": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "array", "items": { "type": "string" } }
+          ]
+        },
+        "advance_warning_sec": { "type": "number" },
+        "warning_text": { "type": "string" }
+      }
+    },
+    "match_condition": {
+      "type": "object",
+      "properties": {
+        "cast_id": { "type": "string" },
+        "cast_name": { "type": "string" },
+        "status_id": { "type": "integer" },
+        "status_name": { "type": "string" },
+        "action_id": { "type": "string" },
+        "action_name": { "type": "string" },
+        "source": { "type": "string" },
+        "source_id": { "type": "integer" },
+        "target": { "$ref": "#/definitions/target" },
+        "duration_range": {
+          "type": "object",
+          "properties": {
+            "min": { "type": "number" },
+            "max": { "type": "number" }
+          }
+        },
+        "stacks": {},
+        "hp_pct": {},
+        "actor": { "type": "string" },
+        "time": { "type": "number" },
+        "tolerance": { "type": "number", "default": 2.0 }
+      }
+    },
     "trigger": {
       "type": "object",
       "required": ["id", "type", "actions"],
@@ -287,6 +704,7 @@
             "proximity_feedback",
             "set_variable",
             "chain_trigger",
+            "store_position",
             "arena_view"
           ]
         },
@@ -346,7 +764,7 @@
         "trigger_id": { "type": "string", "description": "chain_trigger用、連鎖発動するトリガーID" },
         "gimmick": {
           "type": "string",
-          "enum": ["outer_ring", "inner_circle", "scatter", "stack", "cone"],
+          "enum": ["outer_ring", "inner_circle", "scatter", "stack", "cone", "half_plane", "two_side_cleave", "multi_aoe", "user_layout", "attack", "donut", "towers", "tank_swap", "spread"],
           "description": "arena_view 用、表示するギミックタイプ"
         },
         "callout": { "type": "string", "description": "arena_view 用、画面下部に表示する安置コール文字列" },
@@ -365,6 +783,30 @@
           "type": "number",
           "minimum": 1,
           "description": "arena_view 用、ミニマップ全体に対応するアリーナ半径（メートル、デフォルト 20）。プレイヤー位置プロットに使用"
+        },
+        "arena_shape": { "type": "string", "enum": ["circle", "square", "rect"] },
+        "arena_width": { "type": "number", "minimum": 1 },
+        "arena_depth": { "type": "number", "minimum": 1 },
+        "arena_center_x": { "type": "number" },
+        "arena_center_z": { "type": "number" },
+        "strategy_profile_id": { "type": "string" },
+        "mechanic_id": { "type": "string" },
+        "strategy_positions": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/strategy_position" }
+        },
+        "object_markers": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/strategy_object_marker" }
+        },
+        "aoe_zones": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/strategy_aoe_zone" }
+        },
+        "aoe_sequence": { "$ref": "#/definitions/aoe_sequence" },
+        "party_status_highlights": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/status_highlight" }
         }
       }
     },
@@ -402,6 +844,7 @@
             "angle": { "type": "number" },
             "distance": { "type": "number" },
             "origin": { "type": "string" },
+            "marker": { "type": "string" },
             "rotation": { "type": "number" },
             "telegraph_source": { "type": "string" },
             "status_id": { "type": "integer" },

@@ -107,6 +107,9 @@ public sealed class TriggerEngine : IDisposable
 
             _cooldowns.MarkFired(trigger.Id, ev.Timestamp);
 
+            _log.Information("[FfxivEchoes] Trigger 発火: {Id} ({Name}) zone={Zone} via {EventType}",
+                trigger.Id, trigger.Name ?? "—", _currentZone, ev.GetType().Name);
+
             // P1: trigger.set_variable があれば実行
             if (trigger.SetVariable is { Name: { Length: > 0 } sv } && _variables is not null)
             {
