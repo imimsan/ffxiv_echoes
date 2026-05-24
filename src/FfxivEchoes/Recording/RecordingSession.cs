@@ -19,6 +19,7 @@ public sealed class RecordingSession : IDisposable
     private readonly DateTimeOffset _startTime;
     private readonly string _filePath;
     private readonly IPluginLog _log;
+    private readonly Dictionary<uint, string> _partyIdToName;
     private StreamWriter? _writer;
     private int _eventCount;
 
@@ -33,6 +34,18 @@ public sealed class RecordingSession : IDisposable
         _filePath = filePath;
         _startTime = startTime;
         _log = log;
+
+        // status events の source 名解決マップ。EventSerializer に渡すことで PC self-buff /
+        // PC DoT の source_id → name 解決ができ、aggregation 段階の party filter（名前マッチ）が
+        // 確実に PC 由来 status を除外できるようになる。
+        _partyIdToName = new Dictionary<uint, string>(party.Count);
+        foreach (var m in party)
+        {
+            if (m.ObjectId is { } id && id != 0 && !string.IsNullOrEmpty(m.Name))
+            {
+                _partyIdToName[id] = m.Name;
+            }
+        }
 
         Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
 
@@ -60,7 +73,7 @@ public sealed class RecordingSession : IDisposable
 
         try
         {
-            var line = EventSerializer.Serialize(ev, _startTime);
+            var line = EventSerializer.Serialize(ev, _startTime, _partyIdToName);
             _writer.WriteLine(line);
             _eventCount++;
         }

@@ -29,6 +29,17 @@ public sealed class DebugChatEcho : IDisposable
 
     private void OnEvent(IGameEvent ev)
     {
+        // EchoTriggerFires が ON なら DebugMode に関わらず TriggerFired のみ常時表示
+        // （音声 / オーバーレイが鳴らない時の動作確認用フォールバック）
+        if (ev is TriggerFiredEvent tfe && _configuration.EchoTriggerFires && !_configuration.DebugMode)
+        {
+            var rel2 = _combatClock.RelativeSecondsAt(ev.Timestamp);
+            var prefix2 = rel2 is { } r2 ? $"[t={r2:0.00}s]" : "[非戦闘]";
+            _chatGui.Print($"[Echoes] {prefix2} ⚡ Trigger: {tfe.TriggerId}" +
+                (tfe.TriggerName is { } n2 ? $" ({n2})" : string.Empty));
+            return;
+        }
+
         if (!_configuration.DebugMode)
         {
             return;
@@ -45,6 +56,7 @@ public sealed class DebugChatEcho : IDisposable
             CastStartedEvent x => $"キャスト開始 {x.SourceName} → {x.CastActionName} ({x.CastTime:0.0}s)",
             CastCompletedEvent x => $"キャスト完了 {x.SourceName} → {x.CastActionName}",
             CastCanceledEvent x => $"キャスト中断 {x.SourceName} → {x.CastActionName}",
+            ActionUsedEvent x => $"Action {x.SourceName} -> {x.ActionName}" + (x.IsAutoAttack ? " (AA)" : string.Empty),
             StatusGainedEvent x => $"Status+ {x.TargetName} ← {x.StatusName}"
                 + (x.Stacks > 0 ? $" x{x.Stacks}" : string.Empty)
                 + (x.RemainingTime > 0 ? $" ({x.RemainingTime:0.0}s)" : string.Empty),

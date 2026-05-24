@@ -16,4 +16,5 @@ public sealed record SafeZoneContext(
     IReadOnlyList<IPlayerCharacter> Party,
     IReadOnlyDictionary<string, Vector3> FieldMarkers,
     IBattleChara? CastActor,
-    IGameEvent? LastEvent);
+    IGameEvent? LastEvent,
+    IReadOnlyList<IBattleNpc> Bosses);

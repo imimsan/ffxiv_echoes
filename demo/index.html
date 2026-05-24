@@ -40,6 +40,8 @@
             <div class="panel game-area">
                 <!-- 次に来るイベントリスト（カウントダウン + アイコン） -->
                 <div class="upcoming-list" id="upcoming-list"></div>
+                <!-- アリーナ図（ギミック発生中のみ表示） -->
+                <div class="arena-view" id="arena-view"></div>
                 <!-- タイマーバー一覧 -->
                 <div class="timer-bars" id="timer-bars"></div>
             </div>
@@ -77,9 +79,11 @@
                     <li><span class="legend-dot" style="background:#FBBF24"></span> Trigger 発火</li>
                     <li><span class="legend-dot" style="background:#4ADE80"></span> SyncPoint</li>
                     <li><span class="legend-dot" style="background:#FCD34D"></span> Note（軽減/LB 等）</li>
+                    <li><span class="legend-dot" style="background:#F87171"></span> アリーナ図（外周/散開/集合などの安置コール）</li>
                 </ul>
                 <div class="muted small">
                     画面左上：<b>次に来るイベント</b>（アイコン + 残り秒数）。5 秒以内で黄色く点滅。<br>
+                    画面右上：<b>アリーナ図</b>（ギミック発生中のみ。安置を緑、危険を赤で表示）。<br>
                     下のライブタイムライン：左 = 過去 10 秒、右 = 未来 30 秒、中央 = 現在。
                 </div>
             </div>
@@ -90,6 +94,7 @@
                     <li><b>戦闘開始</b> でクロックがスタート</li>
                     <li>左上の「次に来るイベント」にアイコン + カウントダウンが並ぶ（近いものほど上、5 秒以内で点滅）</li>
                     <li>シミュレートされたボスキャストが時刻通りに走る</li>
+                    <li>ボスキャストに <code>gimmick</code> 定義があれば、右上にアリーナ図が出る（外周/中央/散開/集合/コーン）</li>
                     <li>マッチするトリガーが発火 → TTS + overlay_text + timer_bar</li>
                     <li>Note は <code>advance_warning_sec</code> 秒前にも通知</li>
                     <li>Role を変えると、role 指定のあるノートが半透明（自分宛てでない）になる</li>

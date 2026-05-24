@@ -131,3 +131,8 @@ $RECYCLE.BIN/
 # =============================================================================
 .claude/worktrees/
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
+
+# Playwright MCP / browser automation transient artifacts
+.playwright-mcp/
+demo-*.png

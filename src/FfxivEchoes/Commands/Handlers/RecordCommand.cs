@@ -50,9 +50,7 @@ public sealed class RecordCommand : ICommandHandler
         _chatGui.Print($"[FFXIV Echoes] 録画モード: {ModeLabel(mode.Value)}");
         if (mode.Value == RecordingMode.Auto)
         {
-            _chatGui.Print(
-                "  Auto は M5 でトリガー定義の auto_settings.auto_record を参照するように切り替わる予定です。" +
-                "現状は record OFF と同じ挙動（戦闘開始時に何もしません）。");
+            _chatGui.Print("  Auto は現在ゾーンの auto_settings.auto_record に従います。");
         }
     }
 

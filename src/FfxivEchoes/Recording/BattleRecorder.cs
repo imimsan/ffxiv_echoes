@@ -140,6 +140,50 @@ public sealed class BattleRecorder : IDisposable
             // OnCombatEnd で既に書き込み済み
             return;
         }
+        // 内部 / 派生イベントは録画に書かない：
+        //   TriggerFiredEvent ─ MechanicTriggerService / TriggerEngine からの fire 通知（内部信号）
+        //   ObjectGroupAppearedEvent ─ MechanicTriggerService が一致を表現するための合成イベント
+        // これらは EventSerializer に case が無いので、書いても "type=unknown" のゴミになる。
+        // 元になる ObjectAppearedEvent / cast_start などは別途記録されているので情報損失なし。
+        if (ev is TriggerFiredEvent or ObjectGroupAppearedEvent)
+        {
+            return;
+        }
+        // PC（プレイヤーキャラクター）の HP 変化は録画ファイルに書かない：
+        //   攻略 mechanic 候補としては「PT メンバー名 (hp_change)」がノイズとして混入するだけ。
+        //   RaidWideDetector は event bus 経由で別途受信している（ここでは録画への保存だけスキップ）。
+        if (ev is HpChangedEvent hpEv && hpEv.IsPlayer)
+        {
+            return;
+        }
+        // PC およびその召喚物（クイーン / カーバンクル / 妖精 等）の action_used は
+        // 録画ファイルに書かない：タイムライン / mechanic 下書きに「ブリフルジェンス」
+        // 「クイーン・ローラーダッシュ」等の PC スキルが大量に漏れる原因。
+        // event bus 経由は通すので trigger / capture 系ロジックには影響なし。
+        if (ev is ActionUsedEvent actEv && actEv.IsPlayer)
+        {
+            return;
+        }
+        // PC ジョブステータス（グリットスタンス / ハンマーコンボ実行可 / 忍隠 等）は
+        // Lumina Status.ClassJobCategory 判定で IsPlayer=true が立つ → 録画書き込み skip。
+        // ボス debuff（All Classes / 未割当て）は IsPlayer=false で通常通り記録される。
+        if (ev is StatusGainedEvent sgEv && sgEv.IsPlayer)
+        {
+            return;
+        }
+        if (ev is StatusLostEvent slEv && slEv.IsPlayer)
+        {
+            return;
+        }
+        if (ev is StatusUpdatedEvent suEv && suEv.IsPlayer)
+        {
+            return;
+        }
+        // PC 召喚物（フェアリー・エオス / カーバンクル / クイーン 等）の出現は録画に書かない。
+        if (ev is ObjectAppearedEvent oaEv && oaEv.IsPlayer)
+        {
+            return;
+        }
         // CombatStartedEvent は録画ファイルの先頭イベントとして書きたいので通す
         _session.WriteEvent(ev);
     }
@@ -169,13 +213,15 @@ public sealed class BattleRecorder : IDisposable
             if (isSelf)
             {
                 seenSelf = true;
-                name = "自分";
+                name = localPlayer?.Name.TextValue ?? name;
             }
             party.Add(new PartyMemberInfo(
                 Name: name,
                 Job: job.Abbreviation.ToString(),
                 Role: ResolveRoleName(job),
-                SubRole: null));
+                SubRole: null,
+                ObjectId: unchecked((uint)member.EntityId),
+                IsSelf: isSelf));
         }
 
         if (!seenSelf && localPlayer is not null)
@@ -190,10 +236,12 @@ public sealed class BattleRecorder : IDisposable
     {
         var job = localPlayer.ClassJob.Value;
         return new PartyMemberInfo(
-            Name: "自分",
+            Name: localPlayer.Name.TextValue,
             Job: job.Abbreviation.ToString(),
             Role: ResolveRoleName(job),
-            SubRole: null);
+            SubRole: null,
+            ObjectId: localPlayer.EntityId,
+            IsSelf: true);
     }
 
     private static string ResolveRoleName(ClassJob job)

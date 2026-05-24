@@ -33,6 +33,12 @@ public sealed class TriggerStore
     /// <summary>最後の <see cref="Reload"/> 結果が完了した時刻。</summary>
     public DateTimeOffset? LastReloadedAt { get; private set; }
 
+    /// <summary>
+    /// <see cref="Reload"/> が完了するたびに増える単調カウンタ。
+    /// UI が外部保存・削除を検知して作業コピーを再同期するために使う。
+    /// </summary>
+    public long ReloadVersion { get; private set; }
+
     /// <summary>現在ロード済みのファイル数（成功のみ）。</summary>
     public int LoadedFileCount
     {
@@ -125,6 +131,29 @@ public sealed class TriggerStore
                 dupes.Add(zone);
             }
 
+            // マイグレーション：旧版 StrategyDraftGenerator が自動生成していた
+            // 「何も表示/通知しない object_appear / hp_change ノイズ」だけを無効化。
+            // AoE/マーカー/通知など意味のある手動 mechanic は reload のたびに潰してはいけない。
+            var disabledAutoNoise = 0;
+            foreach (var profile in r.File.StrategyProfiles)
+            {
+                foreach (var mech in profile.Mechanics)
+                {
+                    if (!mech.Enabled) continue;
+                    if (IsLegacyAutoNoiseMechanic(mech))
+                    {
+                        mech.Enabled = false;
+                        disabledAutoNoise++;
+                    }
+                }
+            }
+            if (disabledAutoNoise > 0)
+            {
+                _log.Information(
+                    "[FfxivEchoes] {Zone}: object_appear/hp_change 由来の旧自動生成 mechanic を {N} 件無効化（タイムライン汚染防止）",
+                    zone, disabledAutoNoise);
+            }
+
             newByZone[zone] = r.File;
             newZoneToFile[zone] = r.FilePath;
         }
@@ -135,6 +164,7 @@ public sealed class TriggerStore
             _zoneToFilePath = newZoneToFile;
             _lastResults = new List<TriggerLoadResult>(results);
             LastReloadedAt = DateTimeOffset.UtcNow;
+            ReloadVersion++;
         }
 
         var loaded = newByZone.Count;
@@ -198,6 +228,48 @@ public sealed class TriggerStore
         return path;
     }
 
+    /// <summary>
+    /// 指定ゾーンの TriggerFile（JSON）を物理削除する。録画ファイルや backup は触らない。
+    /// バックアップは事前に取得する。リロードまで実行。
+    /// </summary>
+    public bool DeleteZone(string zone)
+    {
+        var path = GetFilePathForZone(zone);
+        if (path is null)
+        {
+            return false;
+        }
+        // 削除前に最終バックアップを残しておく
+        if (_backupManager is not null)
+        {
+            var existing = GetByZone(zone);
+            if (existing is not null)
+            {
+                try
+                {
+                    _backupManager.CreateBackup(zone, existing);
+                }
+                catch (Exception ex)
+                {
+                    _log.Warning(ex, "[FfxivEchoes] 削除前バックアップに失敗（削除は続行）：{Zone}", zone);
+                }
+            }
+        }
+
+        try
+        {
+            File.Delete(path);
+            _log.Information("[FfxivEchoes] トリガー定義を削除：{Path}", path);
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "[FfxivEchoes] トリガー定義の削除に失敗：{Path}", path);
+            throw;
+        }
+        Reload();
+        return true;
+    }
+
     /// <summary>バックアップファイルから現在の定義を復元する（バックアップ取得 → 上書き → リロード）。</summary>
     public bool RestoreFromBackup(string zone, string backupPath)
     {
@@ -214,6 +286,27 @@ public sealed class TriggerStore
         SaveZone(zone, loaded);
         _log.Information("[FfxivEchoes] バックアップから復元：{Zone} ← {Path}", zone, backupPath);
         return true;
+    }
+
+    public static bool IsLegacyAutoNoiseMechanic(MechanicStrategy mech)
+    {
+        var src = mech.SourceEventType;
+        if (!string.Equals(src, "object_appear", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(src, "hp_change", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return string.IsNullOrWhiteSpace(mech.Callout) &&
+               string.IsNullOrWhiteSpace(mech.WarningText) &&
+               string.IsNullOrWhiteSpace(mech.Gimmick) &&
+               mech.SafeZone is null &&
+               mech.Triggers.Count == 0 &&
+               mech.SpreadPositions.Count == 0 &&
+               mech.ObjectMarkers.Count == 0 &&
+               mech.AoeZones.Count == 0 &&
+               mech.AoeSequence is null &&
+               mech.PartyStatusHighlights.Count == 0;
     }
 
     private static string Sanitize(string s)

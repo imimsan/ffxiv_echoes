@@ -1,0 +1,280 @@
+/* FFXIV Echoes — Replay Inspector 専用スタイル
+ * style.css のテーマ変数 / .panel / .muted を流用する前提。
+ */
+
+.replay-layout {
+    display: grid;
+    grid-template-columns: 360px 1fr;
+    gap: 16px;
+    padding: 16px;
+    max-width: 1600px;
+    margin: 0 auto;
+}
+
+@media (max-width: 1100px) {
+    .replay-layout {
+        grid-template-columns: 1fr;
+    }
+}
+
+.replay-left, .replay-right {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+}
+
+.replay-right {
+    min-height: 600px;
+}
+
+.drop-zone {
+    border: 2px dashed var(--border);
+    border-radius: 6px;
+    padding: 18px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+}
+
+.drop-zone.dragover {
+    border-color: var(--accent);
+    background: rgba(96, 165, 250, 0.08);
+    color: var(--accent);
+}
+
+.drop-zone input[type="file"] {
+    display: none;
+}
+
+.transport {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.transport button {
+    min-width: 38px;
+    padding: 6px 10px;
+    font-size: 14px;
+}
+
+.transport .play-btn {
+    min-width: 56px;
+}
+
+.time-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 13px;
+    margin-top: 8px;
+}
+
+.time-row .now {
+    color: var(--accent-2);
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.time-row .total {
+    color: var(--muted);
+}
+
+#seek-bar {
+    flex: 1;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 6px;
+    background: var(--bg-3);
+    border-radius: 3px;
+    outline: none;
+    cursor: pointer;
+}
+
+#seek-bar::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+}
+
+#seek-bar::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+    border: none;
+}
+
+.speed-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    font-size: 12px;
+}
+
+.active-aoe-list {
+    max-height: 260px;
+    overflow-y: auto;
+    font-size: 12px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    background: #0a0d12;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px;
+}
+
+.active-aoe-list .aoe-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 6px;
+    padding: 3px 4px;
+    border-left: 3px solid var(--accent);
+    margin-bottom: 3px;
+    background: rgba(96, 165, 250, 0.05);
+}
+
+.active-aoe-list .aoe-row.predict {
+    border-left-color: #FFA500;
+    background: rgba(255, 165, 0, 0.05);
+}
+
+.active-aoe-list .aoe-row.actor {
+    border-left-color: #F87171;
+    background: rgba(248, 113, 113, 0.05);
+}
+
+.active-aoe-list .aoe-row .id {
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.active-aoe-list .aoe-row .meta {
+    color: var(--muted);
+    font-size: 10px;
+}
+
+.active-aoe-list .aoe-row .remaining {
+    color: var(--accent-2);
+}
+
+.event-log {
+    max-height: 240px;
+    overflow-y: auto;
+    font-size: 11px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    background: #0a0d12;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 8px;
+}
+
+.event-log .ev-row {
+    display: grid;
+    grid-template-columns: 56px 110px 110px 1fr;
+    gap: 6px;
+    padding: 1px 0;
+    line-height: 1.5;
+    color: var(--text);
+}
+
+.event-log .ev-row.future {
+    opacity: 0.45;
+}
+
+.event-log .ev-row .t {
+    color: var(--muted);
+    text-align: right;
+}
+
+.event-log .ev-row .kind {
+    color: var(--accent);
+}
+
+.event-log .ev-row .kind.draw_aoe { color: #FBBF24; }
+.event-log .ev-row .kind.remove_aoe { color: #94a3b8; }
+.event-log .ev-row .kind.aoe_skipped { color: #F87171; }
+.event-log .ev-row .kind.cast_start { color: #60A5FA; }
+.event-log .ev-row .kind.cast_complete { color: #60A5FA; opacity: 0.6; }
+.event-log .ev-row .kind.object_appear { color: #4ADE80; }
+
+.skip-reasons {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11px;
+    background: #0a0d12;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 8px;
+}
+
+.skip-reasons .service {
+    color: var(--accent);
+    margin-top: 4px;
+    font-weight: 600;
+}
+
+.skip-reasons .reason {
+    padding-left: 10px;
+    color: var(--text);
+}
+
+.skip-reasons .reason .count {
+    color: var(--warn);
+    margin-left: 6px;
+}
+
+.skip-reasons .empty {
+    color: var(--muted);
+    font-style: italic;
+}
+
+.arena-stage {
+    background: linear-gradient(135deg, #0a0d12, #1a1d28);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 520px;
+}
+
+.arena-stage svg {
+    width: 500px;
+    height: 500px;
+    max-width: 100%;
+    max-height: 540px;
+    display: block;
+}
+
+.meta-row {
+    display: flex;
+    gap: 12px;
+    font-size: 11px;
+    color: var(--muted);
+    flex-wrap: wrap;
+    margin-top: 4px;
+}
+
+.meta-row .meta-kv {
+    display: inline-block;
+}
+
+.meta-row .meta-kv b {
+    color: var(--text);
+    font-weight: 600;
+    margin-left: 4px;
+}

@@ -1,0 +1,30 @@
+{
+  "_comment": "手書き placeholder。実機で /echoes dump-actions 月の底 を実行して上書きすること。値は設計書 §5.2 から推測した値で、Lumina の真の値とは異なる可能性が高い。",
+  "zone": "月の底",
+  "generated_at": "2026-05-24T00:00:00Z",
+  "source_action_count": 2,
+  "actions": [
+    {
+      "id": "0x67BF",
+      "id_dec": 26559,
+      "name": "パラデイグマ",
+      "cast_type": 1,
+      "effect_range": 0.0,
+      "x_axis_modifier": 0.0,
+      "omen": null,
+      "cast_time_ms": 5000,
+      "is_player_action": false
+    },
+    {
+      "id": "0x179C",
+      "id_dec": 6044,
+      "name": "アルゲドン",
+      "cast_type": 7,
+      "effect_range": 6.0,
+      "x_axis_modifier": 2.0,
+      "omen": "53",
+      "cast_time_ms": 0,
+      "is_player_action": false
+    }
+  ]
+}
