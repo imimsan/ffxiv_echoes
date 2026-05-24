@@ -325,22 +325,6 @@ public sealed class AutoTelegraphService : IDisposable
             return;
         }
 
-        // 演出系アクション除外：target=null かつ target_world が placeholder 座標
-        // (≈0, *, ≈0) の action は AoE 起点不明の演出系（月の底の「ケラノウス・エイドロン」
-        // 0x67E1 等：ゾディアーク add が「ケツァクウァトル」名で発動）。
-        // FromCaster=true で source 中心に描画すると ゾディアーク add の位置
-        // (100, 0, 79) = アリーナ中央付近に「正体不明のドーナツ」が誤発火するため
-        // 入口で skip する。caster 中心の正規 AoE は target_world にキャスター座標が
-        // 入るため本フィルタに引っかからない。
-        if ((ev.TargetId is null or 0) &&
-            ev.TargetWorld is { } tw &&
-            MathF.Abs(tw.X) < 0.1f && MathF.Abs(tw.Z) < 0.1f)
-        {
-            _log.Debug("[FfxivEchoes] AutoTelegraph(ActionUsed): skip 無効座標 action {Name} (id={Id:X4}) src={Src}",
-                ev.ActionName, ev.ActionId, ev.SourceId);
-            return;
-        }
-
         var file = _store.GetByZone(_currentZone);
         var isFriendly = ev.IsPlayer || IsFriendlyActor(ev.SourceId);
         var isRaidWide = AutoSafeCallPlanner.IsRaidWide(file, ev.ActionId, ev.ActionName);
@@ -359,6 +343,24 @@ public sealed class AutoTelegraphService : IDisposable
 
         // Action lookup から AoE 情報を引く（cast 無しの瞬間アクションでも EffectRange は取得可能）
         var aoe = AoeResolver.Resolve(_actionLookup, ev.ActionId, _log);
+
+        // placeholder target_world (≈0,*,≈0) の演出系判定。月の底「ケラノウス・エイドロン」
+        // (0x67E1 等：ゾディアーク add が変身体で発動) は target=null かつ
+        // target_world=(-0.015,-0.015,-0.015) として記録される。
+        // 旧実装はここを早期 skip していたが、これだと FromCaster 型の正規 self-target AoE も
+        // 巻き込んでしまう。aoe.FromCaster=true かつ source actor がアリーナ内なら
+        // source 中心で描画継続する経路を追加（T1 §4 優先度3）。
+        if (HasPlaceholderActionUsedTarget(ev))
+        {
+            if (aoe is not { FromCaster: true })
+            {
+                _log.Debug("[FfxivEchoes] AutoTelegraph(ActionUsed): skip 演出系 action {Name} (id={Id:X4}) src={Src} (FromCaster=false or no AoE)",
+                    ev.ActionName, ev.ActionId, ev.SourceId);
+                return;
+            }
+            // FromCaster: 下流の ResolveAoeWorldPosition で sourceWorld が選ばれる。
+            // source 位置の妥当性は下流の ShouldDrawActionUsedAoeAtWorldPosition + arena 内チェックで担保。
+        }
 
         var decision = AttackDisplayPolicy.Decide(
             autoSettings,
@@ -470,6 +472,19 @@ public sealed class AutoTelegraphService : IDisposable
 
     public static bool ShouldDrawActionUsedAoeAtWorldPosition(Vector3? worldPosition)
         => worldPosition is not null;
+
+    /// <summary>
+    /// target=null かつ target_world ≈ (0,*,0) の演出系 placeholder を判定する。
+    /// 月の底ケラノウス・エイドロン (0x67E1) などのゾディアーク add 変身体由来 action は
+    /// この pattern で記録される。0.1m 閾値は target_x = -0.015 (= 0 に丸める前の符号付き
+    /// placeholder) も拾うため。
+    /// </summary>
+    public static bool HasPlaceholderActionUsedTarget(ActionUsedEvent ev)
+    {
+        if (ev.TargetId is not (null or 0)) return false;
+        if (ev.TargetWorld is not { } tw) return false;
+        return MathF.Abs(tw.X) < 0.1f && MathF.Abs(tw.Z) < 0.1f;
+    }
 
     private Vector3? ResolveObjectWorld(uint entityOrObjectId)
     {

@@ -183,6 +183,8 @@ var tests = new List<(string Name, Action Body)>
     ("BuildSpawnId is stable across runs (FNV-1a not String.GetHashCode)", BuildSpawnId_StableAcrossRuns),
     ("IsUsableObjectAoePosition rejects out-of-arena placeholders (T1 §3 補足1)", IsUsableObjectAoePosition_RejectsOutOfArenaPlaceholders),
     ("IsUsableObjectAoePosition keeps valid positions near arena edge", IsUsableObjectAoePosition_KeepsValidEdgePositions),
+    ("HasPlaceholderActionUsedTarget detects -0.015 placeholder (T1 §2 症状B)", HasPlaceholderActionUsedTarget_DetectsPlaceholder),
+    ("HasPlaceholderActionUsedTarget passes valid targets", HasPlaceholderActionUsedTarget_PassesValidTargets),
 };
 
 var failed = 0;
@@ -4244,6 +4246,61 @@ static void IsUsableObjectAoePosition_KeepsValidEdgePositions()
     True(
         AddObjectAoeService.IsUsableObjectAoePosition(slightlyOutPos, arenaCenter, arenaRadiusM: 20.0),
         "わずかにアリーナ外 (1.25 倍) は valid 扱い");
+}
+
+static void HasPlaceholderActionUsedTarget_DetectsPlaceholder()
+{
+    // T1 §2 症状 B: 月の底ケラノウス・エイドロン (0x67E1) は target=null かつ
+    // target_world=(-0.015,-0.015,-0.015) として記録される。
+    var placeholderEv = new ActionUsedEvent(
+        Timestamp: DateTimeOffset.UtcNow,
+        SourceId: 1073794237,
+        SourceName: "ケツァクウァトル",
+        ActionId: 0x67E1,
+        ActionName: "ケラノウス・エイドロン",
+        TargetId: null,
+        IsAutoAttack: false,
+        TargetWorld: new Vector3(-0.015f, -0.015f, -0.015f));
+    True(AutoTelegraphService.HasPlaceholderActionUsedTarget(placeholderEv),
+        "-0.015 placeholder は検出される");
+
+    // (0,0,0) もキャッチ
+    var zeroEv = placeholderEv with { TargetWorld = new Vector3(0f, 0f, 0f) };
+    True(AutoTelegraphService.HasPlaceholderActionUsedTarget(zeroEv),
+        "原点 placeholder も検出される");
+}
+
+static void HasPlaceholderActionUsedTarget_PassesValidTargets()
+{
+    // target_id があれば placeholder ではない
+    var hasTarget = new ActionUsedEvent(
+        Timestamp: DateTimeOffset.UtcNow,
+        SourceId: 1001, SourceName: "Boss",
+        ActionId: 0x1234, ActionName: "Normal",
+        TargetId: 2001, IsAutoAttack: false,
+        TargetWorld: new Vector3(0f, 0f, 0f));
+    False(AutoTelegraphService.HasPlaceholderActionUsedTarget(hasTarget),
+        "target_id ありは placeholder と判定しない");
+
+    // target_world が有効座標
+    var validWorld = new ActionUsedEvent(
+        Timestamp: DateTimeOffset.UtcNow,
+        SourceId: 1001, SourceName: "Boss",
+        ActionId: 0x1234, ActionName: "Normal",
+        TargetId: null, IsAutoAttack: false,
+        TargetWorld: new Vector3(95f, 0f, 105f));
+    False(AutoTelegraphService.HasPlaceholderActionUsedTarget(validWorld),
+        "有効 target_world は placeholder と判定しない");
+
+    // TargetWorld 自体が null
+    var noWorld = new ActionUsedEvent(
+        Timestamp: DateTimeOffset.UtcNow,
+        SourceId: 1001, SourceName: "Boss",
+        ActionId: 0x1234, ActionName: "Normal",
+        TargetId: null, IsAutoAttack: false,
+        TargetWorld: null);
+    False(AutoTelegraphService.HasPlaceholderActionUsedTarget(noWorld),
+        "TargetWorld null は placeholder と判定しない（snapshot 失敗ケース）");
 }
 
 static void Equal<T>(T expected, T actual, string label)
