@@ -181,6 +181,8 @@ var tests = new List<(string Name, Action Body)>
     ("InMemoryActionLookup exposes ActionGeometry via IActionLookup", InMemoryActionLookup_ExposesActionGeometry),
     ("BuildSpawnId distinguishes object name and trigger event (T1 dup fix)", BuildSpawnId_DistinguishesObjectNameAndTriggerEvent),
     ("BuildSpawnId is stable across runs (FNV-1a not String.GetHashCode)", BuildSpawnId_StableAcrossRuns),
+    ("IsUsableObjectAoePosition rejects out-of-arena placeholders (T1 §3 補足1)", IsUsableObjectAoePosition_RejectsOutOfArenaPlaceholders),
+    ("IsUsableObjectAoePosition keeps valid positions near arena edge", IsUsableObjectAoePosition_KeepsValidEdgePositions),
 };
 
 var failed = 0;
@@ -4201,6 +4203,47 @@ static void BuildSpawnId_StableAcrossRuns()
     var id2 = PredictedObjectSpawnLearner.BuildSpawnId("0x67BF", 0x3834, "ケツァクウァトル", "cast_start");
     Equal(id1, id2, "id is stable for same input");
     True(id1.Length >= "spawn_67BF_3834_XXXX".Length, "id includes 4-hex name hash");
+}
+
+static void IsUsableObjectAoePosition_RejectsOutOfArenaPlaceholders()
+{
+    // 月の底ゾディアーク add の戦闘開始時 placeholder 位置を再現:
+    //   actor 位置 = (100, 0, 79), arena center = (100.7, 0, 102.1), arena radius = 20m
+    //   distance = sqrt(0.7² + 23.1²) ≈ 23.1m > 20 * 1.5 = 30m… いや 23.1 < 30
+    // → 23.1 < 30 なので「アリーナ外」判定にはならない。実テストはより明確な外側で。
+    var arenaCenter = new Vector3(100.7f, 0f, 102.1f);
+    var placeholderPos = new Vector3(100f, 0f, 50f);  // 中心から ~52m → arena 20m の 2.6 倍
+
+    True(
+        AddObjectAoeService.IsUsableObjectAoePosition(placeholderPos, arenaCenter, arenaRadiusM: null),
+        "arenaRadiusM=null だと既存ロジック通り valid 扱い");
+    False(
+        AddObjectAoeService.IsUsableObjectAoePosition(placeholderPos, arenaCenter, arenaRadiusM: 20.0),
+        "arenaRadiusM=20 だと明らかにアリーナ外 (52m) を placeholder として除外");
+
+    // 月の底実ケース：(100, 79) は中心 (100.7, 102.1) から ~23m
+    var actualMonoBottomPlaceholder = new Vector3(100f, 0f, 79f);
+    var actualMonoBottomCenter = new Vector3(100.7f, 0f, 102.1f);
+    False(
+        AddObjectAoeService.IsUsableObjectAoePosition(actualMonoBottomPlaceholder, actualMonoBottomCenter, arenaRadiusM: 15.0),
+        "実 placeholder 位置はアリーナ半径 15m を超える距離なので除外 (15 * 1.5 = 22.5 < 23.1)");
+}
+
+static void IsUsableObjectAoePosition_KeepsValidEdgePositions()
+{
+    // アリーナ端 (radius ぎりぎり) の actor は正常扱いされる
+    var arenaCenter = new Vector3(100f, 0f, 100f);
+    var edgePos = new Vector3(118f, 0f, 100f);  // 中心から 18m、半径 20m の内側
+
+    True(
+        AddObjectAoeService.IsUsableObjectAoePosition(edgePos, arenaCenter, arenaRadiusM: 20.0),
+        "アリーナ内の actor は valid");
+
+    // 1.5 倍の係数までは許容（撤退時の予測 actor がアリーナ外でも一部正常）
+    var slightlyOutPos = new Vector3(125f, 0f, 100f);  // 中心から 25m、半径 20m の 1.25 倍
+    True(
+        AddObjectAoeService.IsUsableObjectAoePosition(slightlyOutPos, arenaCenter, arenaRadiusM: 20.0),
+        "わずかにアリーナ外 (1.25 倍) は valid 扱い");
 }
 
 static void Equal<T>(T expected, T actual, string label)

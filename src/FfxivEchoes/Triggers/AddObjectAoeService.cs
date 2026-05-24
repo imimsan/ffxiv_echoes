@@ -550,7 +550,7 @@ public sealed class AddObjectAoeService : IDisposable
 
         var file = _store.GetByZone(_currentZone);
         var arena = AutoAoeDisplayPolicy.ResolveArena(file);
-        if (!IsUsableObjectAoePosition(ev.Position, arena.LockedArenaCenter))
+        if (!IsUsableObjectAoePosition(ev.Position, arena.LockedArenaCenter, arena.ArenaRadius))
         {
             return;
         }
@@ -934,7 +934,7 @@ public sealed class AddObjectAoeService : IDisposable
                 continue;
             }
 
-            if (!IsUsableObjectAoePosition(pos, arena.LockedArenaCenter))
+            if (!IsUsableObjectAoePosition(pos, arena.LockedArenaCenter, arena.ArenaRadius))
             {
                 continue;
             }
@@ -1075,7 +1075,7 @@ public sealed class AddObjectAoeService : IDisposable
             var livePos = actor is not null
                 ? new Vector3(actor.Position.X, actor.Position.Y, actor.Position.Z)
                 : member.Pos;
-            if (!IsUsableObjectAoePosition(livePos, arena.LockedArenaCenter))
+            if (!IsUsableObjectAoePosition(livePos, arena.LockedArenaCenter, arena.ArenaRadius))
             {
                 continue;
             }
@@ -1176,7 +1176,18 @@ public sealed class AddObjectAoeService : IDisposable
         return false;
     }
 
-    public static bool IsUsableObjectAoePosition(Vector3 worldPosition, Vector3? lockedCenter)
+    /// <summary>アリーナ半径に対する「外側 placeholder」判定の係数。</summary>
+    /// <remarks>
+    /// 月の底ゾディアーク add の戦闘開始時 placeholder 位置 (100, 0, 79) はアリーナ中心
+    /// (100.7, 102.1) から ~23m 離れる（アリーナ半径 20m 想定）。これを「マップ外」とみなし
+    /// 描画から除外する。1.5 倍は「ロケーション端のオブジェクトは正常」を確保する余裕。
+    /// </remarks>
+    private const double OutOfArenaPlaceholderMultiplier = 1.5;
+
+    public static bool IsUsableObjectAoePosition(
+        Vector3 worldPosition,
+        Vector3? lockedCenter,
+        double? arenaRadiusM = null)
     {
         if (MathF.Abs(worldPosition.X) < 0.001f &&
             MathF.Abs(worldPosition.Z) < 0.001f)
@@ -1188,7 +1199,17 @@ public sealed class AddObjectAoeService : IDisposable
         {
             var dx = worldPosition.X - center.X;
             var dz = worldPosition.Z - center.Z;
-            if (MathF.Sqrt(dx * dx + dz * dz) < PlaceholderCenterDistanceM)
+            var dist = MathF.Sqrt(dx * dx + dz * dz);
+            if (dist < PlaceholderCenterDistanceM)
+            {
+                return false;
+            }
+
+            // アリーナ半径が分かっている場合、明らかに外側（半径 × 1.5 を超える）の
+            // 座標は「初期 placeholder のまま actor が未着座」とみなして除外する。
+            // 月の底ゾディアーク add の戦闘開始時 (100,79) はここで弾かれる。
+            if (arenaRadiusM is { } radius && radius > 0 &&
+                dist > radius * OutOfArenaPlaceholderMultiplier)
             {
                 return false;
             }
