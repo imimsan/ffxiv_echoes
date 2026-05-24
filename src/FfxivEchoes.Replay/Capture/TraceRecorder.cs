@@ -230,9 +230,112 @@ public sealed class TraceRecorder : IMinimapSink, IDisposable
                         },
                     });
                     break;
+                case TriggerFiredEvent t:
+                    RecordTriggerFired(t);
+                    break;
                 // それ以外は無視（player_pos など volume が大きいものは trace のノイズになるため）
             }
         }
+    }
+
+    /// <summary>
+    /// TriggerFiredEvent の Actions を走査して、AoE 描画を伴うものを draw_aoe イベントに展開する。
+    /// 本番では ActionDispatcher → ArenaViewHandler → MinimapWindow.AddArenaView の経路で
+    /// 描画されるが、harness では中間 dispatcher を持たず TriggerFiredEvent から直接抽出する。
+    /// </summary>
+    private void RecordTriggerFired(TriggerFiredEvent ev)
+    {
+        var t = TimeOf(ev.Timestamp);
+        var triggerSnap = SnapshotTriggerSource(ev);
+        foreach (var action in ev.Actions)
+        {
+            // AoeZones がある action（arena_view 等）を 1 zone = 1 draw_aoe に展開
+            if (action.AoeZones is { Count: > 0 } zones)
+            {
+                var duration = action.Duration ?? 0.0;
+                for (var i = 0; i < zones.Count; i++)
+                {
+                    var z = zones[i];
+                    var id = $"trigger_{ev.TriggerId}_{i:D2}";
+                    var extra = new Dictionary<string, object?>
+                    {
+                        ["id"] = id,
+                        ["service"] = "TriggerFiredEvent",
+                        ["trigger_id"] = ev.TriggerId,
+                        ["trigger_name"] = ev.TriggerName,
+                        ["zone_label"] = z.Label,
+                        ["shape"] = z.Shape,
+                        ["x_relative"] = Math.Round(z.X, 3),
+                        ["z_relative"] = Math.Round(z.Z, 3),
+                        ["radius_m"] = z.RadiusM,
+                        ["inner_radius_m"] = z.InnerRadiusM,
+                        ["fan_deg"] = z.FanDeg,
+                        ["half_width_m"] = z.HalfWidthM,
+                        ["rotation_deg"] = z.RotationDeg,
+                        ["duration_sec"] = duration,
+                        ["color"] = "#FFA500",
+                        ["callout"] = action.Callout,
+                        ["arena_center_x"] = action.ArenaCenterX,
+                        ["arena_center_z"] = action.ArenaCenterZ,
+                        ["trigger_event"] = triggerSnap,
+                    };
+                    _events.Add(new TraceEvent(t, "draw_aoe") { Extra = extra });
+
+                    // 自動 remove も emit（duration 超過時刻）
+                    if (duration > 0)
+                    {
+                        _events.Add(new TraceEvent(t + duration, "remove_aoe")
+                        {
+                            Extra = new Dictionary<string, object?>
+                            {
+                                ["id"] = id,
+                                ["reason"] = "duration_expired",
+                            },
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    private object? SnapshotTriggerSource(TriggerFiredEvent ev)
+    {
+        // SourceEvent から短いスナップショットを作る（trace でどの cast が起点かを残すため）
+        return ev.SourceEvent switch
+        {
+            CastStartedEvent c => new Dictionary<string, object?>
+            {
+                ["type"] = "cast_start",
+                ["t"] = TimeOf(c.Timestamp),
+                ["cast_id"] = $"0x{c.CastActionId:X}",
+                ["cast_name"] = c.CastActionName,
+                ["source"] = c.SourceName,
+            },
+            CastCompletedEvent c => new Dictionary<string, object?>
+            {
+                ["type"] = "cast_complete",
+                ["t"] = TimeOf(c.Timestamp),
+                ["cast_id"] = $"0x{c.CastActionId:X}",
+                ["cast_name"] = c.CastActionName,
+                ["source"] = c.SourceName,
+            },
+            ActionUsedEvent a => new Dictionary<string, object?>
+            {
+                ["type"] = "action_used",
+                ["t"] = TimeOf(a.Timestamp),
+                ["action_id"] = $"0x{a.ActionId:X}",
+                ["action_name"] = a.ActionName,
+                ["source"] = a.SourceName,
+            },
+            ObjectAppearedEvent o => new Dictionary<string, object?>
+            {
+                ["type"] = "object_appear",
+                ["t"] = TimeOf(o.Timestamp),
+                ["object_name"] = o.ObjectName,
+                ["data_id"] = o.DataId,
+            },
+            _ => null,
+        };
     }
 
     /// <inheritdoc />

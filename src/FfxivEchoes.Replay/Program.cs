@@ -5,6 +5,7 @@ using FfxivEchoes.Events;
 using FfxivEchoes.Replay;
 using FfxivEchoes.Replay.Capture;
 using FfxivEchoes.Replay.MockServices;
+using FfxivEchoes.Triggers;
 
 namespace FfxivEchoes.Replay;
 
@@ -76,9 +77,7 @@ public static class Program
     }
 
     /// <summary>
-    /// AoE 解決サービスを構築する。Phase 1 ではいくつかの依存（TriggerStore / RecordingScanner /
-    /// WorldOverlayWindow など）の重さから wire 自体を保留し、TraceRecorder が
-    /// IEventBus 経由で source イベントだけを記録する形に留める。
+    /// AoE 解決サービスを構築する。Phase 2 (A-1): PredictedObjectSpawnService を wire。
     /// </summary>
     private static void TryConstructServices(
         Cli.Options opts,
@@ -88,18 +87,28 @@ public static class Program
         TraceRecorder trace,
         MockPluginLog log)
     {
-        // 雛形：将来 wire するときの構造を残しておく。
-        // var triggerStore = ...;
-        // try
-        // {
-        //     var auto = new AutoTelegraphService(bus, actionLookup, mockObjectTable,
-        //         mockWorldOverlay, trace, triggerStore, log);
-        // }
-        // catch (Exception ex) { log.Warning(ex, "[Replay] AutoTelegraph wire skipped"); }
-
-        if (!string.IsNullOrEmpty(opts.TriggerFile))
+        if (string.IsNullOrEmpty(opts.ConfigDir))
         {
-            log.Warning("[Replay] --trigger-file 指定ありだが Phase 1 では未 wire。後続 agent でサービス組み立て予定。");
+            log.Information("[Replay] --config-dir 未指定。trigger ファイル無しで source イベントだけ trace 化する。");
+            return;
+        }
+
+        try
+        {
+            var loader = new TriggerLoader(opts.ConfigDir!, log);
+            var store = new TriggerStore(loader, log);
+            store.Reload();
+            log.Information("[Replay] trigger ファイル {N} 個ロード（{Dir}）", store.LoadedFileCount, loader.TriggersDirectory);
+
+            // PredictedObjectSpawnService: cast → 予告 draw_aoe の経路を有効化。
+            // NowProvider に MockFramework の仮想時刻を渡して deterministic に発火させる。
+            var predicted = new PredictedObjectSpawnService(framework, bus, store, log);
+            predicted.NowProvider = () => new DateTimeOffset(framework.LastUpdateUTC, TimeSpan.Zero);
+            log.Information("[Replay] PredictedObjectSpawnService wire OK");
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "[Replay] サービス wire 失敗（trigger ファイル参照？ 続行可能）");
         }
     }
 }
@@ -110,6 +119,7 @@ internal static class Cli
         string Recording,
         string? Zone,
         string? TriggerFile,
+        string? ConfigDir,
         string OutputPath);
 
     public static Options? Parse(string[] args)
@@ -117,6 +127,7 @@ internal static class Cli
         string? recording = null;
         string? zone = null;
         string? triggerFile = null;
+        string? configDir = null;
         string outputPath = "out/trace.json";
 
         for (var i = 0; i < args.Length; i++)
@@ -139,6 +150,11 @@ internal static class Cli
                     if (++i >= args.Length) return null;
                     triggerFile = args[i];
                     break;
+                case "--config-dir":
+                case "-c":
+                    if (++i >= args.Length) return null;
+                    configDir = args[i];
+                    break;
                 case "--output":
                 case "-o":
                     if (++i >= args.Length) return null;
@@ -156,7 +172,7 @@ internal static class Cli
             Console.Error.WriteLine("[Replay] --recording <path> は必須です");
             return null;
         }
-        return new Options(recording, zone, triggerFile, outputPath);
+        return new Options(recording, zone, triggerFile, configDir, outputPath);
     }
 
     public static void PrintUsage()
@@ -167,12 +183,14 @@ internal static class Cli
         Console.WriteLine("  dotnet run --project src/FfxivEchoes.Replay -- \\");
         Console.WriteLine("    --recording <path> \\");
         Console.WriteLine("    [--zone <name>] \\");
-        Console.WriteLine("    [--trigger-file <path>] \\");
+        Console.WriteLine("    [--config-dir <dir>] \\");
         Console.WriteLine("    --output <trace.json>");
         Console.WriteLine();
         Console.WriteLine("  -r/--recording   入力 jsonl ファイル（必須）");
         Console.WriteLine("  -z/--zone        ゾーン名（未指定なら meta 行から推定）");
-        Console.WriteLine("  -t/--trigger-file トリガー定義 JSON（Phase 1 では未使用）");
+        Console.WriteLine("  -c/--config-dir  プラグイン config dir（triggers/ を含むディレクトリ）");
+        Console.WriteLine("                   指定すると TriggerStore + PredictedObjectSpawnService が wire される");
+        Console.WriteLine("                   例: %APPDATA%/XIVLauncher/pluginConfigs/FfxivEchoes");
         Console.WriteLine("  -o/--output      trace.json 出力先（既定: out/trace.json）");
     }
 }

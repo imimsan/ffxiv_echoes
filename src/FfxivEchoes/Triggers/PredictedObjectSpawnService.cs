@@ -49,6 +49,13 @@ public sealed class PredictedObjectSpawnService : IDisposable
     private readonly List<ScheduledSpawn> _scheduled = new();
     private readonly object _gate = new();
 
+    /// <summary>
+    /// 現在時刻を返す関数。本番は <see cref="DateTimeOffset.UtcNow"/> を返す既定値。
+    /// Replay harness は MockFramework の仮想時刻を返す関数を注入して、
+    /// jsonl 駆動で deterministic に scheduled spawn を発火させる。
+    /// </summary>
+    public Func<DateTimeOffset> NowProvider { get; set; } = () => DateTimeOffset.UtcNow;
+
     public PredictedObjectSpawnService(IFramework framework, IEventBus bus, TriggerStore store, IPluginLog log)
     {
         _framework = framework;
@@ -97,7 +104,7 @@ public sealed class PredictedObjectSpawnService : IDisposable
     private void OnFrameworkUpdate(IFramework framework)
     {
         if (!_inCombat) return;
-        var now = DateTimeOffset.UtcNow;
+        var now = NowProvider();
 
         List<ScheduledSpawn>? due = null;
         lock (_gate)
@@ -175,7 +182,7 @@ public sealed class PredictedObjectSpawnService : IDisposable
 
     private void ScheduleSpawn(StrategyProfile profile, PredictedObjectSpawn spawn, IGameEvent sourceEvent, double fireAfterSec)
     {
-        var fireAt = DateTimeOffset.UtcNow.AddSeconds(fireAfterSec);
+        var fireAt = NowProvider().AddSeconds(fireAfterSec);
         lock (_gate)
         {
             // 同 spawn の連続スケジュール防止：既に近い時刻のものがあれば skip
@@ -236,11 +243,11 @@ public sealed class PredictedObjectSpawnService : IDisposable
         lock (_gate)
         {
             if (_pendingPredictions.TryGetValue(spawn.Id, out var prev) &&
-                (DateTimeOffset.UtcNow - prev).TotalSeconds < DedupWindowSec)
+                (NowProvider() - prev).TotalSeconds < DedupWindowSec)
             {
                 return;
             }
-            _pendingPredictions[spawn.Id] = DateTimeOffset.UtcNow;
+            _pendingPredictions[spawn.Id] = NowProvider();
         }
 
         var zones = new List<StrategyAoeZone>(spawn.Positions.Count);
@@ -280,12 +287,16 @@ public sealed class PredictedObjectSpawnService : IDisposable
         };
 
         _bus.Publish(new TriggerFiredEvent(
-            Timestamp: DateTimeOffset.UtcNow,
+            Timestamp: NowProvider(),
             Zone: _currentZone,
             TriggerId: $"__predicted_spawn_{spawn.Id}",
             TriggerName: $"予告: {spawn.TriggerCastName ?? "?"} → {spawn.ObjectName}",
             Actions: new[] { action },
             SourceEvent: sourceEvent));
+
+        _log.Information(
+            "[FfxivEchoes] PredictedObjectSpawn: 発火 {Name} ×{Count} (cast={Cast}) zones={ZoneCount}",
+            spawn.ObjectName, spawn.ObservedSpawnCount, spawn.TriggerCastName ?? "?", zones.Count);
 
         _log.Information(
             "[FfxivEchoes] PredictedObjectSpawn: 発火 cast={Cast} → {Name} ×{N} zones={Z} delay={Delay}s confidence={C}",

@@ -21,7 +21,9 @@ namespace FfxivEchoes.Replay.MockServices;
 /// </remarks>
 public sealed class MockFramework : IFramework
 {
-    private DateTime _now = DateTime.UtcNow;
+    // 初期値は MinValue。最初の AdvanceTo（通常 jsonl meta の start_time）で
+    // 過去時刻が来ても "targetUtc < _now" の早期 return に引っかからないようにする。
+    private DateTime _now = DateTime.MinValue;
     private long _frame;
     private TimeSpan _lastUpdateDelta = TimeSpan.Zero;
 
@@ -44,9 +46,11 @@ public sealed class MockFramework : IFramework
         {
             Update?.Invoke(this);
         }
-        catch
+        catch (Exception ex)
         {
             // サービスが Framework.Update で投げても再生は続ける。
+            // ただし debug のためコンソールに出す（本番ループには影響しない）。
+            Console.Error.WriteLine($"[MockFramework] Update threw: {ex.GetType().Name}: {ex.Message}");
         }
     }
 
