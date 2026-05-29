@@ -45,6 +45,7 @@ var tests = new List<(string Name, Action Body)>
     ("AoeResolver adds caster hitbox for caster-origin shapes", AoeResolver_AddsCasterHitboxForCasterOriginShapes),
     ("AoeResolver rejects oversized unreliable ranges", AoeResolver_RejectsOversizedRanges),
     ("AoeResolver uses Omen for shape inference", AoeResolver_UsesOmenForShapeInference),
+    ("AoeResolver BuildAoeInfo propagates XAxisModifier as line half width", AoeResolver_BuildAoeInfo_PropagatesXAxisModifierAsLineHalfWidth),
     ("AutoSafeCallPlanner creates practical callouts", AutoSafeCallPlanner_CreatesCallouts),
     ("AutoSafeCallPlanner creates visual telegraph for large circle AoE", AutoSafeCallPlanner_CreatesVisualForLargeCircleAoe),
     ("AutoSafeCallPlanner treats donut variants as outer ring", AutoSafeCallPlanner_TreatsDonutVariantsAsOuterRing),
@@ -916,6 +917,25 @@ static void AoeResolver_RejectsOversizedRanges()
     False(AoeResolver.IsReliableEffectRange(50.01f), "range above 50m should be skipped");
     False(AoeResolver.IsReliableEffectRange(80f), "80m should not produce guessed auto AoE");
     False(AoeResolver.IsReliableEffectRange(0f), "0m is not an AoE");
+}
+
+static void AoeResolver_BuildAoeInfo_PropagatesXAxisModifierAsLineHalfWidth()
+{
+    var rect = new ActionGeometry(
+        Id: 1, Name: "Line", CastType: 4, EffectRangeM: 20f,
+        XAxisModifierM: 4f, OmenId: 0, CastTimeMs: 0);
+    var info = AoeResolver.BuildAoeInfo(rect);
+    True(info is not null, "rect with positive range should resolve to AoeInfo");
+    Equal(4f, info!.HalfWidthM, "XAxisModifier should propagate to AoeInfo.HalfWidthM");
+
+    // 直線半幅の解決：XAxisModifier 由来の値があればそれを使い、無ければ既定 5m。
+    Equal(4f, ActorTrackedAoeService.ResolveHalfWidthForShape(
+            ActorTrackedAoeService.TrackedAoeShape.Rect,
+            info.HalfWidthM > 0 ? info.HalfWidthM : (double?)null),
+        "line half width should use XAxisModifier when present");
+    Equal(AoeGeometryPolicy.DefaultLineHalfWidthM, ActorTrackedAoeService.ResolveHalfWidthForShape(
+            ActorTrackedAoeService.TrackedAoeShape.Rect, null),
+        "line half width falls back to default 5m when XAxisModifier absent");
 }
 
 static void AoeResolver_UsesOmenForShapeInference()
