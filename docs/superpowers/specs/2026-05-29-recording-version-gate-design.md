@@ -37,12 +37,9 @@
 ### Phase B（コミット2〜）— 版 0.1.0 と Cast 除外漏れ修正【本来設計】
 
 - **B1**: `FfxivEchoes.csproj` の `<Version>0.0.1.0</Version>` → `<Version>0.1.0</Version>`。マニフェスト `FfxivEchoes.json` は `AssemblyVersion` を持たず csproj 由来なので変更不要。これで新録画が下限を満たし警告対象外に。
-- **B2**: Cast 系の PC 除外漏れを塞ぐ。
-  - `GameEvents.cs`: `CastStartedEvent`/`CastCompletedEvent`/`CastCanceledEvent` に `bool IsPlayer = false` を追加（末尾・既定値ありで後方互換）。
-  - `CastCapture.cs`: `LuminaPcDetector` を DI。判定は `IsPetBnpc(actor) || IsPlayerAction(actionId)`（actor は `IBattleNpc` 限定なので PC本人判定は不要）。`CastState` record に `bool IsPlayer` を保持し、Started/Completed/Canceled の全発行箇所（初観測 Start、遷移 Start、Completed、Canceled、切替時 Cancel+Start、ObjectTable 消失時 Cancel）で設定。Completed/Canceled は `prev.IsPlayer` を使う。
-  - `Plugin.cs`: `CastCapture` 生成箇所に `pcDetector` を注入。
-  - `BattleRecorder.cs`: `OnAnyEvent` に `CastStartedEvent`/`CastCompletedEvent`/`CastCanceledEvent` の `IsPlayer` skip を追加。
-- 集計側・`PcSkillNameFilter`・`EventSerializer` は変更なし（cast は除外方式なので録画に載らず、`is_player` 出力も不要）。
+- **B2（実コード確認の結果、不要と判明）**: 当初は Cast 系の PC 除外漏れを塞ぐ予定だった。しかし最新コード（07541ab）の `CastCapture.OnUpdate` が既に PC ペット（`OwnerId` が `IPlayerCharacter`）の cast を除外済み（`CastCapture.cs:65-72`）。PC 本人の cast は `IBattleNpc` 限定で元々捕捉されない。ボスが PC アクション ID を詠唱するケースは存在しないため `IsPlayerAction` ベースの追加除外も不要（YAGNI）。よって追加実装は行わず、Phase B は B1 のみ。
+  - 補足: 設計初期に参照した `CastCapture.cs` は、セッション開始時のワーキングツリーが git HEAD と不整合だった古い版（PC ペット skip 欠落）だった。`git switch`＋`rebase` で正した実コードを再確認し本判断に至った。
+- 集計側・`PcSkillNameFilter`・`EventSerializer` は変更なし。
 
 ## テスト計画（各 Phase で失敗テスト先行＝TDD）
 
@@ -50,8 +47,8 @@
 
 - Phase A: `RecordingScanner` 相当の onWarning ラッパが、同一パスの `InvalidDataException` 警告を複数回 Aggregate しても1回だけ転送することを検証。`IOException` は毎回通すことも検証。
   - 純粋ロジックとして抽出できるなら静的メソッド化してテスト（DI 依存を避ける）。
-- B2: `CastCapture` の IsPlayer 判定を純粋関数（`ShouldMarkCastAsPlayer(isPetBnpc, isPlayerAction)` 等）に抽出し、`ActionEffectCapture.ShouldMarkActionAsPlayer` と同様にテスト（PC召喚物/PCアクションは true、ボス詠唱は false）。
-- B1: `0.1.0` 録画は「古い録画」警告ゼロ、`0.0.1.0` は警告対象（だが Phase A で1回）を `AggregateFiles` レベルで検証。
+- B1: `0.1.0` 録画は「古い録画」警告ゼロ、`0.0.1.0` は警告対象（だが Phase A で1回）を `AggregateFiles` レベルで検証（`AggregateFiles_WarnsOnlyForBelowMinimumPluginVersion`）。
+- B2 は不要のためテストなし（上記参照）。
 
 ## リスク・後方互換
 
@@ -62,7 +59,6 @@
 
 ## 実装順序
 
-1. Phase A: テスト追加（失敗）→ `RecordingScanner` 実装 → テストパス → コミット。
-2. Phase B2: テスト追加（失敗）→ `GameEvents`/`CastCapture`/`Plugin`/`BattleRecorder` 実装 → テストパス。
-3. Phase B1: csproj 版上げ → 全ビルド・全テスト。
-4. 多角的レビュー（correctness/regression/backward-compat/thread-safety/test-coverage/coding-rules）→ 反映 → コミット。
+1. Phase A: テスト追加（失敗）→ `RecordingScanner` 実装 → テストパス → コミット。（完了 c46029e）
+2. Phase B1: csproj 版上げ + 版ゲート回帰テスト → 全ビルド・全テスト。（B2 は実コード確認の結果不要と判明）
+3. 多角的レビュー（correctness/regression/backward-compat/thread-safety/test-coverage/coding-rules）→ 反映 → コミット。

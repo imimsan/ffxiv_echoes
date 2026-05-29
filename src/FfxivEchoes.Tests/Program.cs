@@ -34,6 +34,7 @@ var tests = new List<(string Name, Action Body)>
     ("RecordingScanner learns object action_used after appearance", RecordingScanner_LearnsObjectActionUsedAfterAppearance),
     ("RecordingScanner filters object action learning by object name", RecordingScanner_FiltersObjectActionLearningByName),
     ("RecordingScanner suppresses repeated old-recording warnings", RecordingScanner_SuppressesRepeatedOldRecordingWarnings),
+    ("AggregateFiles warns only for below-minimum plugin version", AggregateFiles_WarnsOnlyForBelowMinimumPluginVersion),
     ("ActionUsedEvent serializes and aggregates auto attacks separately", ActionUsedEvent_SerializesAndAggregates),
     ("ActionUsedEvent serializes target world", ActionUsedEvent_SerializesTargetWorld),
     ("ActionUsedEvent with attack name is treated as auto attack", ActionUsedEvent_AttackNameAggregatesAsAutoAttack),
@@ -714,6 +715,24 @@ static void RecordingScanner_SuppressesRepeatedOldRecordingWarnings()
         "non-old-recording exception must never be suppressed");
     False(RecordingScanner.ShouldSuppressOldRecordingWarning(ioEx, "zoneA/a.jsonl", warned, gate),
         "IOException stays unsuppressed even when repeated");
+}
+
+static void AggregateFiles_WarnsOnlyForBelowMinimumPluginVersion()
+{
+    var dir = CreateTempDir();
+    var current = Path.Combine(dir, "current.jsonl");
+    File.WriteAllText(current,
+        "{\"meta\":true,\"zone\":\"Z\",\"start_time\":\"2026-05-29T00:00:00.000Z\",\"plugin_version\":\"0.1.0\",\"party\":[]}\n");
+    var old = Path.Combine(dir, "old.jsonl");
+    File.WriteAllText(old,
+        "{\"meta\":true,\"zone\":\"Z\",\"start_time\":\"2026-05-28T00:00:00.000Z\",\"plugin_version\":\"0.0.1.0\",\"party\":[]}\n");
+
+    var warnings = new List<(Exception Ex, string Path)>();
+    RecordingAggregationReader.AggregateFiles(new[] { current, old }, (ex, p) => warnings.Add((ex, p)));
+
+    Equal(1, warnings.Count, "only the below-minimum (0.0.1.0) recording should warn");
+    True(warnings[0].Ex is System.IO.InvalidDataException, "warning must be InvalidDataException");
+    Equal(old, warnings[0].Path, "warning must target the old recording path");
 }
 
 static void ActionUsedEvent_SerializesAndAggregates()
