@@ -47,6 +47,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly CommandRouter _commandRouter;
     private readonly TabContext _tabContext = new();
     private readonly RecordingScanner _recordingScanner;
+    private readonly RecordingWarmupService _recordingWarmup;
 
     // ── M3: イベントキャプチャ層 ─────────────────────────
     private readonly IEventBus _eventBus;
@@ -185,6 +186,10 @@ public sealed class Plugin : IDalamudPlugin
 
         // M3: イベントバスを早期構築（タブのプレビュー機能が参照するため）
         _eventBus = new InMemoryEventBus(Log);
+
+        // 録画キャッシュのウォームアップ：zone 入場時にバックグラウンドで集計しておき、
+        // 戦闘開始フレームでの同期読み込み（開幕の固まり）を防ぐ。
+        _recordingWarmup = new RecordingWarmupService(_eventBus, _recordingScanner, Log);
 
         // P1: 状態変数（CombatEnded で自動リセット）
         _variableStore = new VariableStore(_eventBus, Log);
@@ -468,6 +473,7 @@ public sealed class Plugin : IDalamudPlugin
         SafeDispose(_ttsHandler, nameof(_ttsHandler));
 
         // 3. タイムラインノート通知 / 自動 AoE 等
+        SafeDispose(_recordingWarmup, nameof(_recordingWarmup));
         SafeDispose(_noteReminder, nameof(_noteReminder));
         SafeDispose(_addObjectAoe, nameof(_addObjectAoe));
         // ActorTrackedAoe は WorldOverlayWindow の live drawer 登録を持つので
