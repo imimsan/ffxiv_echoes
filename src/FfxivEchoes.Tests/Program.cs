@@ -33,6 +33,9 @@ var tests = new List<(string Name, Action Body)>
     ("BuildCastPredictions keeps source for boss selection", BuildCastPredictions_KeepsSourceForBossSelection),
     ("RecordingScanner learns object action_used after appearance", RecordingScanner_LearnsObjectActionUsedAfterAppearance),
     ("RecordingScanner filters object action learning by object name", RecordingScanner_FiltersObjectActionLearningByName),
+    ("RecordingScanner suppresses repeated old-recording warnings", RecordingScanner_SuppressesRepeatedOldRecordingWarnings),
+    ("AggregateFiles warns only for below-minimum plugin version", AggregateFiles_WarnsOnlyForBelowMinimumPluginVersion),
+    ("Recording aggregation suppression wrapper dedupes across repeated aggregations", RecordingAggregation_SuppressionWrapper_DedupesAcrossRepeatedAggregations),
     ("ActionUsedEvent serializes and aggregates auto attacks separately", ActionUsedEvent_SerializesAndAggregates),
     ("ActionUsedEvent serializes target world", ActionUsedEvent_SerializesTargetWorld),
     ("ActionUsedEvent with attack name is treated as auto attack", ActionUsedEvent_AttackNameAggregatesAsAutoAttack),
@@ -693,6 +696,87 @@ static void RecordingScanner_FiltersObjectActionLearningByName()
 
     Equal(1, votes.Count, "name-filtered object action votes");
     Equal(1, votes[0x67ED], "name-filtered action id");
+}
+
+static void RecordingScanner_SuppressesRepeatedOldRecordingWarnings()
+{
+    var warned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    var gate = new object();
+    var oldEx = new System.IO.InvalidDataException("古い録画フォーマット (plugin_version=0.0.1.0 < 0.1.0)");
+
+    False(RecordingScanner.ShouldSuppressOldRecordingWarning(oldEx, "zoneA/a.jsonl", warned, gate),
+        "first old-recording warning for a path should NOT be suppressed");
+    True(RecordingScanner.ShouldSuppressOldRecordingWarning(oldEx, "zoneA/a.jsonl", warned, gate),
+        "second old-recording warning for the same path should be suppressed");
+    False(RecordingScanner.ShouldSuppressOldRecordingWarning(oldEx, "zoneA/b.jsonl", warned, gate),
+        "a different path should still warn once");
+
+    var ioEx = new System.IO.IOException("read failure");
+    False(RecordingScanner.ShouldSuppressOldRecordingWarning(ioEx, "zoneA/a.jsonl", warned, gate),
+        "non-old-recording exception must never be suppressed");
+    False(RecordingScanner.ShouldSuppressOldRecordingWarning(ioEx, "zoneA/a.jsonl", warned, gate),
+        "IOException stays unsuppressed even when repeated");
+}
+
+static void AggregateFiles_WarnsOnlyForBelowMinimumPluginVersion()
+{
+    var dir = CreateTempDir();
+    // 実機が録画に書き込む版は AssemblyVersion.ToString() = 4桁 "0.1.0.0"
+    // （csproj <Version>0.1.0 が .NET SDK で 4成分に正規化される）。下限ちょうどの
+    // 3桁 "0.1.0" ではなく、この実値で警告されないことを検証する（B1 修正の本来経路）。
+    var current = Path.Combine(dir, "current.jsonl");
+    File.WriteAllText(current,
+        "{\"meta\":true,\"zone\":\"Z\",\"start_time\":\"2026-05-29T00:00:00.000Z\",\"plugin_version\":\"0.1.0.0\",\"party\":[]}\n");
+    // 下限未満（旧録画）。
+    var old = Path.Combine(dir, "old.jsonl");
+    File.WriteAllText(old,
+        "{\"meta\":true,\"zone\":\"Z\",\"start_time\":\"2026-05-28T00:00:00.000Z\",\"plugin_version\":\"0.0.1.0\",\"party\":[]}\n");
+    // 下限の直下（0.0.9.9 < 0.1.0）も警告対象。
+    var justBelow = Path.Combine(dir, "justbelow.jsonl");
+    File.WriteAllText(justBelow,
+        "{\"meta\":true,\"zone\":\"Z\",\"start_time\":\"2026-05-28T00:00:00.000Z\",\"plugin_version\":\"0.0.9.9\",\"party\":[]}\n");
+    // plugin_version 欠落（最古フォーマット）は警告しない設計（TryGetProperty=false でゲートをスキップ）。
+    var noVersion = Path.Combine(dir, "noversion.jsonl");
+    File.WriteAllText(noVersion,
+        "{\"meta\":true,\"zone\":\"Z\",\"start_time\":\"2026-05-01T00:00:00.000Z\",\"party\":[]}\n");
+
+    var warnings = new List<(Exception Ex, string Path)>();
+    RecordingAggregationReader.AggregateFiles(
+        new[] { current, old, justBelow, noVersion },
+        (ex, p) => warnings.Add((ex, p)));
+
+    Equal(2, warnings.Count, "only below-minimum recordings (0.0.1.0, 0.0.9.9) should warn");
+    True(warnings.TrueForAll(w => w.Ex is System.IO.InvalidDataException), "warnings must be InvalidDataException");
+    True(warnings.Exists(w => w.Path == old), "old (0.0.1.0) must warn");
+    True(warnings.Exists(w => w.Path == justBelow), "justBelow (0.0.9.9) must warn");
+    False(warnings.Exists(w => w.Path == current), "current (real on-disk value 0.1.0.0) must NOT warn");
+    False(warnings.Exists(w => w.Path == noVersion), "missing plugin_version (oldest format) must NOT warn");
+}
+
+static void RecordingAggregation_SuppressionWrapper_DedupesAcrossRepeatedAggregations()
+{
+    var dir = CreateTempDir();
+    var old = Path.Combine(dir, "old.jsonl");
+    File.WriteAllText(old,
+        "{\"meta\":true,\"zone\":\"Z\",\"start_time\":\"2026-05-28T00:00:00.000Z\",\"plugin_version\":\"0.0.1.0\",\"party\":[]}\n");
+
+    // RecordingScanner.OnAggregateWarning と同じ抑制ラッパ（共有 HashSet + gate）。
+    var warned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    var gate = new object();
+    var warnings = new List<string>();
+    Action<Exception, string> onWarning = (ex, p) =>
+    {
+        if (RecordingScanner.ShouldSuppressOldRecordingWarning(ex, p, warned, gate)) return;
+        warnings.Add(p);
+    };
+
+    // Aggregate が戦闘中 / 設定ウィンドウ描画で高頻度に呼ばれる状況を再現：同一録画を3回集計。
+    for (var i = 0; i < 3; i++)
+    {
+        RecordingAggregationReader.AggregateFiles(new[] { old }, onWarning);
+    }
+
+    Equal(1, warnings.Count, "repeated aggregations of the same old recording warn only once via the suppression wrapper");
 }
 
 static void ActionUsedEvent_SerializesAndAggregates()

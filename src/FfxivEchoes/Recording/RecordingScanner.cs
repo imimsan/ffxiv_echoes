@@ -16,6 +16,8 @@ public sealed class RecordingScanner
 {
     private readonly IDalamudPluginInterface _pluginInterface;
     private readonly IPluginLog _log;
+    private readonly HashSet<string> _warnedOldRecordingPaths = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _warnGate = new();
 
     public RecordingScanner(IDalamudPluginInterface pluginInterface, IPluginLog log)
     {
@@ -79,7 +81,37 @@ public sealed class RecordingScanner
         var recordings = ListRecordings(zoneName);
         return RecordingAggregationReader.AggregateFiles(
             recordings.Select(r => r.Path),
-            (ex, path) => _log.Warning(ex, "[FfxivEchoes] 録画ファイル読み込みに失敗：{Path}", path));
+            OnAggregateWarning);
+    }
+
+    private void OnAggregateWarning(Exception ex, string path)
+    {
+        // 「古い録画」警告は同一パスにつき1回だけ。Aggregate は戦闘中・設定ウィンドウの描画で
+        // 高頻度に呼ばれるため、旧バージョン録画の警告で dalamud.log が氾濫するのを防ぐ。
+        if (ShouldSuppressOldRecordingWarning(ex, path, _warnedOldRecordingPaths, _warnGate))
+        {
+            return;
+        }
+        _log.Warning(ex, "[FfxivEchoes] 録画ファイル読み込みに失敗：{Path}", path);
+    }
+
+    /// <summary>
+    /// 「古い録画フォーマット」警告（<see cref="InvalidDataException"/>）を同一パスにつき1回だけ
+    /// 通すための判定。未記録なら記録して false（＝ログする）、記録済みなら true（＝抑制する）を返す。
+    /// <see cref="InvalidDataException"/> 以外（IOException 等の実害ある失敗）は常に false（抑制しない）。
+    /// </summary>
+    public static bool ShouldSuppressOldRecordingWarning(
+        Exception ex, string path, HashSet<string> warnedOldRecordingPaths, object gate)
+    {
+        if (ex is not InvalidDataException)
+        {
+            return false;
+        }
+        lock (gate)
+        {
+            // 初回は Add が true（記録して通す）、2 回目以降は false（抑制する）。
+            return !warnedOldRecordingPaths.Add(path);
+        }
     }
 
     /// <summary>
