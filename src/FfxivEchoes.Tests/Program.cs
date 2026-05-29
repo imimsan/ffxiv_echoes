@@ -36,6 +36,7 @@ var tests = new List<(string Name, Action Body)>
     ("RecordingScanner suppresses repeated old-recording warnings", RecordingScanner_SuppressesRepeatedOldRecordingWarnings),
     ("AggregateFiles warns only for below-minimum plugin version", AggregateFiles_WarnsOnlyForBelowMinimumPluginVersion),
     ("Recording aggregation suppression wrapper dedupes across repeated aggregations", RecordingAggregation_SuppressionWrapper_DedupesAcrossRepeatedAggregations),
+    ("RecordingScanner signature detects recording changes", RecordingScanner_Signature_DetectsRecordingChanges),
     ("ActionUsedEvent serializes and aggregates auto attacks separately", ActionUsedEvent_SerializesAndAggregates),
     ("ActionUsedEvent serializes target world", ActionUsedEvent_SerializesTargetWorld),
     ("ActionUsedEvent with attack name is treated as auto attack", ActionUsedEvent_AttackNameAggregatesAsAutoAttack),
@@ -719,6 +720,23 @@ static void RecordingScanner_SuppressesRepeatedOldRecordingWarnings()
         "non-old-recording exception must never be suppressed");
     False(RecordingScanner.ShouldSuppressOldRecordingWarning(ioEx, "zoneA/a.jsonl", warned, gate),
         "IOException stays unsuppressed even when repeated");
+}
+
+static void RecordingScanner_Signature_DetectsRecordingChanges()
+{
+    var t = DateTimeOffset.Parse("2026-05-29T00:00:00Z").UtcDateTime;
+    var baseRec = new List<RecordingFileInfo> { new("z/1.jsonl", 100, t), new("z/2.jsonl", 200, t) };
+    var reordered = new List<RecordingFileInfo> { new("z/2.jsonl", 200, t), new("z/1.jsonl", 100, t) };
+    var fewer = new List<RecordingFileInfo> { new("z/1.jsonl", 100, t) };
+    var resized = new List<RecordingFileInfo> { new("z/1.jsonl", 100, t), new("z/2.jsonl", 999, t) };
+
+    Equal(RecordingScanner.ComputeRecordingSignature(baseRec),
+        RecordingScanner.ComputeRecordingSignature(reordered),
+        "順序が違っても同じ録画集合なら署名は同じ");
+    True(RecordingScanner.ComputeRecordingSignature(baseRec) != RecordingScanner.ComputeRecordingSignature(fewer),
+        "件数が変われば署名が変わる(キャッシュ無効化)");
+    True(RecordingScanner.ComputeRecordingSignature(baseRec) != RecordingScanner.ComputeRecordingSignature(resized),
+        "ファイルサイズが変われば署名が変わる(録画追記でキャッシュ無効化)");
 }
 
 static void AggregateFiles_WarnsOnlyForBelowMinimumPluginVersion()

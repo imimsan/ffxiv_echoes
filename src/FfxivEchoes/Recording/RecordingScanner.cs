@@ -18,6 +18,8 @@ public sealed class RecordingScanner
     private readonly IPluginLog _log;
     private readonly HashSet<string> _warnedOldRecordingPaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _warnGate = new();
+    private readonly Dictionary<string, (string Sig, AggregatedEvents Events)> _aggCache = new();
+    private readonly object _aggCacheGate = new();
 
     public RecordingScanner(IDalamudPluginInterface pluginInterface, IPluginLog log)
     {
@@ -79,9 +81,42 @@ public sealed class RecordingScanner
     public AggregatedEvents Aggregate(string zoneName)
     {
         var recordings = ListRecordings(zoneName);
-        return RecordingAggregationReader.AggregateFiles(
+        var sig = ComputeRecordingSignature(recordings);
+        lock (_aggCacheGate)
+        {
+            if (_aggCache.TryGetValue(zoneName, out var cached) && cached.Sig == sig)
+            {
+                return cached.Events;
+            }
+        }
+        // CombatStart 時に複数サービス(NoteReminder / PredictedCastReminder / SyncOffset 等)が
+        // 同じ zone を Aggregate するため、録画に変化が無ければ集計結果を再利用し、
+        // 全ファイル再読込(戦闘開始直後の重さの主因)を避ける。
+        var events = RecordingAggregationReader.AggregateFiles(
             recordings.Select(r => r.Path),
             OnAggregateWarning);
+        lock (_aggCacheGate)
+        {
+            _aggCache[zoneName] = (sig, events);
+        }
+        return events;
+    }
+
+    /// <summary>
+    /// 録画群の署名（件数 + 各ファイルの Size + 最終更新時刻）。録画が増減・更新されたら
+    /// 署名が変わり、<see cref="Aggregate"/> のキャッシュが無効化される。
+    /// </summary>
+    public static string ComputeRecordingSignature(IReadOnlyList<RecordingFileInfo> recordings)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append(recordings.Count).Append(';');
+        // 順序非依存にするため Path でソート。Size と mtime の変化（録画追記・差し替え）も検出する。
+        foreach (var r in recordings.OrderBy(r => r.Path, StringComparer.Ordinal))
+        {
+            sb.Append(r.Path).Append('|').Append(r.Size).Append('|')
+              .Append(r.LastModifiedUtc.Ticks).Append(';');
+        }
+        return sb.ToString();
     }
 
     private void OnAggregateWarning(Exception ex, string path)
