@@ -1144,14 +1144,9 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
         }
         else
         {
-            try
-            {
-                arenaCenter = _contextBuilder.Build().ArenaCenter;
-            }
-            catch
-            {
-                return;
-            }
+            var ctx = GetLiveContext();
+            if (ctx is null) return;
+            arenaCenter = ctx.ArenaCenter;
         }
         var arenaR = item.ArenaRadius;
         if (arenaR <= 0) return;
@@ -1200,8 +1195,16 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
         {
             // ロック済中心があればそれを優先（描画中ジッタしない）
             Vector3 ac;
-            if (item.LockedArenaCenter is { } locked) ac = locked;
-            else ac = _contextBuilder.Build().ArenaCenter;
+            if (item.LockedArenaCenter is { } locked)
+            {
+                ac = locked;
+            }
+            else
+            {
+                var ctx = GetLiveContext();
+                if (ctx is null) return false;
+                ac = ctx.ArenaCenter;
+            }
             // 非正方矩形アリーナでも AoE 原点とプレイヤードットの正規化を一致させるため、
             // ProjectRelativeToMap と同じ halfX/halfZ を渡す（P1-5）。寸法が無ければ正方扱い。
             var halfX = item.ArenaHalfWidth > 0 ? item.ArenaHalfWidth : item.ArenaRadius;
@@ -1249,6 +1252,36 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
         }
     }
 
+    private SafeZoneContext? _frameContext;
+    private int _frameContextTick = -1;
+    private bool _frameContextValid;
+
+    /// <summary>
+    /// 同一フレーム内で複数回呼ばれる SafeZoneContextBuilder.Build() を 1 回に集約する
+    /// （per-frame メモ化）。Build は ObjectTable 全走査を含み、開幕は AoE グループぶん
+    /// 毎フレーム複数回呼ばれて支配的コストになるため、ImGui のフレーム連番で同一フレームの
+    /// 2 回目以降はキャッシュを返す。例外時はそのフレームでは null を返し再走査しない。
+    /// </summary>
+    private SafeZoneContext? GetLiveContext()
+    {
+        var tick = ImGui.GetFrameCount();
+        if (tick != _frameContextTick)
+        {
+            _frameContextTick = tick;
+            try
+            {
+                _frameContext = _contextBuilder.Build();
+                _frameContextValid = true;
+            }
+            catch
+            {
+                _frameContext = null;
+                _frameContextValid = false;
+            }
+        }
+        return _frameContextValid ? _frameContext : null;
+    }
+
     /// <summary>
     /// 自分と PT メンバーの世界座標をミニマップ座標に変換してドットで描画する。
     /// </summary>
@@ -1260,12 +1293,8 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
         ArenaItem item,
         bool drawLiveContext)
     {
-        SafeZoneContext snapshot;
-        try
-        {
-            snapshot = _contextBuilder.Build();
-        }
-        catch
+        var snapshot = GetLiveContext();
+        if (snapshot is null)
         {
             // ObjectTable 走査中に例外が出ても描画は続ける
             return;
