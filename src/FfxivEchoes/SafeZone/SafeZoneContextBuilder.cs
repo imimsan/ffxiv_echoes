@@ -32,19 +32,25 @@ public sealed class SafeZoneContextBuilder
 
         var npcById = new Dictionary<ulong, IBattleNpc>();
         var bossCandidates = new List<BossCandidate>();
+        var pcById = new Dictionary<ulong, IPlayerCharacter>();
+        // ObjectTable は 1 パスで走査する。NPC(ボス候補)と PC(PT 解決用)を同時に拾い、
+        // 後段の PT 解決を Dictionary の O(1) ルックアップにする。旧実装の
+        // O(party × ObjectTable) ネストループは開幕の毎フレーム描画で支配的コストだった。
         foreach (var obj in _objectTable)
         {
-            if (obj is not IBattleNpc npc)
+            if (obj is IBattleNpc npc)
             {
-                continue;
+                npcById[npc.GameObjectId] = npc;
+                bossCandidates.Add(new BossCandidate(
+                    npc.GameObjectId,
+                    npc.Name.TextValue,
+                    npc.MaxHp,
+                    IsEnemy(npc)));
             }
-
-            npcById[npc.GameObjectId] = npc;
-            bossCandidates.Add(new BossCandidate(
-                npc.GameObjectId,
-                npc.Name.TextValue,
-                npc.MaxHp,
-                IsEnemy(npc)));
+            else if (obj is IPlayerCharacter pc)
+            {
+                pcById[pc.GameObjectId] = pc;
+            }
         }
 
         var selection = BossSelectionPolicy.Select(bossCandidates, castActor?.GameObjectId);
@@ -57,13 +63,9 @@ public sealed class SafeZoneContextBuilder
         var party = new List<IPlayerCharacter>();
         foreach (var member in _partyList)
         {
-            foreach (var obj in _objectTable)
+            if (pcById.TryGetValue((ulong)member.EntityId, out var pc))
             {
-                if (obj.GameObjectId == (ulong)member.EntityId && obj is IPlayerCharacter pc)
-                {
-                    party.Add(pc);
-                    break;
-                }
+                party.Add(pc);
             }
         }
 
