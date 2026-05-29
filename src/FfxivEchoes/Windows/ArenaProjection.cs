@@ -4,24 +4,39 @@ namespace FfxivEchoes.Windows;
 
 public static class ArenaProjection
 {
+    // 後方互換：正方アリーナ（halfX = halfZ = arenaRadius）として軸独立版へ委譲する。
     public static Vector2 ProjectWorldToMap(
         Vector2 mapCenter,
         float mapRadius,
         Vector3 arenaCenter,
         float arenaRadius,
         Vector3 worldPos)
+        => ProjectWorldToMap(mapCenter, mapRadius, arenaCenter, arenaRadius, arenaRadius, worldPos);
+
+    /// <summary>
+    /// ワールド座標をミニマップへ投影する軸独立版。非正方矩形アリーナ（halfX ≠ halfZ）で
+    /// AoE 原点とプレイヤードット（<see cref="ProjectRelativeToMap"/>）の正規化方式を一致させ、
+    /// 短辺方向の安置ズレ（最大 2 倍）を防ぐ（P1-5）。クランプも矩形（軸独立 maxAbs）で統一する。
+    /// </summary>
+    public static Vector2 ProjectWorldToMap(
+        Vector2 mapCenter,
+        float mapRadius,
+        Vector3 arenaCenter,
+        float halfX,
+        float halfZ,
+        Vector3 worldPos)
     {
-        if (arenaRadius <= 0)
+        if (halfX <= 0 || halfZ <= 0)
         {
             return mapCenter;
         }
 
-        var nx = (worldPos.X - arenaCenter.X) / arenaRadius;
-        var nz = (worldPos.Z - arenaCenter.Z) / arenaRadius;
-        var dist = MathF.Sqrt(nx * nx + nz * nz);
-        if (dist > 1.0f)
+        var nx = (worldPos.X - arenaCenter.X) / halfX;
+        var nz = (worldPos.Z - arenaCenter.Z) / halfZ;
+        var maxAbs = MathF.Max(MathF.Abs(nx), MathF.Abs(nz));
+        if (maxAbs > 1.0f)
         {
-            var clamp = 0.97f / dist;
+            var clamp = 0.97f / maxAbs;
             nx *= clamp;
             nz *= clamp;
         }

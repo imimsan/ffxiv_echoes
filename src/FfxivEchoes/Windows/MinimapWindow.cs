@@ -1202,11 +1202,16 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
             Vector3 ac;
             if (item.LockedArenaCenter is { } locked) ac = locked;
             else ac = _contextBuilder.Build().ArenaCenter;
+            // 非正方矩形アリーナでも AoE 原点とプレイヤードットの正規化を一致させるため、
+            // ProjectRelativeToMap と同じ halfX/halfZ を渡す（P1-5）。寸法が無ければ正方扱い。
+            var halfX = item.ArenaHalfWidth > 0 ? item.ArenaHalfWidth : item.ArenaRadius;
+            var halfZ = item.ArenaHalfDepth > 0 ? item.ArenaHalfDepth : item.ArenaRadius;
             mapPos = ArenaProjection.ProjectWorldToMap(
                 mapCenter,
                 mapR,
                 ac,
-                item.ArenaRadius,
+                halfX,
+                halfZ,
                 worldPos);
             return true;
         }

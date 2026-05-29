@@ -48,6 +48,7 @@ var tests = new List<(string Name, Action Body)>
     ("AoeResolver adds caster hitbox for caster-origin shapes", AoeResolver_AddsCasterHitboxForCasterOriginShapes),
     ("AoeResolver rejects oversized unreliable ranges", AoeResolver_RejectsOversizedRanges),
     ("AoeResolver uses Omen for shape inference", AoeResolver_UsesOmenForShapeInference),
+    ("AoeResolver BuildAoeInfo propagates XAxisModifier as line half width", AoeResolver_BuildAoeInfo_PropagatesXAxisModifierAsLineHalfWidth),
     ("AutoSafeCallPlanner creates practical callouts", AutoSafeCallPlanner_CreatesCallouts),
     ("AutoSafeCallPlanner creates visual telegraph for large circle AoE", AutoSafeCallPlanner_CreatesVisualForLargeCircleAoe),
     ("AutoSafeCallPlanner treats donut variants as outer ring", AutoSafeCallPlanner_TreatsDonutVariantsAsOuterRing),
@@ -121,6 +122,7 @@ var tests = new List<(string Name, Action Body)>
     ("ArenaProjection uses long range for half arena cones", ArenaProjection_UsesLongRangeForHalfArenaCones),
     ("ArenaProjection keeps directional AoE lengths beyond arena radius", ArenaProjection_KeepsDirectionalAoeLengthsBeyondArenaRadius),
     ("ArenaProjection maps rectangular relative coordinates", ArenaProjection_MapsRectRelativeCoordinates),
+    ("ArenaProjection rect arena world origin matches relative dot", ArenaProjection_RectArena_WorldOriginMatchesRelativeDot),
     ("AoeGeometryPolicy uses readable line width", AoeGeometryPolicy_UsesReadableLineWidth),
     ("AoeGeometryPolicy points object AoE toward arena center", AoeGeometryPolicy_PointsObjectAoeTowardArenaCenter),
     ("MarkerRelativePreset accepts marker alias A", MarkerRelativePreset_AcceptsMarkerAliasA),
@@ -1000,6 +1002,25 @@ static void AoeResolver_RejectsOversizedRanges()
     False(AoeResolver.IsReliableEffectRange(50.01f), "range above 50m should be skipped");
     False(AoeResolver.IsReliableEffectRange(80f), "80m should not produce guessed auto AoE");
     False(AoeResolver.IsReliableEffectRange(0f), "0m is not an AoE");
+}
+
+static void AoeResolver_BuildAoeInfo_PropagatesXAxisModifierAsLineHalfWidth()
+{
+    var rect = new ActionGeometry(
+        Id: 1, Name: "Line", CastType: 4, EffectRangeM: 20f,
+        XAxisModifierM: 4f, OmenId: 0, CastTimeMs: 0);
+    var info = AoeResolver.BuildAoeInfo(rect);
+    True(info is not null, "rect with positive range should resolve to AoeInfo");
+    Equal(4f, info!.HalfWidthM, "XAxisModifier should propagate to AoeInfo.HalfWidthM");
+
+    // 直線半幅の解決：XAxisModifier 由来の値があればそれを使い、無ければ既定 5m。
+    Equal(4f, ActorTrackedAoeService.ResolveHalfWidthForShape(
+            ActorTrackedAoeService.TrackedAoeShape.Rect,
+            info.HalfWidthM > 0 ? info.HalfWidthM : (double?)null),
+        "line half width should use XAxisModifier when present");
+    Equal(AoeGeometryPolicy.DefaultLineHalfWidthM, ActorTrackedAoeService.ResolveHalfWidthForShape(
+            ActorTrackedAoeService.TrackedAoeShape.Rect, null),
+        "line half width falls back to default 5m when XAxisModifier absent");
 }
 
 static void AoeResolver_UsesOmenForShapeInference()
@@ -2655,6 +2676,25 @@ static void ArenaProjection_MapsRectRelativeCoordinates()
 
     NearlyEqual(140, projected.X, "rect x projection");
     NearlyEqual(140, projected.Y, "rect z projection");
+}
+
+static void ArenaProjection_RectArena_WorldOriginMatchesRelativeDot()
+{
+    // 非正方アリーナ(halfX=20, halfZ=10)。同一ワールド点を AoE 原点(ProjectWorldToMap 軸独立版)と
+    // プレイヤードット(ProjectRelativeToMap)の両経路で投影 → 同じ画面座標になるべき(P1-5)。
+    var center = new Vector2(100, 100);
+    var arenaCenter = new Vector3(5, 0, 3);
+    var world = new Vector3(15, 0, 8); // arenaCenter から相対 (10, _, 5)
+
+    var viaWorld = ArenaProjection.ProjectWorldToMap(center, 80, arenaCenter, 20f, 10f, world);
+    var viaRelative = ArenaProjection.ProjectRelativeToMap(center, 80, 20f, 10f,
+        world.X - arenaCenter.X, world.Z - arenaCenter.Z);
+
+    NearlyEqual(viaRelative.X, viaWorld.X, "rect arena: world-origin X must match relative-dot X");
+    NearlyEqual(viaRelative.Y, viaWorld.Y, "rect arena: world-origin Y must match relative-dot Y");
+    // 短辺(halfZ=10)方向が長辺(halfX=20)と独立に正規化される証拠
+    NearlyEqual(140f, viaWorld.X, "X: rel 10 / halfX 20 = 0.5 -> +40px");
+    NearlyEqual(140f, viaWorld.Y, "Z: rel 5 / halfZ 10 = 0.5 -> +40px");
 }
 
 static void AoeGeometryPolicy_UsesReadableLineWidth()

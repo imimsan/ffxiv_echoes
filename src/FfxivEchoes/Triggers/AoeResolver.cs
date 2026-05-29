@@ -24,7 +24,8 @@ public static class AoeResolver
         int CastType,
         bool FromCaster,
         uint OmenId = 0,
-        bool IncludeCasterHitbox = false);
+        bool IncludeCasterHitbox = false,
+        float HalfWidthM = 0f);
 
     // IDataManager 経由の旧呼び出しを薄く吸収するため、IDataManager → IActionLookup を
     // インスタンスごとにキャッシュする。Plugin.cs では新規サービスに直接 IActionLookup を
@@ -57,66 +58,60 @@ public static class AoeResolver
         try
         {
             var geom = actionLookup.TryGet(actionId);
-            if (geom is null)
-            {
-                return null;
-            }
-            var effectRange = geom.EffectRangeM;
-            if (effectRange <= 0)
-            {
-                log?.Debug("[FfxivEchoes] AoE skip non-AoE id={Id:X4} range={R}m castType={Ct}",
-                    actionId, effectRange, geom.CastType);
-                return null;
-            }
-            // 50m 超は全体攻撃・特殊演出・誤データが混ざりやすく、
-            // 自動推測で床範囲として描くと誤誘導になるため明示定義がある場合だけ扱う。
-            if (!IsReliableEffectRange(effectRange))
-            {
-                log?.Debug("[FfxivEchoes] AoE skip oversized id={Id:X4} range={R}m", actionId, effectRange);
-                return null;
-            }
-
-            var castType = geom.CastType;
-            // Splatoon の Projection.GuessShapeAndSize / 描画ルールに準拠：
-            //   2  = Circle, **target 中心**（地面/プレイヤー指定）
-            //   3  = Cone, caster 中心、caster 正面向き、+ HitboxRadius
-            //   4  = Rect, caster 中心、caster 正面向き、+ HitboxRadius
-            //   5  = Circle (PBAoE), caster 中心、+ HitboxRadius
-            //   6  = Donut（旧定義）caster 中心：**Splatoon は意図的に未対応** ←
-            //   7  = 特殊 Donut（caster 中心）：**Splatoon は意図的に未対応** ←
-            //   10 = Donut
-            //   11 = Cross, caster 中心
-            //   12 = Rect, **地面（target 中心）**、HitboxRadius 加算なし
-            //   13 = Cone, **地面（target 中心）**、HitboxRadius 加算なし
-            //
-            // CastType 6/7 を自動推測対象から除外する：
-            // 月の底のパラデイグマ (0x67BF) など、Lumina 上 CastType=6/7 / EffectRange > 0 を
-            // 持つ「演出系 / バフ系 / add 召喚系 cast」が caster 中心 Donut として自動描画され、
-            // ゾディアーク本体位置（アリーナ中央付近）に「正体不明のドーナツ」が出る regression
-            // の根本対策。Splatoon が同じ判断（コメント「custom/player ground」と明記）。
-            // 正規 Donut AoE はユーザー定義 mechanic / KnownAoeGeometry / Omen path 解析で
-            // 別途取得する必要があるが、ユーザー報告の最優先課題（中央誤発火）を即時解消する。
-            if (castType is 6 or 7)
-            {
-                log?.Information(
-                    "[FfxivEchoes] AoE skip CastType=6/7 (Donut 自動推測除外) id={Id:X4} range={R}m omen={Om}",
-                    actionId, effectRange, 0u);
-                return null;
-            }
-
-            var fromCaster = castType is 3 or 4 or 5 or 10 or 11;
-            var omenId = geom.OmenId;
-
-            log?.Debug("[FfxivEchoes] AoE resolve id={Id:X4} range={R}m castType={Ct} omen={Om}",
-                actionId, effectRange, castType, omenId);
-            var includeCasterHitbox = castType is 3 or 4 or 5;
-            return new AoeInfo(effectRange, castType, fromCaster, omenId, includeCasterHitbox);
+            return geom is null ? null : BuildAoeInfo(geom, log is null ? null : msg => log.Debug("[FfxivEchoes] {Msg}", msg));
         }
         catch (Exception ex)
         {
             log?.Warning(ex, "[FfxivEchoes] AoE resolve 失敗 id={Id}", actionId);
             return null;
         }
+    }
+
+    /// <summary>
+    /// <see cref="ActionGeometry"/>（Lumina 非依存の純 POCO）から <see cref="AoeInfo"/> を構築する純粋ロジック。
+    /// Dalamud 型を引数に取らないため、headless replay / ユニットテストから直接呼べる。
+    /// </summary>
+    /// <remarks>
+    /// Splatoon の Projection.GuessShapeAndSize / 描画ルールに準拠した CastType の意味：
+    ///   2  = Circle, target 中心（地面/プレイヤー指定）
+    ///   3  = Cone, caster 中心・caster 正面向き・+ HitboxRadius
+    ///   4  = Rect, caster 中心・caster 正面向き・+ HitboxRadius
+    ///   5  = Circle (PBAoE), caster 中心・+ HitboxRadius
+    ///   6  = Donut（旧定義）caster 中心：Splatoon は意図的に未対応
+    ///   7  = 特殊 Donut（caster 中心）：Splatoon は意図的に未対応
+    ///   10 = Donut / 11 = Cross, caster 中心 / 12 = Rect 地面 / 13 = Cone 地面
+    /// CastType 6/7 は、月の底パラデイグマ等の演出/バフ/add 召喚 cast が caster 中心 Donut として
+    /// アリーナ中央に「正体不明のドーナツ」を描く regression を避けるため自動推測から除外する。
+    /// </remarks>
+    public static AoeInfo? BuildAoeInfo(ActionGeometry geom, Action<string>? log = null)
+    {
+        var effectRange = geom.EffectRangeM;
+        if (effectRange <= 0)
+        {
+            log?.Invoke($"AoE skip non-AoE id={geom.Id:X4} range={effectRange}m castType={geom.CastType}");
+            return null;
+        }
+        // 50m 超は全体攻撃・特殊演出・誤データが混ざりやすく、自動推測で床範囲として描くと
+        // 誤誘導になるため、明示定義がある場合だけ扱う（ここでは弾く）。
+        if (!IsReliableEffectRange(effectRange))
+        {
+            log?.Invoke($"AoE skip oversized id={geom.Id:X4} range={effectRange}m");
+            return null;
+        }
+
+        var castType = geom.CastType;
+        if (castType is 6 or 7)
+        {
+            log?.Invoke($"AoE skip CastType=6/7 (Donut 自動推測除外) id={geom.Id:X4} range={effectRange}m");
+            return null;
+        }
+
+        var fromCaster = castType is 3 or 4 or 5 or 10 or 11;
+        var includeCasterHitbox = castType is 3 or 4 or 5;
+        log?.Invoke($"AoE resolve id={geom.Id:X4} range={effectRange}m castType={castType} omen={geom.OmenId}");
+        // 直線/矩形の半幅（Lumina XAxisModifier）を AoeInfo に伝播する。下流の auto-resolve 経路が
+        // これを ResolveHalfWidthForShape へ渡し、固定 5m ではなく実半幅で描けるようにする（P1-3）。
+        return new AoeInfo(effectRange, castType, fromCaster, geom.OmenId, includeCasterHitbox, geom.XAxisModifierM);
     }
 
     public static bool IsReliableEffectRange(float effectRange)

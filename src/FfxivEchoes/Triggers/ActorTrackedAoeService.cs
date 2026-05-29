@@ -590,7 +590,8 @@ public sealed class ActorTrackedAoeService : IDisposable
             Radius = radius,
             InnerRadius = shape == TrackedAoeShape.Donut ? radius * AoeResolver.DonutInnerRatio(aoe.OmenId) : 0f,
             FanDeg = shape == TrackedAoeShape.Cone ? fanDeg : 0f,
-            HalfWidth = DefaultHalfWidth(shape),
+            // 直線/矩形の半幅は Lumina XAxisModifier(aoe.HalfWidthM)を優先し、無ければ既定 5m (P1-3)
+            HalfWidth = ResolveHalfWidthForShape(shape, aoe.HalfWidthM > 0 ? aoe.HalfWidthM : (double?)null),
             FromCaster = aoe.FromCaster,
             TargetId = null,
             RotationKind = rotKind,
@@ -862,8 +863,8 @@ public sealed class ActorTrackedAoeService : IDisposable
             Radius = radius,
             InnerRadius = shape == TrackedAoeShape.Donut ? radius * AoeResolver.DonutInnerRatio(aoe.OmenId) : 0f,
             FanDeg = shape == TrackedAoeShape.Cone ? fanDeg : 0f,
-            // 直線 / 十字 AoE の半幅は Lumina に無いので 2.5m 既定（FFXIV 標準的な line 幅）
-            HalfWidth = DefaultHalfWidth(shape),
+            // 直線/矩形の半幅は Lumina XAxisModifier(aoe.HalfWidthM)を優先し、無ければ既定 5m (P1-3)
+            HalfWidth = ResolveHalfWidthForShape(shape, aoe.HalfWidthM > 0 ? aoe.HalfWidthM : (double?)null),
             FromCaster = aoe.FromCaster,
             TargetId = targetId,
             TargetWorld = targetWorld,
@@ -918,11 +919,6 @@ public sealed class ActorTrackedAoeService : IDisposable
 
     private static float DegreesToRadians(float degrees)
         => degrees * MathF.PI / 180f;
-
-    private static float DefaultHalfWidth(TrackedAoeShape shape)
-        => shape is TrackedAoeShape.Rect or TrackedAoeShape.Cross or TrackedAoeShape.HalfPlane
-            ? AoeGeometryPolicy.DefaultLineHalfWidthM
-            : 0f;
 
     public static float ResolveHalfWidthForShape(TrackedAoeShape shape, double? requested)
         => shape is TrackedAoeShape.Rect or TrackedAoeShape.Cross or TrackedAoeShape.HalfPlane
