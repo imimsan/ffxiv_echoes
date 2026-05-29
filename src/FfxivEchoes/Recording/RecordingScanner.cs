@@ -20,6 +20,8 @@ public sealed class RecordingScanner
     private readonly object _warnGate = new();
     private readonly Dictionary<string, (string Sig, AggregatedEvents Events)> _aggCache = new();
     private readonly object _aggCacheGate = new();
+    private readonly Dictionary<string, (string Sig, IReadOnlyList<string> Members)> _partyCache = new();
+    private readonly object _partyCacheGate = new();
 
     public RecordingScanner(IDalamudPluginInterface pluginInterface, IPluginLog log)
     {
@@ -163,6 +165,17 @@ public sealed class RecordingScanner
         var recordings = ListRecordings(zoneName);
         if (recordings.Count == 0) return Array.Empty<string>();
 
+        // CombatStart で PredictedCastReminder が毎回呼ぶため、Aggregate と同様に zone 単位で
+        // キャッシュし、全録画 meta 行の再読込（開幕の重さの一因）を避ける。
+        var sig = ComputeRecordingSignature(recordings);
+        lock (_partyCacheGate)
+        {
+            if (_partyCache.TryGetValue(zoneName, out var cached) && cached.Sig == sig)
+            {
+                return cached.Members;
+            }
+        }
+
         var union = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var rec in recordings)
         {
@@ -192,7 +205,12 @@ public sealed class RecordingScanner
                 _log.Warning(ex, "[FfxivEchoes] meta party の読み出しに失敗：{Path}", rec.Path);
             }
         }
-        return union.ToArray();
+        var result = union.ToArray();
+        lock (_partyCacheGate)
+        {
+            _partyCache[zoneName] = (sig, result);
+        }
+        return result;
     }
 
     /// <summary>
