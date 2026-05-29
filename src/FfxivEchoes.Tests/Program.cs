@@ -196,6 +196,7 @@ var tests = new List<(string Name, Action Body)>
     ("PredictedObjectSpawnLearner separates cast_start/cast_complete delays (T1 §2 症状A delay ズレ)", PredictedObjectSpawnLearner_SeparatesCastStartAndComplete),
     ("ReconcileObjectAoeRules updates recording-sourced rules from spawns (T1 §4 優先度1)", ReconcileObjectAoeRules_UpdatesRecordingSourcedRules),
     ("ReconcileObjectAoeRules protects manual and dictionary rules", ReconcileObjectAoeRules_ProtectsManualAndDictionaryRules),
+    ("PhaseTransitionPolicy CrossedBelow detects downward threshold crossing", PhaseTransitionPolicy_CrossedBelow),
 };
 
 var failed = 0;
@@ -216,6 +217,15 @@ foreach (var (name, body) in tests)
 if (failed > 0)
 {
     Environment.ExitCode = 1;
+}
+
+static void PhaseTransitionPolicy_CrossedBelow()
+{
+    True(PhaseTransitionPolicy.CrossedBelow(60f, 48f, 50f), "60→48 crosses below 50");
+    False(PhaseTransitionPolicy.CrossedBelow(48f, 45f, 50f), "48→45 already below 50");
+    False(PhaseTransitionPolicy.CrossedBelow(70f, 50f, 50f), "70→50 not strictly below threshold");
+    False(PhaseTransitionPolicy.CrossedBelow(45f, 55f, 50f), "45→55 rising not below");
+    False(PhaseTransitionPolicy.CrossedBelow(float.NaN, 48f, 50f), "NaN prev (first observation) is false");
 }
 
 static void AggregateFiles_KeepsRepeatedCastTimings()
