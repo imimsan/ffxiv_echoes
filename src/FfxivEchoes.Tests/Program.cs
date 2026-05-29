@@ -33,6 +33,7 @@ var tests = new List<(string Name, Action Body)>
     ("BuildCastPredictions keeps source for boss selection", BuildCastPredictions_KeepsSourceForBossSelection),
     ("RecordingScanner learns object action_used after appearance", RecordingScanner_LearnsObjectActionUsedAfterAppearance),
     ("RecordingScanner filters object action learning by object name", RecordingScanner_FiltersObjectActionLearningByName),
+    ("RecordingScanner suppresses repeated old-recording warnings", RecordingScanner_SuppressesRepeatedOldRecordingWarnings),
     ("ActionUsedEvent serializes and aggregates auto attacks separately", ActionUsedEvent_SerializesAndAggregates),
     ("ActionUsedEvent serializes target world", ActionUsedEvent_SerializesTargetWorld),
     ("ActionUsedEvent with attack name is treated as auto attack", ActionUsedEvent_AttackNameAggregatesAsAutoAttack),
@@ -693,6 +694,26 @@ static void RecordingScanner_FiltersObjectActionLearningByName()
 
     Equal(1, votes.Count, "name-filtered object action votes");
     Equal(1, votes[0x67ED], "name-filtered action id");
+}
+
+static void RecordingScanner_SuppressesRepeatedOldRecordingWarnings()
+{
+    var warned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    var gate = new object();
+    var oldEx = new System.IO.InvalidDataException("古い録画フォーマット (plugin_version=0.0.1.0 < 0.1.0)");
+
+    False(RecordingScanner.ShouldSuppressOldRecordingWarning(oldEx, "zoneA/a.jsonl", warned, gate),
+        "first old-recording warning for a path should NOT be suppressed");
+    True(RecordingScanner.ShouldSuppressOldRecordingWarning(oldEx, "zoneA/a.jsonl", warned, gate),
+        "second old-recording warning for the same path should be suppressed");
+    False(RecordingScanner.ShouldSuppressOldRecordingWarning(oldEx, "zoneA/b.jsonl", warned, gate),
+        "a different path should still warn once");
+
+    var ioEx = new System.IO.IOException("read failure");
+    False(RecordingScanner.ShouldSuppressOldRecordingWarning(ioEx, "zoneA/a.jsonl", warned, gate),
+        "non-old-recording exception must never be suppressed");
+    False(RecordingScanner.ShouldSuppressOldRecordingWarning(ioEx, "zoneA/a.jsonl", warned, gate),
+        "IOException stays unsuppressed even when repeated");
 }
 
 static void ActionUsedEvent_SerializesAndAggregates()
