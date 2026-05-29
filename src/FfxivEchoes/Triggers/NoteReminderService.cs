@@ -28,6 +28,7 @@ public sealed class NoteReminderService : IDisposable
     private readonly IDisposable _combatStartSub;
     private readonly IDisposable _combatEndSub;
     private readonly IDisposable _zoneSub;
+    private readonly IDisposable _branchResolvedSub;
 
     private readonly List<PendingNote> _pending = new();
     private readonly object _gate = new();
@@ -55,6 +56,10 @@ public sealed class NoteReminderService : IDisposable
         });
         _zoneSub = bus.Subscribe<ZoneChangedEvent>(z =>
             _currentZone = string.IsNullOrEmpty(z.ZoneName) ? "Unknown" : z.ZoneName);
+        // 分岐確定後に branch_id 付き mechanic を再スケジュールする。これが無いと、CombatStart 時点では
+        // 未確定（IsBranchAllowed=false）だった分岐固有ギミックの先行通知が永久に発火しない。
+        // PredictedCastReminderService と同じ BranchResolvedEvent 購読パターン。
+        _branchResolvedSub = bus.Subscribe<BranchResolvedEvent>(_ => Schedule());
 
         _framework.Update += OnUpdate;
     }
@@ -64,6 +69,7 @@ public sealed class NoteReminderService : IDisposable
         _combatStartSub.Dispose();
         _combatEndSub.Dispose();
         _zoneSub.Dispose();
+        _branchResolvedSub.Dispose();
         _framework.Update -= OnUpdate;
         lock (_gate) { _pending.Clear(); }
     }
