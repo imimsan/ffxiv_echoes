@@ -34,15 +34,22 @@ public sealed class TelegraphGapPreset : ISafeZonePreset
 
         var origin = ResolveOrigin(calc, ctx);
         var searchRadius = ParamHelper.GetFloat(calc.Params, "search_radius") ?? 18f;
+        // telegraph を指定するキーが存在するか（"telegraphs" 標準 / "actors" は未対応キー）。
+        var hasTelegraphKey = calc.Params.ContainsKey("telegraphs") || calc.Params.ContainsKey("actors");
         var shapes = BuildShapes(calc.Params, ctx);
         if (shapes.Count == 0)
         {
-            return new SafeZoneResult(origin, DirectionInfo.Compute(ctx.SelfPosition, origin));
+            // telegraph を期待するキーがあるのに 0 件 = 解釈失敗（例: 未対応の "actors" キー）。
+            // self 位置を「安置」と誤提示すると AoE 内へ誘導しかねないため null を返す（呼び出し側はガード済み）。
+            // キー自体が無い＝避ける対象が無い場合のみ origin（その場待機）を返す。
+            return hasTelegraphKey
+                ? null
+                : new SafeZoneResult(origin, DirectionInfo.Compute(ctx.SelfPosition, origin));
         }
 
-        // 同心円サンプリング：半径方向に 4 段、角度方向に 24 分割
+        // 同心円サンプリング：半径方向に 4 段、角度方向に 48 分割（7.5°粒度。狭い安置の見落とし低減）
         const int RingCount = 4;
-        const int AngleSlices = 24;
+        const int AngleSlices = 48;
 
         for (var ring = 1; ring <= RingCount; ring++)
         {
@@ -61,8 +68,9 @@ public sealed class TelegraphGapPreset : ISafeZonePreset
             }
         }
 
-        // 全領域が telegraph で覆われている：origin を返す（フォールバック）
-        return new SafeZoneResult(origin, DirectionInfo.Compute(ctx.SelfPosition, origin));
+        // 全領域が telegraph で覆われ安全点が見つからない：self を「安置」と誤提示しないため null を返す。
+        // 呼び出し側（DirectionCall/FieldMarker/ProximityFeedback ハンドラ）は result null をガード済み。
+        return null;
     }
 
     private static Vector3 ResolveOrigin(SafeZoneCalculation calc, SafeZoneContext ctx)

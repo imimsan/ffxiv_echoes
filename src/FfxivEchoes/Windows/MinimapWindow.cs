@@ -611,7 +611,7 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
                     break;
                 case "donut":
                 {
-                    var inner = (zone.InnerRadiusM ?? zone.RadiusM * 0.5);
+                    var inner = (zone.InnerRadiusM ?? zone.RadiusM * AoeGeometryPolicy.DefaultDonutInnerRatio);
                     var innerPx = (float)(inner / radiusScale) * mapR;
                     if (innerPx < 2f) innerPx = 2f;
                     DrawDonutShape(draw, origin, innerPx, pixelR, baseFill, baseStroke);
@@ -664,7 +664,7 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
                 case "donut_cone":
                 {
                     var rotRad = UserZoneRotationRad(zone, fallbackDeg: -90.0);
-                    var inner = (zone.InnerRadiusM ?? zone.RadiusM * 0.5);
+                    var inner = (zone.InnerRadiusM ?? zone.RadiusM * AoeGeometryPolicy.DefaultDonutInnerRatio);
                     var innerPx = (float)(inner / radiusScale) * mapR;
                     if (innerPx < 2f) innerPx = 2f;
                     DrawDonutConeShape(draw, origin, innerPx, pixelR, rotRad, (float)(zone.FanDeg ?? 90.0), baseFill, baseStroke);
@@ -1148,11 +1148,15 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
             if (ctx is null) return;
             arenaCenter = ctx.ArenaCenter;
         }
-        var arenaR = item.ArenaRadius;
-        if (arenaR <= 0) return;
+        // 矩形アリーナでは X/Z 軸を独立に正規化する（TryProjectWorldToMap / DrawStrategyPositions と同じ）。
+        // 単軸 arenaR 正規化のままだと矩形アリーナで安置マーカーが短辺方向にズレる（ARENA-01）。
+        // 円形（halfX==halfZ==ArenaRadius）では従来挙動と完全一致。
+        var halfX = item.ArenaHalfWidth > 0 ? item.ArenaHalfWidth : item.ArenaRadius;
+        var halfZ = item.ArenaHalfDepth > 0 ? item.ArenaHalfDepth : item.ArenaRadius;
+        if (halfX <= 0 || halfZ <= 0) return;
 
-        var dx = (safeWorld.X - arenaCenter.X) / arenaR;
-        var dz = (safeWorld.Z - arenaCenter.Z) / arenaR;
+        var dx = (safeWorld.X - arenaCenter.X) / halfX;
+        var dz = (safeWorld.Z - arenaCenter.Z) / halfZ;
         var dist = MathF.Sqrt(dx * dx + dz * dz);
         if (dist > 1.0f)
         {
@@ -1164,7 +1168,8 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
         var px = mapCenter.X + dx * mapR;
         var py = mapCenter.Y + dz * mapR;
 
-        var safePixR = item.SafeZoneRadius / arenaR * mapR;
+        var radiusScale = MathF.Max(halfX, halfZ);
+        var safePixR = item.SafeZoneRadius / radiusScale * mapR;
         if (safePixR < 6f * scale) safePixR = 6f * scale;
 
         // 半透明の塗りつぶし + 点線外周

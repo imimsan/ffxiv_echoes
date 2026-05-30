@@ -1529,7 +1529,7 @@ public sealed class TriggerEditorTab : ITab
                     break;
                 case "donut":
                 {
-                    var inner = (z.InnerRadiusM ?? z.RadiusM * 0.5);
+                    var inner = (z.InnerRadiusM ?? z.RadiusM * AoeGeometryPolicy.DefaultDonutInnerRatio);
                     var innerPx = (float)inner * pxPerMeterX;
                     if (innerPx < 2f) innerPx = 2f;
                     const int segs = 48;
@@ -5471,7 +5471,7 @@ public sealed class TriggerEditorTab : ITab
                 ImGui.TableNextColumn();
                 if (z.Shape == "donut")
                 {
-                    var inner = (float)(z.InnerRadiusM ?? z.RadiusM * 0.5);
+                    var inner = (float)(z.InnerRadiusM ?? z.RadiusM * AoeGeometryPolicy.DefaultDonutInnerRatio);
                     ImGui.SetNextItemWidth(-1);
                     if (ImGui.InputFloat("##inner", ref inner, 0.5f, 1f, "%.1f"))
                     {

@@ -98,6 +98,10 @@ public sealed class ArenaViewHandler : IActionHandler
                 lockedCenter = ctx.ArenaCenter;
             }
 
+            // 安置計算もロック済み中心を基点にする。これが無いと ArenaCenterRelative 系プリセットが
+            // ボスのライブ位置（ctx.ArenaCenter の既定）を中心に計算し、固定中心設定が無視される。
+            ctx = ctx with { ArenaCenter = lockedCenter.Value };
+
             if (action.SafeZone is not null)
             {
                 var result = _safeZoneEngine.Calculate(action.SafeZone, ctx);

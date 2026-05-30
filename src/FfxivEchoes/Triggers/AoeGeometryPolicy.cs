@@ -10,6 +10,12 @@ public static class AoeGeometryPolicy
 {
     public const float DefaultLineHalfWidthM = 5.0f;
 
+    /// <summary>
+    /// ドーナツの内径比（inner_radius_m 省略時の既定）。AoeResolver.DonutInnerRatio(0) と一致する 0.30。
+    /// 以前は経路により 0.5/0.3 が混在していた。安置(中央の穴)を小さめに描く＝安全側に倒す。
+    /// </summary>
+    public const float DefaultDonutInnerRatio = 0.30f;
+
     public static float ResolveLineHalfWidth(double? requested)
     {
         return requested is > 0 ? (float)requested.Value : DefaultLineHalfWidthM;
