@@ -74,6 +74,15 @@ var tests = new List<(string Name, Action Body)>
     ("SyncOffsetTracker accepts large recording sync jumps for phase skips", SyncOffsetTracker_AcceptsLargeRecordingSyncJumps),
     ("SyncOffsetTracker chooses nearest sync point within tolerance", SyncOffsetTracker_ChoosesNearestSyncPointWithinTolerance),
     ("PredictedCastReminderService drops stale skipped predictions", PredictedCastReminderService_DropsStaleSkippedPredictions),
+    ("NoteReminderService drops stale notes on reschedule after phase or branch change", NoteReminderService_DropsStaleNotesOnReschedule),
+    ("PhaseTransitionPolicy builds phase ordinals from sync points and hp triggers", PhaseTransitionPolicy_BuildsPhaseOrdinals),
+    ("PhaseTransitionPolicy IsPastPhase suppresses earlier phases only", PhaseTransitionPolicy_IsPastPhase_SuppressesEarlierPhasesOnly),
+    ("PhaseTransitionPolicy phase filtering disabled when no phases annotated", PhaseTransitionPolicy_NoPhasesAnnotated_FilterDisabled),
+    ("BranchObserver IsWithinBranchWindow uses per-group activation", BranchObserver_IsWithinBranchWindow_UsesGroupActivation),
+    ("BossRelativePreset angle=90 points to boss right (not left)", BossRelativePreset_Angle90_PointsToBossRight),
+    ("TimelineNoteResolver SelectOccurrenceTime picks occurrence when no hint time", TimelineNoteResolver_SelectOccurrenceTime_UsesOccurrenceIndex),
+    ("AddObjectAoe MatchesObjectSource rejects short partial matches", AddObjectAoe_MatchesObjectSource_RejectsShortPartial),
+    ("UpcomingTimelinePolicy filters branch-rejected predictions via Triggers path", UpcomingTimelinePolicy_FiltersBranchRejected_TriggersPath),
     ("PredictedCastReminderService builds visible default warning actions", PredictedCastReminderService_BuildsVisibleDefaultWarningActions),
     ("PredictedCastReminderService draws inferred visuals unless minimap is suppressed", PredictedCastReminderService_DrawsInferredVisualsUnlessSuppressed),
     ("Profile keeps all-enabled and custom trigger selection distinct", Profile_CustomSelectionIsExplicit),
@@ -161,6 +170,9 @@ var tests = new List<(string Name, Action Body)>
     ("TimelineBranch JSON roundtrip preserves condition fields", TimelineBranch_JsonRoundtrip_PreservesFields),
     ("BranchObserver scopes rejection to branch group", BranchObserver_ScopesRejectionToBranchGroup),
     ("StrategyPlanResolver FindMechanicForPrediction filters branch", StrategyPlanResolver_FindMechanicForPrediction_FiltersByBranch),
+    ("StrategyPlanResolver FindMechanicForPrediction signals branch-rejected vs undefined", StrategyPlanResolver_FindMechanicForPrediction_SignalsBranchRejected),
+    ("UpcomingTimelinePolicy filters branch-rejected recording predictions", UpcomingTimelinePolicy_FiltersBranchRejectedPredictions),
+    ("UpcomingTimelinePolicy keeps prediction when at least one branch is active", UpcomingTimelinePolicy_KeepsPredictionWhenAnyBranchActive),
     ("TriggerFile JSON roundtrip preserves raid-wide markers", TriggerFile_JsonRoundtrip_PreservesRaidWideMarkers),
     ("TriggerFile JSON roundtrip preserves object AoE rules", TriggerFile_JsonRoundtrip_PreservesObjectAoeRules),
     ("Trigger schema exposes advanced AoE fields", TriggerSchema_ExposesAdvancedAoeFields),
@@ -1668,7 +1680,8 @@ static void SyncOffsetTracker_ChoosesNearestSyncPointWithinTolerance()
             currentOffsetSec: 0.0,
             actualCastId: 0xAAAA,
             out var offset,
-            out var label),
+            out var label,
+            out _),
         "nearest sync point should be selected");
     Equal(2.0, offset, "sync offset");
     Equal("sync:second", label, "sync label");
@@ -1678,6 +1691,7 @@ static void SyncOffsetTracker_ChoosesNearestSyncPointWithinTolerance()
             actualRelSec: 50.0,
             currentOffsetSec: 0.0,
             actualCastId: 0xAAAA,
+            out _,
             out _,
             out _),
         "out-of-tolerance sync should be ignored");
@@ -1698,6 +1712,235 @@ static void PredictedCastReminderService_DropsStaleSkippedPredictions()
             offsetSec: -40.0,
             nowRelSec: 90.0),
         "skipped past event should be dropped");
+}
+
+static void NoteReminderService_DropsStaleNotesOnReschedule()
+{
+    // BranchResolvedEvent / PhaseTransitionedEvent で Schedule() が再構築されたとき、
+    // 既に過去になった前半ノートが _pending に再投入されて即時一斉発火する重複読み上げを防ぐ。
+    // 後半フェーズ突入(nowRel=120)時点で、前半ノート(実イベント=50s)は stale として発火しない。
+    False(NoteReminderService.ShouldFireDueNote(
+            fireAtRelSec: 0.0,
+            eventAtRelSec: 50.0,
+            offsetSec: 0.0,
+            nowRelSec: 120.0),
+        "前半ノート(event=50, now=120)は stale として発火しない");
+
+    // 後半フェーズの新規ノート(実イベント=130s)は通常どおり発火する。
+    True(NoteReminderService.ShouldFireDueNote(
+            fireAtRelSec: 120.0,
+            eventAtRelSec: 130.0,
+            offsetSec: 0.0,
+            nowRelSec: 121.0),
+        "後半ノート(event=130, now=121)は通常発火");
+
+    // staleGrace 窓内(event=119.5, now=120, grace=1.0)はギリギリ発火する。
+    True(NoteReminderService.ShouldFireDueNote(
+            fireAtRelSec: 0.0,
+            eventAtRelSec: 119.5,
+            offsetSec: 0.0,
+            nowRelSec: 120.0),
+        "grace 窓内(event=119.5, now=120)は発火");
+
+    // 発火予定時刻がまだ未来(fireAt+offset > now)のものは発火しない。
+    False(NoteReminderService.ShouldFireDueNote(
+            fireAtRelSec: 125.0,
+            eventAtRelSec: 130.0,
+            offsetSec: 0.0,
+            nowRelSec: 120.0),
+        "発火予定が未来(fireAt=125 > now=120)はまだ発火しない");
+}
+
+static void PhaseTransitionPolicy_BuildsPhaseOrdinals()
+{
+    var file = new TriggerFile
+    {
+        SyncPoints = new List<SyncPoint>
+        {
+            // 意図的に時刻逆順で登録 → expected_time 昇順で並べ替えられることを確認
+            new() { Id = "p3", Type = "cast_start", CastId = "0xP3", ExpectedTime = 360, Phase = "P3" },
+            new() { Id = "p2", Type = "cast_start", CastId = "0xP2", ExpectedTime = 180, Phase = "P2" },
+            new() { Id = "nophase", Type = "cast_start", CastId = "0xNP", ExpectedTime = 90 },
+        },
+        StrategyProfiles = new List<StrategyProfile>
+        {
+            new()
+            {
+                Id = "default",
+                Enabled = true,
+                Mechanics = new List<MechanicStrategy>
+                {
+                    new()
+                    {
+                        Id = "enrage_phase",
+                        Enabled = true,
+                        Triggers = new List<MechanicTrigger>
+                        {
+                            new() { Type = "hp_pct", HpPctBelow = 20, Phase = "P5" },
+                        },
+                    },
+                },
+            },
+        },
+    };
+
+    var ordinals = PhaseTransitionPolicy.BuildPhaseOrdinals(file);
+
+    Equal(3, ordinals.Count, "sync_point 2件 + hp_pct 1件 = 3フェーズ");
+    Equal(1, ordinals["P2"], "P2 は expected_time 最小なので ordinal 1");
+    Equal(2, ordinals["P3"], "P3 は次なので ordinal 2");
+    Equal(3, ordinals["P5"], "hp_pct フェーズは sync_point の後で ordinal 3");
+    False(ordinals.ContainsKey("P1"), "phase 注釈の無い初期フェーズはマップに入らない");
+}
+
+static void PhaseTransitionPolicy_IsPastPhase_SuppressesEarlierPhasesOnly()
+{
+    var ordinals = new Dictionary<string, int>(StringComparer.Ordinal)
+    {
+        ["P2"] = 1,
+        ["P3"] = 2,
+        ["P5"] = 3,
+    };
+
+    // 現在 P3（ordinal 2）にいるとき
+    const int current = 2;
+
+    // 初期フェーズ P1（マップ外 = ordinal 0）は過去 → 抑制
+    True(PhaseTransitionPolicy.IsPastPhase("P1", current, ordinals), "初期フェーズ P1 は過去");
+    // P2（ordinal 1）も過去 → 抑制
+    True(PhaseTransitionPolicy.IsPastPhase("P2", current, ordinals), "P2 は過去");
+    // 現在フェーズ P3（ordinal 2）は過去ではない → 表示
+    False(PhaseTransitionPolicy.IsPastPhase("P3", current, ordinals), "現在フェーズ P3 は表示");
+    // 未来フェーズ P5（ordinal 3）は過去ではない → 表示（先取り）
+    False(PhaseTransitionPolicy.IsPastPhase("P5", current, ordinals), "未来フェーズ P5 は表示");
+    // phase 無し（共通ギミック）は常に表示
+    False(PhaseTransitionPolicy.IsPastPhase(null, current, ordinals), "phase 無しの共通ギミックは常に表示");
+}
+
+static void PhaseTransitionPolicy_NoPhasesAnnotated_FilterDisabled()
+{
+    var empty = new Dictionary<string, int>(StringComparer.Ordinal);
+
+    // フェーズ未注釈（マップ空）のコンテンツでは、どのフェーズでも過去扱いしない（後方互換）。
+    False(PhaseTransitionPolicy.IsPastPhase("P1", 5, empty), "マップ空なら絞り込み無効（P1）");
+    False(PhaseTransitionPolicy.IsPastPhase(null, 5, empty), "マップ空なら絞り込み無効（共通）");
+    Equal(0, PhaseTransitionPolicy.ResolvePhaseOrdinal("P1", empty), "マップ外は ordinal 0");
+}
+
+static void TimelineNoteResolver_SelectOccurrenceTime_UsesOccurrenceIndex()
+{
+    var times = new double[] { 92.0, 100.0 };
+
+    // hintTime<=0（mechanic.Time 未設定）: occurrenceIndex で選ぶ。以前は常に times[0]=92 だった。
+    Equal(92.0, TimelineNoteResolver.SelectOccurrenceTime(times, 0.0, 0), "occurrence[0]=前半=92");
+    Equal(100.0, TimelineNoteResolver.SelectOccurrenceTime(times, 0.0, 1), "occurrence[1]=後半=100");
+    Equal(100.0, TimelineNoteResolver.SelectOccurrenceTime(times, 0.0, 5), "範囲外は末尾にクランプ=100");
+
+    // hintTime>0（明示 Time 付きノート）: 最も近い出現（従来挙動を維持）。
+    Equal(100.0, TimelineNoteResolver.SelectOccurrenceTime(times, 98.0, 0), "hint=98 は最も近い 100");
+    Equal(92.0, TimelineNoteResolver.SelectOccurrenceTime(times, 93.0, 1), "hint=93 は最も近い 92（hint優先）");
+
+    // 単一出現
+    Equal(50.0, TimelineNoteResolver.SelectOccurrenceTime(new double[] { 50.0 }, 0.0, 3), "単一出現はその時刻");
+}
+
+static void AddObjectAoe_MatchesObjectSource_RejectsShortPartial()
+{
+    // 完全一致は常に許可
+    True(FfxivEchoes.Triggers.AddObjectAoeService.MatchesObjectSource("ケツァクウァトル", "ケツァクウァトル"),
+        "完全一致は許可");
+    // 長い名前同士の部分一致は許可
+    True(FfxivEchoes.Triggers.AddObjectAoeService.MatchesObjectSource("ケツァクウァトルの分身", "ケツァクウァトル"),
+        "3文字以上の部分一致は許可");
+    // 短い名前("炎")が長い名前に誤マッチしない
+    False(FfxivEchoes.Triggers.AddObjectAoeService.MatchesObjectSource("炎の精霊", "炎"),
+        "短い名前(2文字未満扱い)は部分一致で誤マッチしない");
+    False(FfxivEchoes.Triggers.AddObjectAoeService.MatchesObjectSource("炎", "炎の精霊"),
+        "逆方向でも短い名前は誤マッチしない");
+    // null/空
+    False(FfxivEchoes.Triggers.AddObjectAoeService.MatchesObjectSource(null, "炎の精霊"), "null source は false");
+}
+
+static void BossRelativePreset_Angle90_PointsToBossRight()
+{
+    // FFXIV: Rotation=0 は +Z(南)向き・+X=東。南を向くと右手は西(-X)。
+    // 「正面=0 / 右=90 / 後=180 / 左=270」を満たすことを純粋ヘルパで検証する。
+    // 以前は加算方向が逆で angle=90 が +X(東=ボスの左) を指しており安置が逆側になっていた。
+    var front = BossRelativePreset.ComputeOffset(bossFacingRad: 0f, angleDeg: 0f, distance: 10f);
+    NearlyEqual(0f, front.X, "正面(0) の X は ~0", 0.001f);
+    NearlyEqual(10f, front.Z, "正面(0) は +Z", 0.001f);
+
+    var right = BossRelativePreset.ComputeOffset(0f, 90f, 10f);
+    NearlyEqual(-10f, right.X, "右(90) は -X(西=南向き時の右)", 0.001f);
+    NearlyEqual(0f, right.Z, "右(90) の Z は ~0", 0.001f);
+
+    var back = BossRelativePreset.ComputeOffset(0f, 180f, 10f);
+    NearlyEqual(0f, back.X, "後(180) の X は ~0", 0.001f);
+    NearlyEqual(-10f, back.Z, "後(180) は -Z", 0.001f);
+
+    var left = BossRelativePreset.ComputeOffset(0f, 270f, 10f);
+    NearlyEqual(10f, left.X, "左(270) は +X(東=南向き時の左)", 0.001f);
+    NearlyEqual(0f, left.Z, "左(270) の Z は ~0", 0.001f);
+}
+
+static void BranchObserver_IsWithinBranchWindow_UsesGroupActivation()
+{
+    var start = DateTimeOffset.UnixEpoch;
+    True(BranchObserverService.IsWithinBranchWindow(start.AddSeconds(20), start, 30),
+        "起点から20s（< window30）は判定可");
+    False(BranchObserverService.IsWithinBranchWindow(start.AddSeconds(31), start, 30),
+        "起点から31s（> window30）は判定不可");
+
+    // 後半フェーズの分岐：起点がフェーズ遷移時刻にリセットされていれば、戦闘開始から
+    // 190s 経過していても「フェーズ起点から10s」として window 内になる（FIX-10 の核心）。
+    var phaseStart = start.AddSeconds(180);
+    True(BranchObserverService.IsWithinBranchWindow(phaseStart.AddSeconds(10), phaseStart, 30),
+        "フェーズ起点から10s後は window 内（戦闘開始基準なら190s>30で永久Pendingだった）");
+    False(BranchObserverService.IsWithinBranchWindow(phaseStart.AddSeconds(40), phaseStart, 30),
+        "フェーズ起点から40s後は window 超過");
+}
+
+static void UpcomingTimelinePolicy_FiltersBranchRejected_TriggersPath()
+{
+    var file = new TriggerFile
+    {
+        ActiveStrategyProfileId = "default",
+        StrategyProfiles = new List<StrategyProfile>
+        {
+            new()
+            {
+                Id = "default",
+                Enabled = true,
+                Mechanics = new List<MechanicStrategy>
+                {
+                    // 新パス（Triggers）で branch_b に紐づくキャスト（AttachedTo は使わない）
+                    new()
+                    {
+                        Id = "b1",
+                        Enabled = true,
+                        BranchId = "branch_b",
+                        Triggers = new List<MechanicTrigger>
+                        {
+                            new() { Type = "cast", Match = new MatchCondition { CastId = "0xBEEF" } },
+                        },
+                    },
+                },
+            },
+        },
+    };
+    var predictions = new List<RecordingTimelinePrediction>
+    {
+        new("cast_start", 15, "AttackB", "0xBEEF", "Boss", null, 5, 0, 5, 1.0, 0.3),
+        new("cast_start", 20, "Common", "0xCAFE", "Boss", null, 5, 0, 5, 1.0, 0.1),
+    };
+
+    // branch_b が Rejected（active は branch_a のみ）
+    var filtered = UpcomingTimelinePolicy.FilterBranchRejectedPredictions(
+        predictions, file, id => id is null or "branch_a");
+
+    Equal(1, filtered.Count, "Triggers パスで branch_b に紐づくキャストも除外される");
+    False(filtered.Any(p => p.Id == "0xBEEF"), "branch_b(Triggers) のキャストは除外");
+    True(filtered.Any(p => p.Id == "0xCAFE"), "未紐づけ共通キャストは残る");
 }
 
 static void PredictedCastReminderService_BuildsVisibleDefaultWarningActions()
@@ -3251,6 +3494,127 @@ static void StrategyPlanResolver_FindMechanicForPrediction_FiltersByBranch()
     var selected = StrategyPlanResolver.FindMechanicForPrediction(file, prediction, branchId => branchId is null or "a");
 
     Equal("branch_a", selected.Mechanic?.Id, "rejected branch mechanic should not supply prediction actions");
+}
+
+static void StrategyPlanResolver_FindMechanicForPrediction_SignalsBranchRejected()
+{
+    var file = new TriggerFile
+    {
+        ActiveStrategyProfileId = "default",
+        StrategyProfiles = new List<StrategyProfile>
+        {
+            new()
+            {
+                Id = "default",
+                Enabled = true,
+                Mechanics = new List<MechanicStrategy>
+                {
+                    // 攻撃B 専用キャスト（分岐 b にのみ紐づく）
+                    new()
+                    {
+                        Id = "branch_b_only",
+                        Label = "AttackB",
+                        Enabled = true,
+                        BranchId = "b",
+                        Time = 20,
+                        AttachedTo = new MatchCondition { CastId = "0xB" },
+                    },
+                },
+            },
+        },
+    };
+
+    // 分岐 b が Rejected（active は a のみ）のとき、攻撃B キャストは
+    // Mechanic=null かつ BranchRejected=true になる（= 抑制すべき、デフォルト警告を出さない）。
+    var rejected = StrategyPlanResolver.FindMechanicForPrediction(
+        file,
+        new RecordingPrediction(20, "AttackB", "0xB", "Boss", 1, 0, 1, 1.0, 0.0, 20, 20),
+        branchId => branchId is null or "a");
+    Null(rejected.Mechanic, "棄却分岐のキャストは Mechanic=null");
+    True(rejected.BranchRejected, "棄却分岐は BranchRejected=true（明示抑制すべき）");
+
+    // mechanic がそもそも未定義なキャストは BranchRejected=false（デフォルト警告を出してよい）。
+    var undefined = StrategyPlanResolver.FindMechanicForPrediction(
+        file,
+        new RecordingPrediction(30, "Unknown", "0xZZZ", "Boss", 1, 0, 1, 1.0, 0.0, 30, 30),
+        branchId => branchId is null or "a");
+    Null(undefined.Mechanic, "未定義キャストは Mechanic=null");
+    False(undefined.BranchRejected, "未定義キャストは BranchRejected=false（デフォルト警告は許可）");
+}
+
+static void UpcomingTimelinePolicy_FiltersBranchRejectedPredictions()
+{
+    var file = new TriggerFile
+    {
+        ActiveStrategyProfileId = "default",
+        StrategyProfiles = new List<StrategyProfile>
+        {
+            new()
+            {
+                Id = "default",
+                Enabled = true,
+                Mechanics = new List<MechanicStrategy>
+                {
+                    new() { Id = "a1", Enabled = true, BranchId = "branch_a",
+                            AttachedTo = new MatchCondition { CastId = "0xAAAA" } },
+                    new() { Id = "b1", Enabled = true, BranchId = "branch_b",
+                            AttachedTo = new MatchCondition { CastId = "0xBBBB" } },
+                    new() { Id = "common", Enabled = true, BranchId = null,
+                            AttachedTo = new MatchCondition { CastId = "0xCCCC" } },
+                },
+            },
+        },
+    };
+    var predictions = new List<RecordingTimelinePrediction>
+    {
+        new("cast_start", 10, "AttackA", "0xAAAA", "Boss", null, 5, 0, 5, 1.0, 0.2),
+        new("cast_start", 15, "AttackB", "0xBBBB", "Boss", null, 5, 0, 5, 1.0, 0.3),
+        new("cast_start", 20, "CommonAttack", "0xCCCC", "Boss", null, 5, 0, 5, 1.0, 0.1),
+        new("cast_start", 25, "UnknownCast", "0xDDDD", "Boss", null, 3, 0, 3, 0.6, 0.5),
+    };
+
+    // branch_a が Active、branch_b が Rejected
+    var filtered = UpcomingTimelinePolicy.FilterBranchRejectedPredictions(
+        predictions, file, id => id is null or "branch_a");
+
+    Equal(3, filtered.Count, "branch_b 専用キャストのみ除外され、他は残る");
+    True(filtered.Any(p => p.Id == "0xAAAA"), "branch_a のキャストは残る");
+    False(filtered.Any(p => p.Id == "0xBBBB"), "branch_b のキャストは除外される");
+    True(filtered.Any(p => p.Id == "0xCCCC"), "共通キャストは残る");
+    True(filtered.Any(p => p.Id == "0xDDDD"), "mechanic 未定義のキャストは残る");
+}
+
+static void UpcomingTimelinePolicy_KeepsPredictionWhenAnyBranchActive()
+{
+    var file = new TriggerFile
+    {
+        ActiveStrategyProfileId = "default",
+        StrategyProfiles = new List<StrategyProfile>
+        {
+            new()
+            {
+                Id = "default",
+                Enabled = true,
+                Mechanics = new List<MechanicStrategy>
+                {
+                    // 同一 CastId が分岐A(Active)にも分岐B(Rejected)にも紐づく
+                    new() { Id = "a1", Enabled = true, BranchId = "branch_a",
+                            AttachedTo = new MatchCondition { CastId = "0x9999" } },
+                    new() { Id = "b1", Enabled = true, BranchId = "branch_b",
+                            AttachedTo = new MatchCondition { CastId = "0x9999" } },
+                },
+            },
+        },
+    };
+    var predictions = new List<RecordingTimelinePrediction>
+    {
+        new("cast_start", 30, "SharedCast", "0x9999", "Boss", null, 5, 0, 5, 1.0, 0.2),
+    };
+
+    var filtered = UpcomingTimelinePolicy.FilterBranchRejectedPredictions(
+        predictions, file, id => id is null or "branch_a");
+
+    Equal(1, filtered.Count, "少なくとも1つの分岐が active なキャストは残す");
 }
 
 static void TriggerFile_JsonRoundtrip_PreservesRaidWideMarkers()

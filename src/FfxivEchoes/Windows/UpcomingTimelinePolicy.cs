@@ -1,4 +1,8 @@
+using System;
+using System.Collections.Generic;
 using FfxivEchoes.Recording;
+using FfxivEchoes.Triggers;
+using FfxivEchoes.Triggers.Models;
 
 namespace FfxivEchoes.Windows;
 
@@ -12,6 +16,92 @@ public static class UpcomingTimelinePolicy
         return predictions
             .Where(prediction => !IsRawUnknownActionLabel(prediction.Label))
             .ToArray();
+    }
+
+    /// <summary>
+    /// 録画予測（cast_start 等）から、分岐 (TimelineBranch) で棄却された攻撃を除外する。
+    /// 攻撃A/B のうち実際に来なかった方の予測キャストがタイムラインに残るのを防ぐ。
+    /// </summary>
+    /// <remarks>
+    /// 録画予測 (<see cref="RecordingTimelinePrediction"/>) には branch_id が無いため、
+    /// アクティブプロファイルの mechanic を AttachedTo.CastId で逆引きして branch_id を解決する。
+    /// あるキャストに紐づく branch のうち少なくとも 1 つが active/common なら表示する
+    /// （= 同一キャストが複数分岐に割り当てられていても、生きている分岐があれば残す）。
+    /// 分岐に紐づかない共通キャストはそのまま通す。
+    /// </remarks>
+    /// <param name="branchActiveCheck">
+    /// 通常は <see cref="BranchObserverService.IsActiveOrCommon"/>。true なら表示。
+    /// </param>
+    public static IReadOnlyList<RecordingTimelinePrediction> FilterBranchRejectedPredictions(
+        IReadOnlyList<RecordingTimelinePrediction> predictions,
+        TriggerFile file,
+        Func<string?, bool> branchActiveCheck)
+    {
+        var profile = StrategyPlanResolver.SelectActiveProfile(file);
+        if (profile is null)
+        {
+            return predictions;
+        }
+
+        var castIdToBranchIds = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        void Register(string? castId, string branchId)
+        {
+            if (string.IsNullOrEmpty(castId)) return;
+            if (!castIdToBranchIds.TryGetValue(castId, out var set))
+            {
+                set = new HashSet<string>(StringComparer.Ordinal);
+                castIdToBranchIds[castId] = set;
+            }
+            set.Add(branchId);
+        }
+
+        foreach (var mech in profile.Mechanics)
+        {
+            if (!mech.Enabled || string.IsNullOrEmpty(mech.BranchId)) continue;
+            // 旧パス（AttachedTo）と新パス（Triggers の cast / action_used）の両方の cast_id を逆引きに登録する。
+            Register(mech.AttachedTo?.CastId, mech.BranchId!);
+            foreach (var trig in mech.Triggers)
+            {
+                if (string.Equals(trig.Type, "cast", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(trig.Type, "action_used", StringComparison.OrdinalIgnoreCase))
+                {
+                    Register(trig.Match?.CastId, mech.BranchId!);
+                }
+            }
+        }
+
+        if (castIdToBranchIds.Count == 0)
+        {
+            return predictions;
+        }
+
+        var result = new List<RecordingTimelinePrediction>(predictions.Count);
+        foreach (var prediction in predictions)
+        {
+            if (string.IsNullOrEmpty(prediction.Id) ||
+                !castIdToBranchIds.TryGetValue(prediction.Id, out var branchIds))
+            {
+                // 分岐に紐づかない（共通）キャストは常に表示
+                result.Add(prediction);
+                continue;
+            }
+
+            var anyActive = false;
+            foreach (var branchId in branchIds)
+            {
+                if (branchActiveCheck(branchId))
+                {
+                    anyActive = true;
+                    break;
+                }
+            }
+            if (anyActive)
+            {
+                result.Add(prediction);
+            }
+        }
+
+        return result;
     }
 
     public static bool ShouldDeduplicateLabelPair(string? firstEventType, string? secondEventType)

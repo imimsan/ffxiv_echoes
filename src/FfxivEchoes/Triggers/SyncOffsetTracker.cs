@@ -20,6 +20,7 @@ namespace FfxivEchoes.Triggers;
 /// </remarks>
 public sealed class SyncOffsetTracker : IDisposable
 {
+    private readonly IEventBus _bus;
     private readonly TriggerStore _store;
     private readonly CombatClock _combatClock;
     private readonly RecordingScanner _recordings;
@@ -41,6 +42,7 @@ public sealed class SyncOffsetTracker : IDisposable
     public SyncOffsetTracker(IEventBus bus, TriggerStore store, CombatClock clock,
         RecordingScanner recordings, IPluginLog log)
     {
+        _bus = bus;
         _store = store;
         _combatClock = clock;
         _recordings = recordings;
@@ -91,7 +93,16 @@ public sealed class SyncOffsetTracker : IDisposable
 
     private void ReloadAggregate()
     {
-        try { _aggCache = _recordings.Aggregate(_currentZone); } catch { _aggCache = null; }
+        try
+        {
+            _aggCache = _recordings.Aggregate(_currentZone);
+        }
+        catch (Exception ex)
+        {
+            // 録画ディレクトリのロック/破損時。黙殺すると同期オフセットが効かず原因不明になるためログを残す。
+            _log.Warning(ex, "[FfxivEchoes] SyncOffsetTracker: 録画 aggregate 失敗 zone={Zone}", _currentZone);
+            _aggCache = null;
+        }
     }
 
     private void OnCastStart(CastStartedEvent ev)
@@ -110,9 +121,15 @@ public sealed class SyncOffsetTracker : IDisposable
                 CurrentOffsetSec,
                 ev.CastActionId,
                 out var syncOffset,
-                out var syncLabel))
+                out var syncLabel,
+                out var syncPhase))
         {
             ApplyOffset(syncOffset, syncLabel, allowLargeJump: false);
+            // フェーズ境界の sync_point ならフェーズ遷移を通知（CurrentPhaseTracker が前進）。
+            if (!string.IsNullOrEmpty(syncPhase))
+            {
+                _bus.Publish(new PhaseTransitionedEvent(DateTimeOffset.UtcNow, syncPhase!));
+            }
             return;
         }
 
@@ -172,7 +189,8 @@ public sealed class SyncOffsetTracker : IDisposable
         double currentOffsetSec,
         uint actualCastId,
         out double newOffsetSec,
-        out string label)
+        out string label,
+        out string? phase)
     {
         SyncPoint? best = null;
         var bestDistance = double.MaxValue;
@@ -201,11 +219,13 @@ public sealed class SyncOffsetTracker : IDisposable
         {
             newOffsetSec = 0;
             label = string.Empty;
+            phase = null;
             return false;
         }
 
         newOffsetSec = actualRelSec - best.ExpectedTime;
         label = $"sync:{best.Id}";
+        phase = best.Phase;
         return true;
     }
 

@@ -21,6 +21,8 @@ public sealed class TtsHandler : IActionHandler, IDisposable
     private readonly IPluginLog _log;
     private readonly SpeechSynthesizer _synthesizer;
     private readonly object _gate = new();
+    // 現在再生中の NAudio プレイヤー。新しい発話が来たら前のを停止して二重鳴りを防ぐ。
+    private WaveOutEvent? _currentNAudioPlayer;
 
     public TtsHandler(Configuration configuration, IPluginLog log)
     {
@@ -132,7 +134,30 @@ public sealed class TtsHandler : IActionHandler, IDisposable
             player.PlaybackStopped += (_, _) =>
             {
                 try { player.Dispose(); reader.Dispose(); ms.Dispose(); } catch { /* ignore */ }
+                // 自分が現在のプレイヤーなら参照をクリア（二重 Stop/Dispose 防止）。
+                lock (_gate)
+                {
+                    if (ReferenceEquals(_currentNAudioPlayer, player))
+                    {
+                        _currentNAudioPlayer = null;
+                    }
+                }
             };
+
+            // 直前の発話を停止してから新規再生。これをしないと WaveOutEvent が並立して
+            // 複数の読み上げが同時に鳴り続ける（重複でうるさい問題の主因）。
+            // Stop() は PlaybackStopped を発火させ、上のハンドラが前プレイヤーの資源を解放する。
+            WaveOutEvent? previous;
+            lock (_gate)
+            {
+                previous = _currentNAudioPlayer;
+                _currentNAudioPlayer = player;
+            }
+            if (previous is not null)
+            {
+                try { previous.Stop(); } catch { /* ignore */ }
+            }
+
             player.Init(amp);
             player.Play();
         }
@@ -174,6 +199,15 @@ public sealed class TtsHandler : IActionHandler, IDisposable
     {
         try
         {
+            WaveOutEvent? player;
+            lock (_gate)
+            {
+                player = _currentNAudioPlayer;
+                _currentNAudioPlayer = null;
+            }
+            try { player?.Stop(); } catch { /* ignore */ }
+            try { player?.Dispose(); } catch { /* ignore */ }
+
             _synthesizer.SpeakAsyncCancelAll();
             _synthesizer.Dispose();
         }

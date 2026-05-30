@@ -293,6 +293,14 @@ public sealed class MechanicTrigger
     [JsonPropertyName("hp_pct_above")]
     public double? HpPctAbove { get; set; }
 
+    /// <summary>
+    /// hp_pct 用：この閾値を下回って跨いだときに開始するフェーズ名（<see cref="MechanicStrategy.Phase"/> と対応）。
+    /// 設定すると crossedBelow 時に PhaseTransitionedEvent が発行される。sync_point を使わず HP% で
+    /// フェーズ管理するコンテンツ向け（従系統）。null（既定）ならフェーズ境界としては扱わない。
+    /// </summary>
+    [JsonPropertyName("phase")]
+    public string? Phase { get; set; }
+
     /// <summary>同じ rotation / hp_pct 条件の連続発火を抑制する秒数（既定 5 秒）。</summary>
     [JsonPropertyName("dedup_sec")]
     public double? DedupSec { get; set; } = 5.0;
@@ -761,6 +769,13 @@ public sealed class TimelineNote
     /// <summary>通知時に読み上げるテキスト。空なら label を使う。</summary>
     [JsonPropertyName("warning_text")]
     public string? WarningText { get; set; }
+
+    /// <summary>
+    /// AttachedTo で複数回出現するイベントに紐付くとき、何回目の出現に配置するか（0 始まり）。
+    /// Time 未指定（=0）の mechanic 由来ノートで「後半フェーズの 2 回目のキャスト」等を正しく選ぶ。
+    /// </summary>
+    [JsonPropertyName("occurrence_index")]
+    public int OccurrenceIndex { get; set; }
 }
 
 public sealed class AutoSettings
@@ -855,6 +870,14 @@ public sealed class SyncPoint
 
     [JsonPropertyName("tolerance")]
     public double Tolerance { get; set; } = 5.0;
+
+    /// <summary>
+    /// この sync_point を観測したら開始するフェーズ名（<see cref="MechanicStrategy.Phase"/> と対応）。
+    /// 設定すると、このキャスト観測時に PhaseTransitionedEvent が発行され、以降は前フェーズの
+    /// ギミックがタイムライン / 読み上げから除外される。null（既定）ならフェーズ境界としては扱わない。
+    /// </summary>
+    [JsonPropertyName("phase")]
+    public string? Phase { get; set; }
 }
 
 public sealed class IgnoredEvent

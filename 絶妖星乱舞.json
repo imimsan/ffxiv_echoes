@@ -17,21 +17,24 @@
       "type": "cast_start",
       "cast_id": "0xPHASE2_START",
       "expected_time": 180.0,
-      "tolerance": 10.0
+      "tolerance": 10.0,
+      "phase": "P2"
     },
     {
       "id": "p3_start",
       "type": "cast_start",
       "cast_id": "0xPHASE3_START",
       "expected_time": 360.0,
-      "tolerance": 10.0
+      "tolerance": 10.0,
+      "phase": "P3"
     },
     {
       "id": "p5_start",
       "type": "cast_start",
       "cast_id": "0xPHASE5_START",
       "expected_time": 720.0,
-      "tolerance": 15.0
+      "tolerance": 15.0,
+      "phase": "P5"
     }
   ],
   "triggers": [

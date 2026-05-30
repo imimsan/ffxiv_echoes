@@ -37,18 +37,29 @@ public static class StrategyPlanResolver
     }
 
     public static IReadOnlyList<TimelineNote> BuildTimelineNotes(TriggerFile file)
-        => BuildTimelineNotes(file, branchActiveCheck: null);
+        => BuildTimelineNotes(file, branchActiveCheck: null, phaseActiveCheck: null);
+
+    public static IReadOnlyList<TimelineNote> BuildTimelineNotes(
+        TriggerFile file, Func<string?, bool>? branchActiveCheck)
+        => BuildTimelineNotes(file, branchActiveCheck, phaseActiveCheck: null);
 
     /// <summary>
-    /// <see cref="branchActiveCheck"/> オーバーロード：分岐 (TimelineBranch) 未確定 / Rejected の
-    /// mechanic を表示から除外する。引数 null は分岐機能不使用 = 全 mechanic 表示。
+    /// <paramref name="branchActiveCheck"/> / <paramref name="phaseActiveCheck"/> オーバーロード：
+    /// 分岐 (TimelineBranch) 未確定 / Rejected の mechanic、および過去フェーズの mechanic を
+    /// 表示から除外する。各引数 null はそのフィルタ不使用 = 全 mechanic 表示。
     /// </summary>
     /// <param name="branchActiveCheck">
     /// (string? branchId) → bool。true なら表示、false なら除外。
     /// 通常は <see cref="BranchObserverService.IsActiveOrCommon"/> を渡す。
     /// </param>
+    /// <param name="phaseActiveCheck">
+    /// (string? phase) → bool。true なら表示、過去フェーズなら false で除外。
+    /// 通常は <see cref="CurrentPhaseTracker.IsPhaseActive"/> を渡す。
+    /// </param>
     public static IReadOnlyList<TimelineNote> BuildTimelineNotes(
-        TriggerFile file, Func<string?, bool>? branchActiveCheck)
+        TriggerFile file,
+        Func<string?, bool>? branchActiveCheck,
+        Func<string?, bool>? phaseActiveCheck)
     {
         var profile = SelectActiveProfile(file);
         if (profile is null)
@@ -59,6 +70,7 @@ public static class StrategyPlanResolver
         return profile.Mechanics
             .Where(m => m.Enabled)
             .Where(m => branchActiveCheck is null || branchActiveCheck(m.BranchId))
+            .Where(m => phaseActiveCheck is null || phaseActiveCheck(m.Phase))
             // object_appear 由来の mechanic は timeline 表示から除外。
             // 「ベヒーモス」「ケツァクワァトル」「脱出地点」「秘紋」等のボス名 / オブジェクト名が
             // 並んでタイムラインを汚染する問題への対策。これらは「いつ何を回避するか」という
@@ -83,6 +95,8 @@ public static class StrategyPlanResolver
             Icons = new List<string> { "S" },
             AdvanceWarningSec = mechanic.AdvanceWarningSec,
             WarningText = mechanic.WarningText ?? mechanic.Callout ?? mechanic.Label,
+            // Time 未設定（=0）の mechanic でも、複数出現するキャストの正しい回を選べるよう転写。
+            OccurrenceIndex = mechanic.OccurrenceIndex ?? 0,
         };
     }
 
@@ -161,7 +175,15 @@ public static class StrategyPlanResolver
         return actions;
     }
 
-    public static (StrategyProfile? Profile, MechanicStrategy? Mechanic) FindMechanicForPrediction(
+    /// <param name="branchActiveCheck">
+    /// (branchId) → bool。false の branch_id を持つ mechanic は除外する。
+    /// </param>
+    /// <returns>
+    /// <c>BranchRejected</c> は「この予測に合致する mechanic は存在したが、すべて分岐で除外された」
+    /// ことを表す。<c>Mechanic == null</c> でも「mechanic 未定義（=BranchRejected false）」と
+    /// 「分岐棄却（=BranchRejected true）」を呼び出し側が区別できるようにするためのフラグ。
+    /// </returns>
+    public static (StrategyProfile? Profile, MechanicStrategy? Mechanic, bool BranchRejected) FindMechanicForPrediction(
         TriggerFile file,
         RecordingPrediction prediction,
         Func<string?, bool>? branchActiveCheck,
@@ -170,20 +192,20 @@ public static class StrategyPlanResolver
         var profile = SelectActiveProfile(file);
         if (profile is null)
         {
-            return (null, null);
+            return (null, null, false);
         }
 
-        var mechanic = FindBestMechanic(
+        var (mechanic, branchRejected) = FindBestMechanic(
             profile,
             prediction.CastId,
             prediction.Label,
             prediction.RelativeSeconds,
             maxTimeDeltaSeconds,
             branchActiveCheck);
-        return mechanic is null ? (profile, null) : (profile, mechanic);
+        return (profile, mechanic, branchRejected);
     }
 
-    public static (StrategyProfile? Profile, MechanicStrategy? Mechanic) FindMechanicForPrediction(
+    public static (StrategyProfile? Profile, MechanicStrategy? Mechanic, bool BranchRejected) FindMechanicForPrediction(
         TriggerFile file,
         RecordingPrediction prediction,
         double maxTimeDeltaSeconds = 15.0)
@@ -203,7 +225,7 @@ public static class StrategyPlanResolver
             return (null, null);
         }
 
-        var mechanic = FindBestMechanic(
+        var (mechanic, _) = FindBestMechanic(
             profile,
             $"0x{castActionId:X}",
             castActionName,
@@ -386,6 +408,7 @@ public static class StrategyPlanResolver
                 ActorName = t.ActorName, ActorDataId = t.ActorDataId,
                 FacingDeg = t.FacingDeg, FacingToleranceDeg = t.FacingToleranceDeg,
                 HpPctBelow = t.HpPctBelow, HpPctAbove = t.HpPctAbove,
+                Phase = t.Phase,
                 ObjectCountMin = t.ObjectCountMin, ObjectCountMax = t.ObjectCountMax,
                 ObjectWindowSec = t.ObjectWindowSec,
                 DedupSec = t.DedupSec,
@@ -437,7 +460,12 @@ public static class StrategyPlanResolver
     private static string? EmptyToNull(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value;
 
-    private static MechanicStrategy? FindBestMechanic(
+    /// <returns>
+    /// 最良の合致 mechanic（無ければ null）と、<c>BranchRejected</c>（=合致する候補は
+    /// 存在したが、すべて <paramref name="branchActiveCheck"/> で除外され、有効な mechanic が
+    /// 1 件も残らなかった）。「mechanic 未定義」と「分岐棄却」を区別するために使う。
+    /// </returns>
+    private static (MechanicStrategy? Mechanic, bool BranchRejected) FindBestMechanic(
         StrategyProfile profile,
         string castId,
         string castName,
@@ -447,12 +475,11 @@ public static class StrategyPlanResolver
     {
         MechanicStrategy? best = null;
         var bestDistance = double.MaxValue;
+        var branchRejected = false;
 
         foreach (var mechanic in profile.Mechanics)
         {
-            if (!mechanic.Enabled ||
-                (branchActiveCheck is not null && !branchActiveCheck(mechanic.BranchId)) ||
-                mechanic.AttachedTo is not { } match)
+            if (!mechanic.Enabled || mechanic.AttachedTo is not { } match)
             {
                 continue;
             }
@@ -472,6 +499,15 @@ public static class StrategyPlanResolver
                 continue;
             }
 
+            // ここまで来た = cast / 時刻的にこの予測に合致する候補。
+            // 分岐で除外された場合だけ branchRejected を立て、active な候補が
+            // 1 件でもあればそちらを優先する。
+            if (branchActiveCheck is not null && !branchActiveCheck(mechanic.BranchId))
+            {
+                branchRejected = true;
+                continue;
+            }
+
             if (distance < bestDistance)
             {
                 best = mechanic;
@@ -479,7 +515,7 @@ public static class StrategyPlanResolver
             }
         }
 
-        return best;
+        return (best, best is null && branchRejected);
     }
 
     private static bool MatchesCast(MatchCondition match, string castId, string castName)

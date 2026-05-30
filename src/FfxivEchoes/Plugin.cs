@@ -108,6 +108,9 @@ public sealed class Plugin : IDalamudPlugin
     // ── タイムライン分岐の判定サービス（パターン1 / パターン2 を観測で確定）────
     private BranchObserverService? _branchObserver;
 
+    // ── 現在フェーズ追跡（前半 / 後半などのフェーズ境界を sync_point / hp_pct で確定）──
+    private CurrentPhaseTracker? _phaseTracker;
+
     // ── メカニクス発動条件評価（cast / status / rotation 統合）──────
     private MechanicTriggerService? _mechanicTrigger;
     private AutoArenaCalibrationService? _autoArenaCalibration;
@@ -256,11 +259,17 @@ public sealed class Plugin : IDalamudPlugin
         // 参照するので、Window より前に構築する。Plugin 全体の他のサービスとは独立。
         _branchObserver = new BranchObserverService(_eventBus, _triggerStore, _combatClock, Log);
 
+        // 現在フェーズ追跡：sync_point（phase 付き）通過 / hp_pct 跨ぎで PhaseTransitionedEvent を受け、
+        // 過去フェーズのギミックをタイムライン / 読み上げから除外する判定を提供する。
+        // 各リマインダー / ウィンドウより前に構築する。
+        _phaseTracker = new CurrentPhaseTracker(_eventBus, _triggerStore, Log);
+
         // タイムラインノート：advance_warning_sec で先行通知。
-        // branch_id が Rejected/Pending のメカニクスは実通知からも外す。
+        // branch_id が Rejected/Pending のメカニクス、過去フェーズのメカニクスは実通知からも外す。
         _noteReminder = new NoteReminderService(
             Framework, _eventBus, _triggerStore, _combatClock, PlayerState, _recordingScanner, _syncOffset, Log,
-            _branchObserver.IsActiveOrCommon);
+            _branchObserver.IsActiveOrCommon,
+            _phaseTracker.IsPhaseActive);
 
         // 予測アドバンス警告は _worldOverlayWindow に依存するので、後段で構築する
 
@@ -269,7 +278,8 @@ public sealed class Plugin : IDalamudPlugin
         // 「次に来るイベント」HUD（cactbot 風の縮むバー縦積み形式）
         _upcomingWindow = new UpcomingEventsWindow(
             _eventBus, _combatClock, _triggerStore, _recordingScanner, _syncOffset,
-            branchObserver: _branchObserver);
+            branchObserver: _branchObserver,
+            phaseTracker: _phaseTracker);
         WindowSystem.AddWindow(_upcomingWindow);
 
         // F4-F7: 安置計算プリセット（合計 15 種）
@@ -354,7 +364,8 @@ public sealed class Plugin : IDalamudPlugin
             _recordingScanner, _syncOffset, DataManager, ObjectTable,
             _worldOverlayWindow, _minimapWindow, Log,
             actorTracked: _actorTrackedAoe,
-            branchActiveCheck: _branchObserver.IsActiveOrCommon);
+            branchActiveCheck: _branchObserver.IsActiveOrCommon,
+            phaseActiveCheck: _phaseTracker.IsPhaseActive);
 
         // 「Cast → N 秒後に Object 出現 → 即時 AoE」パターンを録画学習し、cast 検知時点で
         // 先取り予告を描画するサービス。月の底のパラデイグマ → ケツアクアトル 4 体のような
@@ -401,7 +412,7 @@ public sealed class Plugin : IDalamudPlugin
             // P4: 位置保存
             new StorePositionHandler(_safeZoneEngine, _safeZoneContextBuilder, _variableStore, Log),
         };
-        _actionDispatcher = new ActionDispatcher(_eventBus, handlers, Configuration, Log, _triggerStore);
+        _actionDispatcher = new ActionDispatcher(_eventBus, handlers, Configuration, Log, Framework, _triggerStore);
 
         // MainWindow（依存：BuildTabs 内で _combatClock / _eventBus を参照する LiveHudTab）
         _mainWindow = new MainWindow(BuildTabs(), _tabContext);
@@ -482,6 +493,7 @@ public sealed class Plugin : IDalamudPlugin
         SafeDispose(_predictedCastReminder, nameof(_predictedCastReminder));
         SafeDispose(_predictedObjectSpawn, nameof(_predictedObjectSpawn));
         SafeDispose(_branchObserver, nameof(_branchObserver));
+        SafeDispose(_phaseTracker, nameof(_phaseTracker));
         SafeDispose(_actorTrackedAoe, nameof(_actorTrackedAoe));
         SafeDispose(_castRotationSnapshot, nameof(_castRotationSnapshot));
         SafeDispose(_pcDetector, nameof(_pcDetector));

@@ -108,6 +108,10 @@
             "type": "number",
             "description": "許容誤差（秒）",
             "default": 5.0
+          },
+          "phase": {
+            "type": "string",
+            "description": "この sync_point を観測したら開始するフェーズ名（mechanic.phase と対応）。設定すると過去フェーズのギミックがタイムライン/読み上げから除外される"
           }
         }
       }
@@ -343,6 +347,10 @@
         "facing_tolerance_deg": { "type": "number", "minimum": 0 },
         "hp_pct_below": { "type": "number", "minimum": 0, "maximum": 100 },
         "hp_pct_above": { "type": "number", "minimum": 0, "maximum": 100 },
+        "phase": {
+          "type": "string",
+          "description": "hp_pct トリガー用：この閾値を下回って跨いだら開始するフェーズ名（mechanic.phase と対応）。sync_point を使わず HP% でフェーズ管理するコンテンツ向け"
+        },
         "dedup_sec": { "type": "number", "minimum": 0 }
       }
     },

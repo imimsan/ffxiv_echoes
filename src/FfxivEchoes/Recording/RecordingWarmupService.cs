@@ -21,16 +21,24 @@ public sealed class RecordingWarmupService : IDisposable
     private readonly RecordingScanner _scanner;
     private readonly IPluginLog _log;
     private readonly IDisposable _zoneSub;
+    private readonly IDisposable _combatStartSub;
+    private readonly IDisposable _combatEndSub;
 
     public RecordingWarmupService(IEventBus bus, RecordingScanner scanner, IPluginLog log)
     {
         _scanner = scanner;
         _log = log;
         _zoneSub = bus.Subscribe<ZoneChangedEvent>(OnZoneChanged);
+        // 戦闘中は録画キャッシュを固定して、フェーズ移行時の全録画同期再読込（フレーム落ち）を防ぐ（FIX-03）。
+        // ウォームアップで zone 入場時にキャッシュ生成済みなので、固定中もキャッシュヒットする。
+        _combatStartSub = bus.Subscribe<CombatStartedEvent>(_ => _scanner.SetCombatCacheLock(true));
+        _combatEndSub = bus.Subscribe<CombatEndedEvent>(_ => _scanner.SetCombatCacheLock(false));
     }
 
     private void OnZoneChanged(ZoneChangedEvent ev)
     {
+        // ゾーン移動したら固定を解除（前回戦闘が CombatEnded を出さずに離脱したケースに備える）。
+        _scanner.SetCombatCacheLock(false);
         var zone = string.IsNullOrEmpty(ev.ZoneName) ? "Unknown" : ev.ZoneName;
         _ = Task.Run(() => WarmUp(zone));
     }
@@ -48,5 +56,10 @@ public sealed class RecordingWarmupService : IDisposable
         }
     }
 
-    public void Dispose() => _zoneSub.Dispose();
+    public void Dispose()
+    {
+        _zoneSub.Dispose();
+        _combatStartSub.Dispose();
+        _combatEndSub.Dispose();
+    }
 }

@@ -22,12 +22,23 @@ public sealed class RecordingScanner
     private readonly object _aggCacheGate = new();
     private readonly Dictionary<string, (string Sig, IReadOnlyList<string> Members)> _partyCache = new();
     private readonly object _partyCacheGate = new();
+    // 戦闘中はキャッシュを固定する。録画ファイルは AutoFlush で毎フレーム mtime が変わり署名が
+    // 変化するため、固定しないとフェーズ移行のたびに全録画を同期再読込してフレーム落ちする（FIX-03）。
+    private volatile bool _combatCacheLocked;
 
     public RecordingScanner(IDalamudPluginInterface pluginInterface, IPluginLog log)
     {
         _pluginInterface = pluginInterface;
         _log = log;
     }
+
+    /// <summary>
+    /// 戦闘中キャッシュ固定の切り替え。true の間は <see cref="Aggregate"/> /
+    /// <see cref="ListPartyMembers"/> が既存キャッシュをそのまま返し、ディスク I/O を行わない
+    /// （キャッシュ未生成のときのみ一度だけ読み込む）。CombatStarted で true、CombatEnded /
+    /// ZoneChanged で false にする想定（<see cref="RecordingWarmupService"/> が駆動）。
+    /// </summary>
+    public void SetCombatCacheLock(bool locked) => _combatCacheLocked = locked;
 
     public IReadOnlyList<string> ListZonesWithRecordings()
     {
@@ -82,6 +93,19 @@ public sealed class RecordingScanner
     /// </summary>
     public AggregatedEvents Aggregate(string zoneName)
     {
+        // 戦闘中はキャッシュ固定。既存キャッシュがあれば署名計算（= ディレクトリ走査の I/O）も
+        // せずに即返す。フェーズ移行のたびの全録画再読込によるフレーム落ちを防ぐ（FIX-03）。
+        if (_combatCacheLocked)
+        {
+            lock (_aggCacheGate)
+            {
+                if (_aggCache.TryGetValue(zoneName, out var locked))
+                {
+                    return locked.Events;
+                }
+            }
+        }
+
         var recordings = ListRecordings(zoneName);
         var sig = ComputeRecordingSignature(recordings);
         lock (_aggCacheGate)
@@ -162,6 +186,18 @@ public sealed class RecordingScanner
     /// </remarks>
     public IReadOnlyList<string> ListPartyMembers(string zoneName)
     {
+        // 戦闘中はキャッシュ固定（Aggregate と同様）。既存キャッシュがあれば I/O ゼロで返す。
+        if (_combatCacheLocked)
+        {
+            lock (_partyCacheGate)
+            {
+                if (_partyCache.TryGetValue(zoneName, out var locked))
+                {
+                    return locked.Members;
+                }
+            }
+        }
+
         var recordings = ListRecordings(zoneName);
         if (recordings.Count == 0) return Array.Empty<string>();
 

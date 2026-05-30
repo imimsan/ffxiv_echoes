@@ -24,11 +24,13 @@ public sealed class NoteReminderService : IDisposable
     private readonly SyncOffsetTracker _syncOffset;
     private readonly IPluginLog _log;
     private readonly Func<string?, bool>? _branchActiveCheck;
+    private readonly Func<string?, bool>? _phaseActiveCheck;
 
     private readonly IDisposable _combatStartSub;
     private readonly IDisposable _combatEndSub;
     private readonly IDisposable _zoneSub;
     private readonly IDisposable _branchResolvedSub;
+    private readonly IDisposable _phaseTransitionSub;
 
     private readonly List<PendingNote> _pending = new();
     private readonly object _gate = new();
@@ -37,7 +39,8 @@ public sealed class NoteReminderService : IDisposable
     public NoteReminderService(
         IFramework framework, IEventBus bus, TriggerStore store, CombatClock combatClock,
         IPlayerState playerState, RecordingScanner recordings, SyncOffsetTracker syncOffset, IPluginLog log,
-        Func<string?, bool>? branchActiveCheck = null)
+        Func<string?, bool>? branchActiveCheck = null,
+        Func<string?, bool>? phaseActiveCheck = null)
     {
         _framework = framework;
         _bus = bus;
@@ -48,6 +51,7 @@ public sealed class NoteReminderService : IDisposable
         _syncOffset = syncOffset;
         _log = log;
         _branchActiveCheck = branchActiveCheck;
+        _phaseActiveCheck = phaseActiveCheck;
 
         _combatStartSub = bus.Subscribe<CombatStartedEvent>(_ => Schedule());
         _combatEndSub = bus.Subscribe<CombatEndedEvent>(_ =>
@@ -60,6 +64,14 @@ public sealed class NoteReminderService : IDisposable
         // 未確定（IsBranchAllowed=false）だった分岐固有ギミックの先行通知が永久に発火しない。
         // PredictedCastReminderService と同じ BranchResolvedEvent 購読パターン。
         _branchResolvedSub = bus.Subscribe<BranchResolvedEvent>(_ => Schedule());
+        // フェーズ遷移後に再スケジュール。過去フェーズの mechanic は _phaseActiveCheck で除外され、
+        // 既発火ノートの再発火は OnUpdate の staleガード（ShouldFireDueNote）が防ぐ。
+        _phaseTransitionSub = bus.Subscribe<PhaseTransitionedEvent>(_ => Schedule());
+        // 戦闘中にトリガー JSON を編集・保存（TriggerWatcher 経由 Reload）したら再スケジュールする。
+        // これが無いと追加したノートは通知されず、削除したノートは発火し続ける。
+        // Reloaded は TriggerWatcher のデバウンスタイマー（ワーカースレッド）から発火するため、
+        // _currentZone の無保護読み・ロック競合を避けてフレームスレッドにマーシャリングする。
+        _store.Reloaded += OnTriggerStoreReloaded;
 
         _framework.Update += OnUpdate;
     }
@@ -70,9 +82,18 @@ public sealed class NoteReminderService : IDisposable
         _combatEndSub.Dispose();
         _zoneSub.Dispose();
         _branchResolvedSub.Dispose();
+        _phaseTransitionSub.Dispose();
+        _store.Reloaded -= OnTriggerStoreReloaded;
         _framework.Update -= OnUpdate;
         lock (_gate) { _pending.Clear(); }
     }
+
+    private void OnTriggerStoreReloaded()
+        => _framework.RunOnFrameworkThread(() =>
+        {
+            try { Schedule(); }
+            catch (Exception ex) { _log.Error(ex, "[FfxivEchoes] NoteReminder: Reload 後の再スケジュール失敗"); }
+        });
 
     private void Schedule()
     {
@@ -84,7 +105,15 @@ public sealed class NoteReminderService : IDisposable
 
         // AttachedTo 解決のため、現ゾーンの録画 aggregate を一度だけ取得
         Recording.AggregatedEvents? agg = null;
-        try { agg = _recordings.Aggregate(_currentZone); } catch { /* 失敗時 null */ }
+        try
+        {
+            agg = _recordings.Aggregate(_currentZone);
+        }
+        catch (Exception ex)
+        {
+            // 黙殺すると AttachedTo 付きノートが無音になり原因特定できないためログを残す（agg=null で続行）。
+            _log.Warning(ex, "[FfxivEchoes] NoteReminder: 録画 aggregate 失敗 zone={Zone}", _currentZone);
+        }
 
         lock (_gate)
         {
@@ -106,7 +135,7 @@ public sealed class NoteReminderService : IDisposable
                 {
                     fireTime = 0;
                 }
-                _pending.Add(new PendingNote(note.Id, fireTime, note));
+                _pending.Add(new PendingNote(note.Id, fireTime, resolved.Value, note));
             }
 
             var strategyProfile = StrategyPlanResolver.SelectActiveProfile(file);
@@ -116,6 +145,7 @@ public sealed class NoteReminderService : IDisposable
                 {
                     if (!mechanic.Enabled ||
                         !IsBranchAllowed(mechanic) ||
+                        !IsPhaseAllowed(mechanic) ||
                         mechanic.AdvanceWarningSec is not { } warn ||
                         warn <= 0)
                     {
@@ -143,6 +173,7 @@ public sealed class NoteReminderService : IDisposable
                     _pending.Add(new PendingNote(
                         note.Id,
                         fireTime,
+                        resolved.Value,
                         note,
                         StrategyPlanResolver.BuildReminderActions(file, strategyProfile, mechanic)));
                 }
@@ -153,6 +184,25 @@ public sealed class NoteReminderService : IDisposable
 
     private bool IsBranchAllowed(MechanicStrategy mechanic)
         => _branchActiveCheck?.Invoke(mechanic.BranchId) ?? true;
+
+    private bool IsPhaseAllowed(MechanicStrategy mechanic)
+        => _phaseActiveCheck?.Invoke(mechanic.Phase) ?? true;
+
+    /// <summary>
+    /// 「発火予定時刻が来たノート」を実際に発火すべきか判定する staleガード。
+    /// Schedule() が状態変化（分岐確定・フェーズ遷移・戦闘開始）のたびに _pending を
+    /// 全件再構築するため、実イベント時刻が既に過去のノートは fireTime=0 にクランプされて
+    /// 即時発火してしまう。これを <see cref="PredictedCastReminderService.ShouldFireDuePrediction"/>
+    /// と同一判定で防ぐ（重複読み上げの根本対策）。
+    /// </summary>
+    public static bool ShouldFireDueNote(
+        double fireAtRelSec,
+        double eventAtRelSec,
+        double offsetSec,
+        double nowRelSec,
+        double staleGraceSec = 1.0)
+        => PredictedCastReminderService.ShouldFireDuePrediction(
+            fireAtRelSec, eventAtRelSec, offsetSec, nowRelSec, staleGraceSec);
 
     private bool MatchesPlayer(TimelineNote note)
     {
@@ -204,8 +254,18 @@ public sealed class NoteReminderService : IDisposable
             {
                 if (_pending[i].FireAtRelSec + offset <= nowRel.Value)
                 {
-                    toFire ??= new List<PendingNote>();
-                    toFire.Add(_pending[i]);
+                    // 再スケジュール（BranchResolved / PhaseTransitioned）で過去ノートが
+                    // _pending に再投入されても、実イベント時刻が現在より前なら発火しない。
+                    // PredictedCastReminderService と同じ staleガード。
+                    if (ShouldFireDueNote(
+                            _pending[i].FireAtRelSec,
+                            _pending[i].EventAtRelSec,
+                            offset,
+                            nowRel.Value))
+                    {
+                        toFire ??= new List<PendingNote>();
+                        toFire.Add(_pending[i]);
+                    }
                     _pending.RemoveAt(i);
                 }
             }
@@ -269,6 +329,7 @@ public sealed class NoteReminderService : IDisposable
     private readonly record struct PendingNote(
         string NoteId,
         double FireAtRelSec,
+        double EventAtRelSec,
         TimelineNote Note,
         IReadOnlyList<Models.ActionDefinition>? Actions = null);
 }

@@ -30,6 +30,7 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
     private readonly RecordingScanner _recordings;
     private readonly SyncOffsetTracker _syncOffset;
     private readonly BranchObserverService? _branchObserver;
+    private readonly CurrentPhaseTracker? _phaseTracker;
     private readonly IDisposable _eventSub;
     private readonly object _cacheGate = new();
     private readonly List<UpcomingTemplate> _cachedTemplates = new();
@@ -42,7 +43,8 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
     public UpcomingEventsWindow(
         IEventBus bus, CombatClock combatClock, TriggerStore store,
         RecordingScanner recordings, SyncOffsetTracker syncOffset,
-        BranchObserverService? branchObserver = null)
+        BranchObserverService? branchObserver = null,
+        CurrentPhaseTracker? phaseTracker = null)
         : base("##ffxiv-echoes-upcoming",
             ImGuiWindowFlags.NoTitleBar |
             ImGuiWindowFlags.NoResize |
@@ -58,6 +60,7 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
         _recordings = recordings;
         _syncOffset = syncOffset;
         _branchObserver = branchObserver;
+        _phaseTracker = phaseTracker;
 
         Size = new Vector2(Width, Height) * ImGuiHelpers.GlobalScale;
         SizeCondition = ImGuiCond.FirstUseEver;
@@ -93,6 +96,10 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
                 break;
             case BranchResolvedEvent:
                 // 分岐確定 → タイムラインを再構築（rejected branch の mechanic を除外）
+                InvalidateCache();
+                break;
+            case PhaseTransitionedEvent:
+                // フェーズ遷移 → タイムラインを再構築（過去フェーズの mechanic を除外）
                 InvalidateCache();
                 break;
             case TriggerFiredEvent t when t.TriggerId.StartsWith("__auto_attack_timer_", StringComparison.Ordinal):
@@ -557,6 +564,18 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
             // Recording files can be mid-write during combat. Keep the HUD alive.
         }
 
+        var file = _store.GetByZone(_currentZone);
+        // 分岐確定状態を反映：rejected branch / pending（未確定）branch の攻撃はタイムラインから
+        // 除外し「共通だけ見せる」既定ポリシー。録画予測・戦略ノートの両方に同じ branchCheck を適用する。
+        Func<string?, bool>? branchCheck = _branchObserver is { } bo
+            ? bo.IsActiveOrCommon
+            : null;
+        // 現在フェーズ絞り込み：過去フェーズの mechanic はタイムラインから除外する
+        // （phase 未注釈のコンテンツでは常に true = 全表示で後方互換）。
+        Func<string?, bool>? phaseCheck = _phaseTracker is { } pt
+            ? pt.IsPhaseActive
+            : null;
+
         if (agg is not null)
         {
             var partyMembers = new HashSet<string>(
@@ -572,6 +591,11 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
                 includeAutoAttacks: true);
 
             var displayPredictions = UpcomingTimelinePolicy.FilterDisplayPredictions(predictions);
+            if (file is not null && branchCheck is not null)
+            {
+                displayPredictions = UpcomingTimelinePolicy.FilterBranchRejectedPredictions(
+                    displayPredictions, file, branchCheck);
+            }
             foreach (var prediction in displayPredictions)
             {
                 var isAa = UpcomingTimelinePolicy.IsAutoAttack(prediction.EventType);
@@ -590,15 +614,9 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
             }
         }
 
-        var file = _store.GetByZone(_currentZone);
         if (file is not null)
         {
-            // 分岐確定状態を反映：rejected branch の mechanic はタイムラインから除外、
-            // pending（未確定）の branch も非表示で「共通 mechanic だけ見せる」既定ポリシー。
-            Func<string?, bool>? branchCheck = _branchObserver is { } bo
-                ? bo.IsActiveOrCommon
-                : null;
-            var strategyNotes = StrategyPlanResolver.BuildTimelineNotes(file, branchCheck);
+            var strategyNotes = StrategyPlanResolver.BuildTimelineNotes(file, branchCheck, phaseCheck);
             foreach (var note in file.Notes.Concat(strategyNotes))
             {
                 var resolved = TimelineNoteResolver.ResolveTime(note, agg);

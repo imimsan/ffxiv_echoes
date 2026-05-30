@@ -125,6 +125,19 @@ public sealed record HpChangedEvent(
     bool IsPlayer = false
 ) : IGameEvent;
 
+// ─── フェーズ遷移 ────────────────────────────────────────────────
+
+/// <summary>
+/// 戦闘中にフェーズ境界を越えたときに発行される。sync_point（cast_start）の通過、または
+/// hp_pct 閾値跨ぎを検知元とする。<see cref="FfxivEchoes.Triggers.CurrentPhaseTracker"/> が
+/// 購読して現在フェーズ序数を前進させ、過去フェーズのギミックをタイムライン / 読み上げから除外する。
+/// </summary>
+/// <param name="PhaseId">移行先フェーズの識別子（<see cref="FfxivEchoes.Triggers.Models.MechanicStrategy.Phase"/> と対応）。</param>
+public sealed record PhaseTransitionedEvent(
+    DateTimeOffset Timestamp,
+    string PhaseId
+) : IGameEvent;
+
 // ─── オブジェクト出現／消失（F9） ──────────────────────────────────
 
 public sealed record ObjectAppearedEvent(

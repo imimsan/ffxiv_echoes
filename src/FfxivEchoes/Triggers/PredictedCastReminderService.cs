@@ -27,11 +27,13 @@ public sealed class PredictedCastReminderService : IDisposable
     private readonly ActorTrackedAoeService? _actorTracked;
     private readonly IPluginLog _log;
     private readonly Func<string?, bool>? _branchActiveCheck;
+    private readonly Func<string?, bool>? _phaseActiveCheck;
 
     private readonly IDisposable _combatStartSub;
     private readonly IDisposable _combatEndSub;
     private readonly IDisposable _zoneSub;
     private readonly IDisposable _branchResolvedSub;
+    private readonly IDisposable _phaseTransitionSub;
 
     private readonly List<PendingPrediction> _pending = new();
     private readonly object _gate = new();
@@ -44,7 +46,8 @@ public sealed class PredictedCastReminderService : IDisposable
         WorldOverlayWindow worldOverlay, IMinimapSink minimap,
         IPluginLog log,
         ActorTrackedAoeService? actorTracked = null,
-        Func<string?, bool>? branchActiveCheck = null)
+        Func<string?, bool>? branchActiveCheck = null,
+        Func<string?, bool>? phaseActiveCheck = null)
     {
         _framework = framework;
         _bus = bus;
@@ -58,6 +61,7 @@ public sealed class PredictedCastReminderService : IDisposable
         _actorTracked = actorTracked;
         _log = log;
         _branchActiveCheck = branchActiveCheck;
+        _phaseActiveCheck = phaseActiveCheck;
 
         _combatStartSub = bus.Subscribe<CombatStartedEvent>(_ => Schedule());
         _combatEndSub = bus.Subscribe<CombatEndedEvent>(_ =>
@@ -67,6 +71,12 @@ public sealed class PredictedCastReminderService : IDisposable
         _zoneSub = bus.Subscribe<ZoneChangedEvent>(z =>
             _currentZone = string.IsNullOrEmpty(z.ZoneName) ? "Unknown" : z.ZoneName);
         _branchResolvedSub = bus.Subscribe<BranchResolvedEvent>(_ => Schedule());
+        // フェーズ遷移で再スケジュール。過去フェーズの予測は actions 決定で抑制し、
+        // 既発火予測の再発火は OnUpdate の ShouldFireDuePrediction が防ぐ。
+        _phaseTransitionSub = bus.Subscribe<PhaseTransitionedEvent>(_ => Schedule());
+        // 戦闘中のトリガー JSON 編集（Reload）で予測スケジュールを作り直す。
+        // Reloaded はワーカースレッド発火なのでフレームスレッドにマーシャリングする。
+        _store.Reloaded += OnTriggerStoreReloaded;
 
         _framework.Update += OnUpdate;
     }
@@ -77,9 +87,18 @@ public sealed class PredictedCastReminderService : IDisposable
         _combatEndSub.Dispose();
         _zoneSub.Dispose();
         _branchResolvedSub.Dispose();
+        _phaseTransitionSub.Dispose();
+        _store.Reloaded -= OnTriggerStoreReloaded;
         _framework.Update -= OnUpdate;
         lock (_gate) { _pending.Clear(); }
     }
+
+    private void OnTriggerStoreReloaded()
+        => _framework.RunOnFrameworkThread(() =>
+        {
+            try { Schedule(); }
+            catch (Exception ex) { _log.Error(ex, "[FfxivEchoes] PredictedCastReminder: Reload 後の再スケジュール失敗"); }
+        });
 
     private void Schedule()
     {
@@ -137,7 +156,19 @@ public sealed class PredictedCastReminderService : IDisposable
                     ? StrategyPlanResolver.BuildReminderActions(file, strategy.Profile, strategy.Mechanic)
                     : null;
 
-                var actions = strategy.Mechanic?.AdvanceWarningSec is > 0 || isCoveredByTrigger
+                // 過去フェーズの mechanic に紐づく予測キャストも抑制する（前半フェーズの技が
+                // 後半でも読み上げられるのを防ぐ）。phase 未注釈なら _phaseActiveCheck は常に true。
+                var phaseRejected = strategy.Mechanic is { } resolvedMech
+                    && _phaseActiveCheck is not null
+                    && !_phaseActiveCheck(resolvedMech.Phase);
+
+                // 分岐棄却された予測キャスト（攻撃A/Bの来なかった方）は明示的に空アクションで抑制する。
+                // null（mechanic 未定義）のままにすると FirePrediction が BuildDefaultWarningActions で
+                // 「Next: 攻撃B」を読み上げてしまう。Empty なら FirePrediction が即 return する。
+                var actions = strategy.Mechanic?.AdvanceWarningSec is > 0
+                        || isCoveredByTrigger
+                        || strategy.BranchRejected
+                        || phaseRejected
                     ? Array.Empty<ActionDefinition>()
                     : strategyActions;
 

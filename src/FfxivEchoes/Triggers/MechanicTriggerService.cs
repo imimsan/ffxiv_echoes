@@ -86,8 +86,32 @@ public sealed class MechanicTriggerService : IDisposable
                 _recentObjects.Clear();
             }
         });
-        _combatStartSub = bus.Subscribe<CombatStartedEvent>(_ => _inCombat = true);
-        _combatEndSub = bus.Subscribe<CombatEndedEvent>(_ => _inCombat = false);
+        // ワイプ→同ゾーン再挑戦に備え、戦闘開始/終了の両方で per-combat 状態をクリアする。
+        // ZoneChangedEvent でしかクリアしないと、絶コンテンツの多数回ワイプで前回戦闘の
+        // _prevHpPctByActor が残り hp_pct フェーズトリガーが誤発火/不発し、_lastFiredAt 残留で
+        // 開幕の正規発火が dedup に巻き込まれて沈黙する。
+        _combatStartSub = bus.Subscribe<CombatStartedEvent>(_ =>
+        {
+            _inCombat = true;
+            lock (_gate)
+            {
+                _lastFiredAt.Clear();
+                _rotationInside.Clear();
+                _prevHpPctByActor.Clear();
+                _recentObjects.Clear();
+            }
+        });
+        _combatEndSub = bus.Subscribe<CombatEndedEvent>(_ =>
+        {
+            _inCombat = false;
+            lock (_gate)
+            {
+                _lastFiredAt.Clear();
+                _rotationInside.Clear();
+                _prevHpPctByActor.Clear();
+                _recentObjects.Clear();
+            }
+        });
 
         _framework.Update += OnUpdate;
     }
@@ -214,10 +238,17 @@ public sealed class MechanicTriggerService : IDisposable
                     if (!MatchesActorByName(trig, ev.ActorName, 0)) continue;
 
                     var crossedBelow = trig.HpPctBelow is { } below
-                        && prev >= below && ev.HpPct < below;
+                        && PhaseTransitionPolicy.CrossedBelow(prev, ev.HpPct, (float)below);
                     var crossedAbove = trig.HpPctAbove is { } above
                         && prev <= above && ev.HpPct > above;
                     if (!crossedBelow && !crossedAbove) continue;
+
+                    // フェーズ境界の hp_pct トリガー（phase 設定あり）なら、下方跨ぎで
+                    // フェーズ遷移を通知する（sync_point を使わず HP% で管理するコンテンツ向け）。
+                    if (crossedBelow && !string.IsNullOrEmpty(trig.Phase))
+                    {
+                        _bus.Publish(new PhaseTransitionedEvent(DateTimeOffset.UtcNow, trig.Phase!));
+                    }
 
                     var dedup = trig.DedupSec ?? 5.0;
                     if (CheckAndStampFire(profile, mech, DateTimeOffset.UtcNow, dedup, $"hp:{ev.ActorId}"))
@@ -331,6 +362,22 @@ public sealed class MechanicTriggerService : IDisposable
     }
 
     private void OnUpdate(IFramework _)
+    {
+        // IFramework.Update に直結するため、例外が出ると Dalamud フレームループに伝播し
+        // 全プラグインを巻き込む。coding-rules.md に従いトップレベルで全捕捉する。
+        // ObjectTable 走査（ResolveActorByRotationTrigger / EvaluateObjectGroupTriggers）は
+        // 絶コンテンツの大量 add 出現/消滅でアクター解放と重なると例外を投げうる。
+        try
+        {
+            OnUpdateCore();
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "[FfxivEchoes] MechanicTriggerService.OnUpdate 例外");
+        }
+    }
+
+    private void OnUpdateCore()
     {
         var file = GetActiveFile();
         if (file is null) return;
@@ -576,7 +623,11 @@ public sealed class MechanicTriggerService : IDisposable
                 return obj;
             }
         }
-        catch { /* enumeration 中の例外は無視 */ }
+        catch (Exception ex)
+        {
+            // ObjectTable 列挙中にアクターが解放されると例外になりうる。握り潰さずログは残す。
+            _log.Debug(ex, "[FfxivEchoes] rotation actor 解決中の列挙例外");
+        }
         return null;
     }
 

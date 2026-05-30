@@ -40,8 +40,13 @@ public sealed class BranchObserverService : IDisposable
     private readonly IDisposable _castStartSub;
     private readonly IDisposable _statusSub;
     private readonly IDisposable _objectSub;
+    private readonly IDisposable _phaseSub;
 
     private readonly Dictionary<string, BranchStatus> _statuses = new(StringComparer.Ordinal);
+    // 分岐グループ（group_id）ごとの判定ウィンドウ起点。戦闘開始で初期化し、フェーズ遷移で
+    // リセットする。これが無いと後半フェーズの分岐グループも戦闘開始からの elapsed で
+    // window_sec 判定され、判定キャストが来る頃には超過して永久 Pending になる（FIX-10）。
+    private readonly Dictionary<string, DateTimeOffset> _groupActivatedAt = new(StringComparer.Ordinal);
     private readonly object _gate = new();
     private string _currentZone = "Unknown";
     private DateTimeOffset? _combatStartedAt;
@@ -63,6 +68,9 @@ public sealed class BranchObserverService : IDisposable
         _castStartSub = bus.Subscribe<CastStartedEvent>(OnCastStarted);
         _statusSub = bus.Subscribe<StatusGainedEvent>(OnStatusGained);
         _objectSub = bus.Subscribe<ObjectAppearedEvent>(OnObjectAppeared);
+        // フェーズ遷移で各分岐グループの判定ウィンドウ起点をリセットする。後半フェーズの分岐が
+        // そのフェーズ開始から window_sec 以内に判定できるようにする。
+        _phaseSub = bus.Subscribe<PhaseTransitionedEvent>(OnPhaseTransitioned);
     }
 
     public void Dispose()
@@ -73,6 +81,7 @@ public sealed class BranchObserverService : IDisposable
         _castStartSub.Dispose();
         _statusSub.Dispose();
         _objectSub.Dispose();
+        _phaseSub.Dispose();
         Reset();
     }
 
@@ -127,6 +136,7 @@ public sealed class BranchObserverService : IDisposable
         {
             hadAny = new BranchStatus[_statuses.Count];
             _statuses.Clear();
+            _groupActivatedAt.Clear();
             _combatStartedAt = null;
         }
         if (hadAny.Length > 0)
@@ -146,15 +156,34 @@ public sealed class BranchObserverService : IDisposable
         lock (_gate)
         {
             _statuses.Clear();
+            _groupActivatedAt.Clear();
             foreach (var b in file.Branches)
             {
                 if (string.IsNullOrEmpty(b.Id)) continue;
                 _statuses[b.Id] = BranchStatus.Pending;
+                _groupActivatedAt[BranchGroupKey(b)] = ev.Timestamp;
             }
             _combatStartedAt = ev.Timestamp;
         }
         _log.Information("[FfxivEchoes] BranchObserver: {N} branches Pending zone={Zone}",
             file.Branches.Count, _currentZone);
+    }
+
+    private void OnPhaseTransitioned(PhaseTransitionedEvent ev)
+    {
+        // フェーズ遷移時、まだ未確定の分岐グループの判定ウィンドウ起点を現在時刻にリセットする。
+        // これにより後半フェーズの分岐が「そのフェーズ開始から window_sec 以内」で判定できる。
+        // 既に Active が確定したグループは EvaluateAgainstBranches の Active ガードで再評価されない
+        // ため、リセットしても実害はない。
+        lock (_gate)
+        {
+            if (_groupActivatedAt.Count == 0) return;
+            var now = ev.Timestamp;
+            foreach (var key in new List<string>(_groupActivatedAt.Keys))
+            {
+                _groupActivatedAt[key] = now;
+            }
+        }
     }
 
     private void OnCastStarted(CastStartedEvent ev) =>
@@ -177,13 +206,22 @@ public sealed class BranchObserverService : IDisposable
         if (file is null || file.Branches.Count == 0) return;
 
         TimelineBranch? matched = null;
-        var elapsed = (DateTimeOffset.UtcNow - _combatStartedAt.Value).TotalSeconds;
+        var now = DateTimeOffset.UtcNow;
+        // 分岐グループごとの起点スナップショット（ロック外で安全に参照するためコピー）。
+        Dictionary<string, DateTimeOffset> groupStarts;
+        DateTimeOffset combatStart;
+        lock (_gate)
+        {
+            groupStarts = new Dictionary<string, DateTimeOffset>(_groupActivatedAt, StringComparer.Ordinal);
+            combatStart = _combatStartedAt.Value;
+        }
 
-        // window_sec を超えたイベントは判定しない
+        // window_sec を超えたイベントは判定しない（グループごとの起点から計測する）
         foreach (var b in file.Branches)
         {
             if (string.IsNullOrEmpty(b.Id)) continue;
-            if (elapsed > b.Condition.WindowSec) continue;
+            var groupStart = groupStarts.TryGetValue(BranchGroupKey(b), out var ga) ? ga : combatStart;
+            if (!IsWithinBranchWindow(now, groupStart, b.Condition.WindowSec)) continue;
             if (isMatch(b))
             {
                 matched = b;
@@ -192,10 +230,12 @@ public sealed class BranchObserverService : IDisposable
         }
         if (matched is null) return;
 
-        // 既に確定済みなら何もしない
+        // 既に確定済み（Active / Rejected）なら何もしない。フェーズ遷移で window 起点が
+        // リセットされた後、棄却済み分岐の判定キャストが再観測されても再 Active 化しないようにする。
         lock (_gate)
         {
-            if (_statuses.TryGetValue(matched.Id, out var s) && s == BranchStatus.Active)
+            if (_statuses.TryGetValue(matched.Id, out var s) &&
+                s is BranchStatus.Active or BranchStatus.Rejected)
             {
                 return;
             }
@@ -228,6 +268,13 @@ public sealed class BranchObserverService : IDisposable
             matched.Id,
             rejected));
     }
+
+    /// <summary>
+    /// 観測時刻が分岐グループの判定ウィンドウ内か。<paramref name="groupActivatedAt"/> は
+    /// 戦闘開始時刻、またはフェーズ遷移でリセットされた起点。Dalamud 型非依存で単体テスト可能。
+    /// </summary>
+    public static bool IsWithinBranchWindow(DateTimeOffset now, DateTimeOffset groupActivatedAt, double windowSec)
+        => (now - groupActivatedAt).TotalSeconds <= Math.Max(0, windowSec);
 
     public static IReadOnlyDictionary<string, BranchStatus> ResolveMatchedBranchStatuses(
         IReadOnlyList<TimelineBranch> branches,
