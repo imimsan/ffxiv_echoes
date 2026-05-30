@@ -60,6 +60,7 @@ public sealed class AddObjectAoeService : IDisposable
     private readonly IPluginLog _log;
 
     private readonly IDisposable _appearSub;
+    private readonly IDisposable _disappearSub;
     private readonly IDisposable _combatStartSub;
     private readonly IDisposable _combatEndSub;
     private readonly IDisposable _zoneSub;
@@ -76,6 +77,8 @@ public sealed class AddObjectAoeService : IDisposable
     // グループキーは「Name 優先、無ければ DataId 文字列」。同名なら DataId が違っても束ねる
     // （例：パラデイグマで 4 体出る add NPC は同名でも内部 DataId が個別の場合がある）。
     private readonly Dictionary<string, GroupState> _groups = new(StringComparer.OrdinalIgnoreCase);
+    // CleanupExpiredGroups の毎フレーム new List を避ける再利用バッファ（NEW-08。OnUpdate の lock 内専用）。
+    private readonly List<string> _deadGroupKeys = new();
     private readonly Dictionary<string, DateTimeOffset> _objectAoeSuppressUntil = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, LearnedAoe> _learnedAoeCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, LearnedAoe> _recordedActionAoeCache = new(StringComparer.OrdinalIgnoreCase);
@@ -127,6 +130,10 @@ public sealed class AddObjectAoeService : IDisposable
         _log = log;
 
         _appearSub = bus.Subscribe<ObjectAppearedEvent>(OnAppear);
+        // add が消滅したら suppress をクリア。これが無いと、同名 add が suppress 期間
+        // (Max(DedupSec, duration)≒14秒) 内に再出現したとき AoE が描画されない
+        // （絶コンテンツは同名ギミック NPC を複数フェーズで再利用する）。
+        _disappearSub = bus.Subscribe<ObjectDisappearedEvent>(OnObjectDisappeared);
         _combatStartSub = bus.Subscribe<CombatStartedEvent>(_ => _inCombat = true);
         _combatEndSub = bus.Subscribe<CombatEndedEvent>(_ =>
         {
@@ -152,19 +159,34 @@ public sealed class AddObjectAoeService : IDisposable
         _castStartSub = bus.Subscribe<CastStartedEvent>(OnCastStart);
         _castCompleteSub = bus.Subscribe<CastCompletedEvent>(OnCastComplete);
         _actionUsedSub = bus.Subscribe<ActionUsedEvent>(OnActionUsed);
+        // トリガー JSON が再読込されたら学習済み AoE キャッシュを捨て、更新後の object_aoe_rules を
+        // 反映させる（戦闘中のルール編集・無効化が即時効くようにする）。
+        _store.Reloaded += OnTriggersReloaded;
         _framework.Update += OnUpdate;
+    }
+
+    private void OnTriggersReloaded()
+    {
+        lock (_gate)
+        {
+            _learnedAoeCache.Clear();
+            _recordedActionAoeCache.Clear();
+            _recordedActionAoeMisses.Clear();
+        }
     }
 
     public void Dispose()
     {
         _framework.Update -= OnUpdate;
         _appearSub.Dispose();
+        _disappearSub.Dispose();
         _combatStartSub.Dispose();
         _combatEndSub.Dispose();
         _zoneSub.Dispose();
         _castStartSub.Dispose();
         _castCompleteSub.Dispose();
         _actionUsedSub.Dispose();
+        _store.Reloaded -= OnTriggersReloaded;
         Reset();
     }
 
@@ -382,9 +404,7 @@ public sealed class AddObjectAoeService : IDisposable
             .Where(ev => !string.IsNullOrWhiteSpace(ev.Key.Source))
             .Where(ev => string.IsNullOrWhiteSpace(excluded) ||
                          !string.Equals(ev.Key.Source, excluded, StringComparison.OrdinalIgnoreCase))
-            .Where(ev => string.Equals(ev.Key.Source, name, StringComparison.OrdinalIgnoreCase) ||
-                         ev.Key.Source!.Contains(name, StringComparison.OrdinalIgnoreCase) ||
-                         name.Contains(ev.Key.Source!, StringComparison.OrdinalIgnoreCase))
+            .Where(ev => MatchesObjectSource(ev.Key.Source, name))
             .Select(ev => AoeResolver.TryParseCastId(ev.Key.Id ?? string.Empty, out var actionId)
                 ? new RecordedObjectActionCandidate(actionId, ev.Count, ev.Key.Name)
                 : null)
@@ -393,6 +413,30 @@ public sealed class AddObjectAoeService : IDisposable
             .OrderByDescending(candidate => candidate.ObservationCount)
             .ThenBy(candidate => candidate.ActionId)
             .ToArray();
+    }
+
+    /// <summary>
+    /// 録画 action_used の Source 名がオブジェクト名に一致するか。完全一致は常に許可。
+    /// 部分一致は両者が 3 文字以上のときのみ（双方向）。短い名前（例 "炎"）が無関係な長い名前に
+    /// 誤マッチして AoE 形状をでたらめに学習する事故を防ぐ（RES-04）。
+    /// </summary>
+    public static bool MatchesObjectSource(string? recordedSource, string? objectName)
+    {
+        if (string.IsNullOrWhiteSpace(recordedSource) || string.IsNullOrWhiteSpace(objectName))
+        {
+            return false;
+        }
+        if (string.Equals(recordedSource, objectName, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        const int MinPartialLen = 3;
+        if (recordedSource.Length < MinPartialLen || objectName.Length < MinPartialLen)
+        {
+            return false;
+        }
+        return recordedSource.Contains(objectName, StringComparison.OrdinalIgnoreCase)
+            || objectName.Contains(recordedSource, StringComparison.OrdinalIgnoreCase);
     }
 
     private static (uint ActionId, int ObservationCount)? SelectRecordingActionCandidate(
@@ -572,6 +616,22 @@ public sealed class AddObjectAoeService : IDisposable
         // 単体オブジェクト AoE は「学習済みか」を見てから発火可否を決める。
         // 録画から初めて学習するケースでは cache がまだ空なので、出現時点で温めておく。
         _ = LookupAoe(ev.DataId, ev.ObjectName);
+    }
+
+    private void OnObjectDisappeared(ObjectDisappearedEvent ev)
+    {
+        // 消滅した add の suppress を解除し、同名 add が再出現したときに AoE が再び描画されるようにする。
+        // ObjectDisappearedEvent は DataId を持たないため名前ベースのキーで照合する
+        // （OnAppear / FireGroup の suppress キーも名前があれば "name:{name}" 形式で一致する）。
+        if (string.IsNullOrWhiteSpace(ev.ObjectName))
+        {
+            return;
+        }
+        var key = MakeGroupKey(0, ev.ObjectName);
+        lock (_gate)
+        {
+            _objectAoeSuppressUntil.Remove(key);
+        }
     }
 
     private void OnCastStart(CastStartedEvent ev)
@@ -880,7 +940,17 @@ public sealed class AddObjectAoeService : IDisposable
 
         foreach (var window in due)
         {
-            TryFireLiveObjectSnapshot(window, now);
+            // toFire パス（FireGroup）と保護水準を対称にする。LiveScan は ObjectTable を走査するため、
+            // 絶コンテンツの大量 add 出現/消滅でアクター解放と重なると例外が出うる。
+            // 例外境界が無いと IFramework.Update 経由で Dalamud フレームループに伝播する。
+            try
+            {
+                TryFireLiveObjectSnapshot(window, now);
+            }
+            catch (Exception ex)
+            {
+                _log.Warning(ex, "[FfxivEchoes] AddObjectAoe: LiveScan 例外 excludedSource={Source}", window.ExcludedSourceName);
+            }
         }
     }
 
@@ -1010,16 +1080,17 @@ public sealed class AddObjectAoeService : IDisposable
 
     private void CleanupExpiredGroups(DateTimeOffset now)
     {
-        var dead = new List<string>();
+        // 毎フレーム（OnUpdate の lock 内）呼ばれるため new List を避けて再利用バッファを使う（NEW-08）。
+        _deadGroupKeys.Clear();
         foreach (var (key, group) in _groups)
         {
-            if (group.IsFired) { dead.Add(key); continue; }
+            if (group.IsFired) { _deadGroupKeys.Add(key); continue; }
             if ((now - group.FirstAddAt).TotalSeconds > WindowSec)
             {
-                dead.Add(key);
+                _deadGroupKeys.Add(key);
             }
         }
-        foreach (var k in dead)
+        foreach (var k in _deadGroupKeys)
         {
             _groups.Remove(k);
         }

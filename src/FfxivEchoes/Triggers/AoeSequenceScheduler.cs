@@ -30,6 +30,8 @@ public sealed class AoeSequenceScheduler : IDisposable
     private readonly Action<AoeSequenceStep, IGameEvent, uint, string> _onFire;
     private readonly IPluginLog _log;
     private readonly List<PendingStep> _pending = new();
+    // OnUpdate の発火対象バッファ（毎フレーム new を避け再利用。OnUpdate は単一スレッド）。
+    private readonly List<PendingStep> _toFireBuffer = new();
     private readonly object _gate = new();
     private volatile bool _disposed;
 
@@ -129,21 +131,29 @@ public sealed class AoeSequenceScheduler : IDisposable
         if (_disposed) return;
         var now = DateTimeOffset.UtcNow;
 
-        PendingStep[] toFire;
+        // 同じ述語で Where().ToArray() + RemoveAll() と 2 回走査していたのを、後方 1 パスに統合し
+        // 毎フレームのアロケーションを排除（PERF-03）。_toFireBuffer への Clear/Add/Reverse は
+        // すべて lock 内に閉じ込め、_pending と同じ排他で守る（保守時の取り違え防止）。
         lock (_gate)
         {
-            // _pending を時刻でフィルタして「発火対象」を取り出し、本体から除去
-            toFire = _pending.Where(p => p.FireAt <= now).ToArray();
-            if (toFire.Length > 0)
+            _toFireBuffer.Clear();
+            for (var i = _pending.Count - 1; i >= 0; i--)
             {
-                _pending.RemoveAll(p => p.FireAt <= now);
+                if (_pending[i].FireAt <= now)
+                {
+                    _toFireBuffer.Add(_pending[i]);
+                    _pending.RemoveAt(i);
+                }
             }
+            // 後方収集で逆順になっているので元の時系列順に戻す（発火順序を従来と一致させる）。
+            _toFireBuffer.Reverse();
         }
-        if (toFire.Length == 0) return;
+        if (_toFireBuffer.Count == 0) return;
 
         // コールバック呼び出しは lock 外（外側で _active を触る ActorTrackedAoeService の
-        // ロックと重畳して deadlock しないように）
-        foreach (var p in toFire)
+        // ロックと重畳して deadlock しないように）。OnUpdate は単一スレッドのため、lock 外で
+        // _toFireBuffer を読むのは安全（次の OnUpdate まで上書きされない）。
+        foreach (var p in _toFireBuffer)
         {
             try
             {

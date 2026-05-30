@@ -33,6 +33,7 @@ public sealed class PredictedObjectSpawnService : IDisposable
 
     private readonly IDisposable _castStartSub;
     private readonly IDisposable _castCompleteSub;
+    private readonly IDisposable _castCancelSub;
     private readonly IDisposable _objectAppearSub;
     private readonly IDisposable _zoneSub;
     private readonly IDisposable _combatStartSub;
@@ -65,6 +66,10 @@ public sealed class PredictedObjectSpawnService : IDisposable
 
         _castStartSub = bus.Subscribe<CastStartedEvent>(OnCastStart);
         _castCompleteSub = bus.Subscribe<CastCompletedEvent>(OnCastComplete);
+        // 分岐ギミック（攻撃A/Bのどちらか）でキャストがキャンセルされたら、予約済み spawn を取り消す。
+        // これが無いと来なかった方の add 予告（床塗り）が誤って発火し続ける。
+        // ActorTrackedAoeService と対称のキャンセル処理。
+        _castCancelSub = bus.Subscribe<CastCanceledEvent>(OnCastCanceled);
         _objectAppearSub = bus.Subscribe<ObjectAppearedEvent>(OnObjectAppeared);
         _zoneSub = bus.Subscribe<ZoneChangedEvent>(z =>
         {
@@ -95,6 +100,7 @@ public sealed class PredictedObjectSpawnService : IDisposable
         _framework.Update -= OnFrameworkUpdate;
         _castStartSub.Dispose();
         _castCompleteSub.Dispose();
+        _castCancelSub.Dispose();
         _objectAppearSub.Dispose();
         _zoneSub.Dispose();
         _combatStartSub.Dispose();
@@ -137,6 +143,23 @@ public sealed class PredictedObjectSpawnService : IDisposable
     {
         if (!_inCombat) return;
         FireSpawnsForEvent(ev.CastActionId, ev.CastActionName, ev.SourceName, "cast_complete", ev);
+    }
+
+    private void OnCastCanceled(CastCanceledEvent ev)
+    {
+        // キャンセルされたキャストに紐づく予約済み spawn を取り消す（来なかった分岐の誤予告防止）。
+        int removed;
+        lock (_gate)
+        {
+            removed = _scheduled.RemoveAll(s =>
+                MatchesCast(s.Spawn, ev.CastActionId, ev.CastActionName, ev.SourceName));
+        }
+        if (removed > 0)
+        {
+            _log.Debug(
+                "[FfxivEchoes] PredictedObjectSpawn: キャスト中断で予約取消 cast={Cast} 件数={N}",
+                ev.CastActionName, removed);
+        }
     }
 
     private void FireSpawnsForEvent(
@@ -320,12 +343,34 @@ public sealed class PredictedObjectSpawnService : IDisposable
         {
             var dataIdHex = ev.DataId.ToString("X");
             var toRemove = _pendingPredictions.Keys
-                .Where(k => k.Contains(dataIdHex, StringComparison.OrdinalIgnoreCase))
+                .Where(k => MatchesAppearedDataId(k, dataIdHex))
                 .ToList();
             foreach (var k in toRemove)
             {
                 _pendingPredictions.Remove(k);
             }
         }
+    }
+
+    /// <summary>
+    /// spawn.Id（フォーマット <c>spawn_{castHex}_{dataIdHex}_{nameHash}</c>）の DataId フィールドが
+    /// 出現イベントの DataId と完全一致するかを判定する。
+    /// 旧実装の <c>k.Contains(dataIdHex)</c> は部分マッチで、短い hex の DataId が他 spawn の
+    /// キー中に包含され無関係な予告を誤削除していた（P2-D）。アンダースコア区切りの完全一致で防ぐ。
+    /// </summary>
+    private static bool MatchesAppearedDataId(string spawnId, string dataIdHex)
+    {
+        if (string.IsNullOrEmpty(spawnId) || string.IsNullOrEmpty(dataIdHex))
+        {
+            return false;
+        }
+        var parts = spawnId.Split('_');
+        // parts: ["spawn", castHex, dataIdHex, nameHash]
+        if (parts.Length >= 4)
+        {
+            return string.Equals(parts[2], dataIdHex, StringComparison.OrdinalIgnoreCase);
+        }
+        // 想定外フォーマットは「_{dataIdHex}_」のセグメント完全包含で代替（部分マッチよりは厳格）。
+        return spawnId.Contains("_" + dataIdHex + "_", StringComparison.OrdinalIgnoreCase);
     }
 }
