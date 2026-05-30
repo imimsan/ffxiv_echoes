@@ -27,6 +27,9 @@ public sealed class CastCapture : IDisposable
 
     private readonly Dictionary<ulong, CastState> _states = new();
     private readonly Dictionary<uint, string> _actionNameCache = new();
+    // 毎フレームの new HashSet/List を避ける再利用バッファ（PERF-02）。
+    private readonly HashSet<ulong> _seen = new();
+    private readonly List<ulong> _toRemove = new();
 
     public CastCapture(
         IFramework framework, IObjectTable objectTable, IDataManager dataManager,
@@ -50,7 +53,8 @@ public sealed class CastCapture : IDisposable
 
     private void OnUpdate(IFramework _)
     {
-        var seen = new HashSet<ulong>();
+        var seen = _seen;
+        seen.Clear();
 
         foreach (var obj in _objectTable)
         {
@@ -78,7 +82,7 @@ public sealed class CastCapture : IDisposable
         // ObjectTable から消えたアクターの状態を片付ける（消失中にキャスト中だった場合は Cancel 扱い）
         if (_states.Count > seen.Count)
         {
-            var toRemove = new List<ulong>();
+            _toRemove.Clear();
             foreach (var (id, state) in _states)
             {
                 if (seen.Contains(id))
@@ -91,9 +95,9 @@ public sealed class CastCapture : IDisposable
                     _bus.Publish(new CastCanceledEvent(now, state.SourceId, state.SourceName,
                         state.CastActionId, state.CastActionName));
                 }
-                toRemove.Add(id);
+                _toRemove.Add(id);
             }
-            foreach (var id in toRemove)
+            foreach (var id in _toRemove)
             {
                 _states.Remove(id);
             }

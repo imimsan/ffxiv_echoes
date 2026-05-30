@@ -27,6 +27,9 @@ public sealed class HpCapture : IDisposable
     private readonly LuminaPcDetector _pcDetector;
 
     private readonly Dictionary<ulong, float> _lastPublishedHpPct = new();
+    // 毎フレームの new HashSet/List を避ける再利用バッファ（PERF-02）。
+    private readonly HashSet<ulong> _seen = new();
+    private readonly List<ulong> _toRemove = new();
 
     public HpCapture(IFramework framework, IObjectTable objectTable, IEventBus bus, IPluginLog log,
         LuminaPcDetector pcDetector)
@@ -48,7 +51,8 @@ public sealed class HpCapture : IDisposable
 
     private void OnUpdate(IFramework _)
     {
-        var seen = new HashSet<ulong>();
+        var seen = _seen;
+        seen.Clear();
 
         foreach (var obj in _objectTable)
         {
@@ -99,15 +103,15 @@ public sealed class HpCapture : IDisposable
         // 消えたアクターは忘れる
         if (_lastPublishedHpPct.Count > seen.Count)
         {
-            var toRemove = new List<ulong>();
+            _toRemove.Clear();
             foreach (var id in _lastPublishedHpPct.Keys)
             {
                 if (!seen.Contains(id))
                 {
-                    toRemove.Add(id);
+                    _toRemove.Add(id);
                 }
             }
-            foreach (var id in toRemove)
+            foreach (var id in _toRemove)
             {
                 _lastPublishedHpPct.Remove(id);
             }

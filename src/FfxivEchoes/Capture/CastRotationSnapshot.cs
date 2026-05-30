@@ -32,6 +32,7 @@ public sealed class CastRotationSnapshot : IDisposable
     private readonly IDisposable _startSub;
     private readonly IDisposable _cancelSub;
     private readonly IDisposable _zoneSub;
+    private readonly IDisposable _combatStartSub;
 
     public CastRotationSnapshot(IEventBus bus, IObjectTable objectTable, IPluginLog log)
     {
@@ -39,8 +40,18 @@ public sealed class CastRotationSnapshot : IDisposable
         _log = log;
         _startSub = bus.Subscribe<CastStartedEvent>(OnStart);
         _cancelSub = bus.Subscribe<CastCanceledEvent>(OnCancel);
-        // ゾーン変更で全クリア（次のインスタンスに古い snapshot を持ち込まない）
-        _zoneSub = bus.Subscribe<ZoneChangedEvent>(_ => _snapshots.Clear());
+        // ゾーン変更で全クリア（次のインスタンスに古い snapshot を持ち込まない）。
+        // _latestBySource もクリアしないと、新ゾーンで TryGetLatestForSource が旧ゾーンの
+        // 向きを返し AoE が旧向きで描かれる（LC-01）。
+        _zoneSub = bus.Subscribe<ZoneChangedEvent>(_ => ClearAll());
+        // 同ゾーン再挑戦（ワイプ→リトライ）でも前回戦闘の向きを持ち込まないよう戦闘開始でもクリア。
+        _combatStartSub = bus.Subscribe<CombatStartedEvent>(_ => ClearAll());
+    }
+
+    private void ClearAll()
+    {
+        _snapshots.Clear();
+        _latestBySource.Clear();
     }
 
     public void Dispose()
@@ -48,6 +59,7 @@ public sealed class CastRotationSnapshot : IDisposable
         _startSub.Dispose();
         _cancelSub.Dispose();
         _zoneSub.Dispose();
+        _combatStartSub.Dispose();
         _snapshots.Clear();
         _latestBySource.Clear();
     }
@@ -116,8 +128,13 @@ public sealed class CastRotationSnapshot : IDisposable
     // キャスト終了直後の数秒（AoE が降ってきて余韻が消えるまで）も rotation は固定で
     // 描画したいため、snapshot は次の同 (sourceId, castId) キャスト開始で上書きされるか、
     // ZoneChangedEvent で全クリアされるまで生かす。
-    private void OnCancel(CastCanceledEvent ev) =>
+    private void OnCancel(CastCanceledEvent ev)
+    {
         _snapshots.TryRemove((ev.SourceId, ev.CastActionId), out _);
+        // per-source 最新インデックスからも除去。これが無いと、フェーズ境界でキャンセルされた
+        // キャストの向きが _latestBySource に残り、後続 AoE が旧向きで描かれる（LC-02/NEW-04）。
+        _latestBySource.TryRemove(ev.SourceId, out _);
+    }
 
     private readonly record struct Snapshot(uint SourceId, uint CastId, float RotationRad, DateTimeOffset At);
 }

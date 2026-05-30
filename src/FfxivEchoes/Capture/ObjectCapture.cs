@@ -24,6 +24,9 @@ public sealed class ObjectCapture : IDisposable
     private readonly IPluginLog _log;
     private readonly LuminaPcDetector _pcDetector;
     private readonly Dictionary<ulong, ObjectSnapshot> _seen = new();
+    // 毎フレームの new HashSet/List を避けるための再利用バッファ（PERF-02：add 大量出現時の GC 削減）。
+    private readonly HashSet<ulong> _currentIds = new();
+    private readonly List<ulong> _toRemove = new();
     private readonly IDisposable _combatStartSub;
     private readonly IDisposable _zoneSub;
 
@@ -75,7 +78,8 @@ public sealed class ObjectCapture : IDisposable
         }
 
         var now = DateTimeOffset.UtcNow;
-        var current = new HashSet<ulong>();
+        var current = _currentIds;
+        current.Clear();
 
         foreach (var obj in _objectTable)
         {
@@ -125,20 +129,20 @@ public sealed class ObjectCapture : IDisposable
         // 消失検知
         if (_seen.Count > current.Count)
         {
-            var toRemove = new List<ulong>();
+            _toRemove.Clear();
             foreach (var (id, snap) in _seen)
             {
                 if (current.Contains(id))
                 {
                     continue;
                 }
-                toRemove.Add(id);
+                _toRemove.Add(id);
                 _bus.Publish(new ObjectDisappearedEvent(
                     Timestamp: now,
                     ObjectId: (uint)id,
                     ObjectName: snap.Name));
             }
-            foreach (var id in toRemove)
+            foreach (var id in _toRemove)
             {
                 _seen.Remove(id);
             }

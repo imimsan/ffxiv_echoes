@@ -28,6 +28,9 @@ public sealed class StatusCapture : IDisposable
 
     private readonly Dictionary<ulong, ActorStatuses> _states = new();
     private readonly Dictionary<uint, string> _statusNameCache = new();
+    // 毎フレームの new HashSet/List を避けるため再利用（PERF-01/02：add 大量出現時の GC 削減）。
+    private readonly HashSet<ulong> _seenActors = new();
+    private readonly List<ulong> _staleActors = new();
 
     public StatusCapture(
         IFramework framework, IObjectTable objectTable, IDataManager dataManager,
@@ -83,7 +86,7 @@ public sealed class StatusCapture : IDisposable
 
     private void OnUpdate(IFramework _)
     {
-        var seenActors = new HashSet<ulong>();
+        _seenActors.Clear();
 
         foreach (var obj in _objectTable)
         {
@@ -92,22 +95,22 @@ public sealed class StatusCapture : IDisposable
                 continue;
             }
 
-            seenActors.Add(chara.GameObjectId);
+            _seenActors.Add(chara.GameObjectId);
             UpdateActor(chara);
         }
 
         // 消えたアクターは状態ごと忘れる（個別 StatusLost は出さない：そもそもターゲット消失なので）
-        if (_states.Count > seenActors.Count)
+        if (_states.Count > _seenActors.Count)
         {
-            var toRemove = new List<ulong>();
+            _staleActors.Clear();
             foreach (var id in _states.Keys)
             {
-                if (!seenActors.Contains(id))
+                if (!_seenActors.Contains(id))
                 {
-                    toRemove.Add(id);
+                    _staleActors.Add(id);
                 }
             }
-            foreach (var id in toRemove)
+            foreach (var id in _staleActors)
             {
                 _states.Remove(id);
             }
@@ -119,13 +122,19 @@ public sealed class StatusCapture : IDisposable
         var actorId = chara.GameObjectId;
         var actorName = chara.Name.TextValue;
 
-        if (!_states.TryGetValue(actorId, out var prev))
+        if (!_states.TryGetValue(actorId, out var st))
         {
-            prev = new ActorStatuses();
-            _states[actorId] = prev;
+            st = new ActorStatuses();
+            _states[actorId] = st;
         }
 
-        var current = new Dictionary<StatusKey, StatusSnapshot>();
+        // 前フレームの状態は st.Previous、今フレームは st.Current（再利用バッファ）に詰める。
+        // 毎フレーム new Dictionary を作らず 2 辞書を swap することで GC を抑える（PERF-01）。
+        // 単純な「1 辞書 Clear + 再投入」は消失判定ループで今フレーム分が混入し StatusLost が
+        // 一切発火しなくなるため不可。必ず Previous/Current を分離する。
+        var prev = st.Previous;
+        var current = st.Current;
+        current.Clear();
         foreach (var status in chara.StatusList)
         {
             if (status is null || status.StatusId == 0)
@@ -143,7 +152,7 @@ public sealed class StatusCapture : IDisposable
         // 新規 / 更新
         foreach (var (key, snap) in current)
         {
-            if (!prev.Statuses.TryGetValue(key, out var old))
+            if (!prev.TryGetValue(key, out var old))
             {
                 var name = ResolveStatusName(snap.StatusId);
                 _bus.Publish(new StatusGainedEvent(
@@ -172,7 +181,7 @@ public sealed class StatusCapture : IDisposable
         }
 
         // 消失
-        foreach (var (key, old) in prev.Statuses)
+        foreach (var (key, old) in prev)
         {
             if (current.ContainsKey(key))
             {
@@ -184,7 +193,10 @@ public sealed class StatusCapture : IDisposable
                 IsPlayer: IsPlayerStatus(old.StatusId, old.SourceId)));
         }
 
-        prev.Statuses = current;
+        // swap：今フレームの current を次フレームの previous に。旧 previous は次フレームの
+        // current バッファとして再利用する（次回 UpdateActor 冒頭で Clear される）。
+        st.Previous = current;
+        st.Current = prev;
     }
 
     private string ResolveStatusName(uint statusId)
@@ -217,6 +229,8 @@ public sealed class StatusCapture : IDisposable
 
     private sealed class ActorStatuses
     {
-        public Dictionary<StatusKey, StatusSnapshot> Statuses { get; set; } = new();
+        // Previous = 前フレームの状態、Current = 今フレームの再利用バッファ。毎フレーム swap する。
+        public Dictionary<StatusKey, StatusSnapshot> Previous { get; set; } = new();
+        public Dictionary<StatusKey, StatusSnapshot> Current { get; set; } = new();
     }
 }
