@@ -184,11 +184,9 @@ public sealed class EventMatcher
         {
             return false;
         }
-        if (m.Source is not null && !MatchString(m.Source, ev.TargetName))
-        {
-            // status_gain の "source" は付与した側。ev.SourceName 相当の情報が無いので暫定で TargetName を使わない
-            return false;
-        }
+        // status_gain の "source"（付与した側）は StatusGainedEvent に名前情報が無いため
+        // 文字列照合できない。以前は誤って付与"対象"の TargetName と照合しており、ボス名 source は
+        // 永久不発・プレイヤー名は無関係なデバフで誤発火していた。source で絞るなら source_id を使う。
         if (m.SourceId is { } sourceId && ev.SourceId != sourceId)
         {
             return false;

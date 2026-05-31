@@ -1,9 +1,9 @@
-using System.IO;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FfxivEchoes.Triggers.Models;
+using FfxivEchoes.Utils;
 
 namespace FfxivEchoes.Triggers;
 
@@ -27,11 +27,8 @@ public static class TriggerSerializer
     public static void WriteToFile(TriggerFile file, string path)
     {
         var json = Serialize(file);
-        var dir = Path.GetDirectoryName(path);
-        if (!string.IsNullOrEmpty(dir))
-        {
-            Directory.CreateDirectory(dir);
-        }
-        File.WriteAllText(path, json, new UTF8Encoding(false));
+        // アトミック書き込み：書き込み途中の失敗で既存トリガーファイル（119KB 級）が破損・
+        // 全トリガー消失するのを防ぐ。一時ファイルへ書いてから rename で差し替える。
+        AtomicFileWriter.WriteAllText(path, json, new UTF8Encoding(false));
     }
 }

@@ -436,6 +436,9 @@ public sealed class Plugin : IDalamudPlugin
         // プラグイン読み込み時に既にゾーン内にいる場合（dev 再 enable / クライアント起動済みでの新規読込）
         // でも TriggerEngine 等が _currentZone を取得できるようにする。
         _zoneCapture.PublishInitialState();
+        // ゾーン初期化の後に戦闘状態も初期化する。戦闘中にプラグインをロード／Reload しても
+        // CombatStartedEvent が発行され、予測 TTS・mechanic・同期がその 1 戦から正しく稼働する。
+        _combatStateCapture.PublishInitialState();
 
         Log.Information("[FfxivEchoes] Loaded v{Version} (config v{ConfigVersion}), capture services online",
             PluginInterface.Manifest.AssemblyVersion, Configuration.Version);

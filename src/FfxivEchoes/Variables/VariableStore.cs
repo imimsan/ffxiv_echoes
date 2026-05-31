@@ -18,16 +18,29 @@ public sealed class VariableStore : IDisposable
 {
     private readonly Dictionary<string, object?> _variables = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _gate = new();
+    private readonly IDisposable _combatStartSub;
     private readonly IDisposable _combatEndSub;
+    private readonly IDisposable _zoneSub;
     private readonly IPluginLog _log;
 
     public VariableStore(IEventBus bus, IPluginLog log)
     {
         _log = log;
+        // 反復ワイプ即再戦で前戦のカウンタ／フラグが残らないよう、戦闘終了だけでなく
+        // 戦闘開始・ゾーン変更でもリセットする。録画の約10%で combat_end が欠落するため
+        // CombatEnded 単独では取りこぼす（StorePosition 値も per-fight なので全クリアでよい）。
+        // TriggerEngine の cooldown リセット(LC-03)と同方針。
+        _combatStartSub = bus.Subscribe<CombatStartedEvent>(_ => ResetAll());
         _combatEndSub = bus.Subscribe<CombatEndedEvent>(_ => ResetAll());
+        _zoneSub = bus.Subscribe<ZoneChangedEvent>(_ => ResetAll());
     }
 
-    public void Dispose() => _combatEndSub.Dispose();
+    public void Dispose()
+    {
+        _combatStartSub.Dispose();
+        _combatEndSub.Dispose();
+        _zoneSub.Dispose();
+    }
 
     public void Set(string name, object? value)
     {
