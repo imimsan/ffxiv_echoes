@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using Dalamud.Plugin.Services;
+using FfxivEchoes.Diagnostics;
 using FfxivEchoes.Events;
 using FfxivEchoes.Triggers.Models;
 using IFramework = Dalamud.Plugin.Services.IFramework;
@@ -108,6 +109,18 @@ public sealed class PredictedObjectSpawnService : IDisposable
     }
 
     private void OnFrameworkUpdate(IFramework framework)
+    {
+        try
+        {
+            OnFrameworkUpdateCore();
+        }
+        catch (Exception ex)
+        {
+            FrameErrorThrottle.Report(_log, ex, "PredictedObjectSpawnService.OnFrameworkUpdate");
+        }
+    }
+
+    private void OnFrameworkUpdateCore()
     {
         if (!_inCombat) return;
         var now = NowProvider();

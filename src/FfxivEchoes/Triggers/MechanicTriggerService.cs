@@ -4,6 +4,7 @@ using System.Linq;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
 using FfxivEchoes.Capture;
+using FfxivEchoes.Diagnostics;
 using FfxivEchoes.Events;
 using FfxivEchoes.Triggers.Models;
 
@@ -373,7 +374,7 @@ public sealed class MechanicTriggerService : IDisposable
         }
         catch (Exception ex)
         {
-            _log.Error(ex, "[FfxivEchoes] MechanicTriggerService.OnUpdate 例外");
+            FrameErrorThrottle.Report(_log, ex, "MechanicTriggerService.OnUpdate");
         }
     }
 

@@ -5,6 +5,7 @@ using Dalamud.Game.ClientState.Objects.Enums;
 using Dalamud.Game.ClientState.Objects.SubKinds;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
+using FfxivEchoes.Diagnostics;
 using FfxivEchoes.Events;
 
 namespace FfxivEchoes.Capture;
@@ -70,6 +71,18 @@ public sealed class ObjectCapture : IDisposable
     }
 
     private void OnUpdate(IFramework _)
+    {
+        try
+        {
+            OnUpdateCore();
+        }
+        catch (Exception ex)
+        {
+            FrameErrorThrottle.Report(_log, ex, "ObjectCapture.OnUpdate");
+        }
+    }
+
+    private void OnUpdateCore()
     {
         if (_pendingResnapshot)
         {

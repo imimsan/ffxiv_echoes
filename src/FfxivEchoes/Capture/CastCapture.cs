@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
+using FfxivEchoes.Diagnostics;
 using FfxivEchoes.Events;
 using LuminaAction = Lumina.Excel.Sheets.Action;
 
@@ -52,6 +53,18 @@ public sealed class CastCapture : IDisposable
     }
 
     private void OnUpdate(IFramework _)
+    {
+        try
+        {
+            OnUpdateCore();
+        }
+        catch (Exception ex)
+        {
+            FrameErrorThrottle.Report(_log, ex, "CastCapture.OnUpdate");
+        }
+    }
+
+    private void OnUpdateCore()
     {
         var seen = _seen;
         seen.Clear();

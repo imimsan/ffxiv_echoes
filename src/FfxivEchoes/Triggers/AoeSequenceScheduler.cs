@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Dalamud.Plugin.Services;
+using FfxivEchoes.Diagnostics;
 using FfxivEchoes.Events;
 using FfxivEchoes.Triggers.Models;
 
@@ -127,6 +128,18 @@ public sealed class AoeSequenceScheduler : IDisposable
     }
 
     private void OnUpdate(IFramework _)
+    {
+        try
+        {
+            OnUpdateCore();
+        }
+        catch (Exception ex)
+        {
+            FrameErrorThrottle.Report(_log, ex, "AoeSequenceScheduler.OnUpdate");
+        }
+    }
+
+    private void OnUpdateCore()
     {
         if (_disposed) return;
         var now = DateTimeOffset.UtcNow;

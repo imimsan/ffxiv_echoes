@@ -5,6 +5,7 @@ using System.Numerics;
 using Dalamud.Game.ClientState.Objects.Enums;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
+using FfxivEchoes.Diagnostics;
 using FfxivEchoes.Events;
 using FfxivEchoes.Recording;
 using FfxivEchoes.Triggers.Models;
@@ -845,6 +846,18 @@ public sealed class AddObjectAoeService : IDisposable
     }
 
     private void OnUpdate(IFramework _)
+    {
+        try
+        {
+            OnUpdateCore();
+        }
+        catch (Exception ex)
+        {
+            FrameErrorThrottle.Report(_log, ex, "AddObjectAoeService.OnUpdate");
+        }
+    }
+
+    private void OnUpdateCore()
     {
         var now = DateTimeOffset.UtcNow;
         var file = _store.GetByZone(_currentZone);

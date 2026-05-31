@@ -1,6 +1,7 @@
 using System;
 using System.Numerics;
 using Dalamud.Plugin.Services;
+using FfxivEchoes.Diagnostics;
 using FfxivEchoes.Events;
 
 namespace FfxivEchoes.Capture;
@@ -78,6 +79,18 @@ public sealed class PlayerPositionCapture : IDisposable
     }
 
     private void OnUpdate(IFramework _)
+    {
+        try
+        {
+            OnUpdateCore();
+        }
+        catch (Exception ex)
+        {
+            FrameErrorThrottle.Report(_log, ex, "PlayerPositionCapture.OnUpdate");
+        }
+    }
+
+    private void OnUpdateCore()
     {
         if (!_inCombat) return;
 

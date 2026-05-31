@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Dalamud.Game.ClientState.Objects.Enums;
 using Dalamud.Plugin.Services;
+using FfxivEchoes.Diagnostics;
 using FfxivEchoes.Events;
 using FfxivEchoes.Triggers.Models;
 using FfxivEchoes.Utils;
@@ -81,6 +82,18 @@ public sealed class AutoAttackTimingService : IDisposable
     }
 
     private void OnUpdate(IFramework _)
+    {
+        try
+        {
+            OnUpdateCore();
+        }
+        catch (Exception ex)
+        {
+            FrameErrorThrottle.Report(_log, ex, "AutoAttackTimingService.OnUpdate");
+        }
+    }
+
+    private void OnUpdateCore()
     {
         if (!ShouldTrackAutoAttacks())
         {

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Dalamud.Game.ClientState.Objects.SubKinds;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
+using FfxivEchoes.Diagnostics;
 using FfxivEchoes.Events;
 
 namespace FfxivEchoes.Capture;
@@ -50,6 +51,18 @@ public sealed class HpCapture : IDisposable
     }
 
     private void OnUpdate(IFramework _)
+    {
+        try
+        {
+            OnUpdateCore();
+        }
+        catch (Exception ex)
+        {
+            FrameErrorThrottle.Report(_log, ex, "HpCapture.OnUpdate");
+        }
+    }
+
+    private void OnUpdateCore()
     {
         var seen = _seen;
         seen.Clear();

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
+using FfxivEchoes.Diagnostics;
 using FfxivEchoes.Events;
 using FfxivEchoes.Utils;
 using Lumina.Excel.Sheets;
@@ -85,6 +86,18 @@ public sealed class StatusCapture : IDisposable
     }
 
     private void OnUpdate(IFramework _)
+    {
+        try
+        {
+            OnUpdateCore();
+        }
+        catch (Exception ex)
+        {
+            FrameErrorThrottle.Report(_log, ex, "StatusCapture.OnUpdate");
+        }
+    }
+
+    private void OnUpdateCore()
     {
         _seenActors.Clear();
 

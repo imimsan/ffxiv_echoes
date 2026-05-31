@@ -6,6 +6,7 @@ using Dalamud.Game.ClientState.Objects.Enums;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
 using FfxivEchoes.Capture;
+using FfxivEchoes.Diagnostics;
 using FfxivEchoes.Events;
 using FfxivEchoes.Recording;
 using FfxivEchoes.Triggers.Models;
@@ -189,6 +190,18 @@ public sealed class PredictedCastReminderService : IDisposable
     }
 
     private void OnUpdate(IFramework _)
+    {
+        try
+        {
+            OnUpdateCore();
+        }
+        catch (Exception ex)
+        {
+            FrameErrorThrottle.Report(_log, ex, "PredictedCastReminderService.OnUpdate");
+        }
+    }
+
+    private void OnUpdateCore()
     {
         var nowRel = _combatClock.RelativeSecondsAt(DateTimeOffset.UtcNow);
         if (nowRel is null)
