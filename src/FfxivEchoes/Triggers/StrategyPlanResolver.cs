@@ -115,6 +115,29 @@ public static class StrategyPlanResolver
         return BuildReminderActions(profile, mechanic, (id, name) => AutoSafeCallPlanner.IsRaidWide(file, id, name));
     }
 
+    // 名称未解決の cast_id がそのまま漏れた "0x2B34" / "Action#11060" 形式のラベルか。
+    // これらは読み上げ・表示する意味がないため reminder の TTS から除外する。
+    private static bool IsRawCastIdLabel(string text)
+    {
+        var t = text.Trim();
+        if (t.StartsWith("Action#", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        if (t.Length < 3 || t[0] != '0' || (t[1] != 'x' && t[1] != 'X'))
+        {
+            return false;
+        }
+        for (var i = 2; i < t.Length; i++)
+        {
+            if (!Uri.IsHexDigit(t[i]))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
     public static IReadOnlyList<ActionDefinition> BuildReminderActions(
         StrategyProfile profile,
         MechanicStrategy mechanic,
@@ -122,7 +145,9 @@ public static class StrategyPlanResolver
     {
         var actions = new List<ActionDefinition>();
         var text = mechanic.WarningText ?? mechanic.Callout ?? mechanic.Label;
-        if (!string.IsNullOrWhiteSpace(text))
+        // 名称未解決の cast_id がそのまま漏れた "0x2B34" / "Action#11060" 形式は読み上げない
+        // （実戦中に「0x2B34」と読み上げ＋表示されるジャンクを防ぐ）。
+        if (!string.IsNullOrWhiteSpace(text) && !IsRawCastIdLabel(text))
         {
             actions.Add(new ActionDefinition
             {

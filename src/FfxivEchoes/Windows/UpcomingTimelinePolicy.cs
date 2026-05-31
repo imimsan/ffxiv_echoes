@@ -235,7 +235,32 @@ public static class UpcomingTimelinePolicy
 
     public static bool IsRawUnknownActionLabel(string? label)
     {
-        return !string.IsNullOrEmpty(label) &&
-               label.StartsWith("Action#", StringComparison.OrdinalIgnoreCase);
+        if (string.IsNullOrEmpty(label))
+        {
+            return false;
+        }
+        if (label.StartsWith("Action#", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        // 名称未解決の cast_id がそのまま漏れた "0x2B34" 形式のラベルもジャンク扱いにする
+        // （例: cast_id 11060 が Action#11060 → "0x2B34" のままタイムライン/読み上げに出る）。
+        return IsRawHexLabel(label);
+    }
+
+    private static bool IsRawHexLabel(string label)
+    {
+        if (label.Length < 3 || label[0] != '0' || (label[1] != 'x' && label[1] != 'X'))
+        {
+            return false;
+        }
+        for (var i = 2; i < label.Length; i++)
+        {
+            if (!Uri.IsHexDigit(label[i]))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 }
