@@ -49,11 +49,7 @@ public sealed class LinePerpendicularPreset : ISafeZonePreset
         Vector3 result;
         if (mode == "perpendicular")
         {
-            // 法線（XZ 平面）：left = (-z, 0, x)、right = (z, 0, -x)
-            var normal = side == "left"
-                ? new Vector3(-dir.Z, 0, dir.X)
-                : new Vector3(dir.Z, 0, -dir.X);
-            result = to.Value + normal * distance;
+            result = PerpendicularOffset(from.Value, to.Value, side, distance);
         }
         else
         {
@@ -61,6 +57,27 @@ public sealed class LinePerpendicularPreset : ISafeZonePreset
         }
 
         return new SafeZoneResult(result, DirectionInfo.Compute(ctx.SelfPosition, result));
+    }
+
+    /// <summary>
+    /// from→to を向いた人の左右（XZ 平面・俯瞰 +X=東 / +Z=南、北=上）に
+    /// <paramref name="distance"/> だけ離れた点を返す純粋関数（テスト可能）。
+    /// </summary>
+    public static Vector3 PerpendicularOffset(Vector3 from, Vector3 to, string side, float distance)
+    {
+        var raw = to - from;
+        var len = raw.Length();
+        if (len < 0.01f)
+        {
+            return to;
+        }
+        var dir = new Vector3(raw.X / len, 0f, raw.Z / len);
+        // from→to を向いた人の左右（俯瞰 +X=東/+Z=南、北=上）。
+        // 地上の事実「北を向くと右手は東」から：右=(-z,0,x)、左=(z,0,-x)。
+        var normal = string.Equals(side, "left", StringComparison.OrdinalIgnoreCase)
+            ? new Vector3(dir.Z, 0f, -dir.X)
+            : new Vector3(-dir.Z, 0f, dir.X);
+        return to + normal * distance;
     }
 
     private Vector3? ResolveActor(SafeZoneContext ctx, string spec)

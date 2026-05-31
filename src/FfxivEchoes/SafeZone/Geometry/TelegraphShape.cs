@@ -242,7 +242,10 @@ public sealed class RectShape : TelegraphShape
 
     public override bool Contains(Vector3 p)
     {
-        var rad = -RotationDeg * MathF.PI / 180f;
+        // RotationDeg は FFXIV rotation 系（0=南/+Z, 前方=(sinR,cosR)）で FanShape と同一規約。
+        // ワールド差分を局所フレームへ写すには +RotationDeg で回す（Depth=z=前方軸）。
+        // 旧実装は -RotationDeg で鏡像になり、回転した矩形の前後・左右が入れ替わっていた。
+        var rad = RotationDeg * MathF.PI / 180f;
         var cos = MathF.Cos(rad);
         var sin = MathF.Sin(rad);
         var dx = p.X - Center.X;

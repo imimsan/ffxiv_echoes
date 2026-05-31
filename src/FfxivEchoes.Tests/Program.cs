@@ -4,6 +4,7 @@ using FfxivEchoes.Capture;
 using FfxivEchoes.Commands.Handlers;
 using FfxivEchoes.Recording;
 using FfxivEchoes.SafeZone;
+using FfxivEchoes.SafeZone.Geometry;
 using FfxivEchoes.SafeZone.Presets;
 using FfxivEchoes.Triggers;
 using FfxivEchoes.Triggers.Models;
@@ -168,6 +169,8 @@ var tests = new List<(string Name, Action Body)>
     ("AoeSequenceStep schedules with positive delay and zero delay", AoeSequenceStep_ScheduleAccepts),
     ("ActorTrackedAoe ComputePhaseAlpha returns expected per-phase alphas", ActorTrackedAoe_ComputePhaseAlpha_ReturnsPerPhaseAlphas),
     ("WorldShapeRenderer RecommendSegments scales with radius", WorldShapeRenderer_RecommendSegments_ScalesWithRadius),
+    ("RectShape rotation matches game facing convention", RectShape_Contains_RotationMatchesGameFacing),
+    ("LinePerpendicular side normal matches player left/right", LinePerpendicularPreset_SideNormal_MatchesPlayerLeftRight),
     ("TimelineBranch JSON roundtrip preserves condition fields", TimelineBranch_JsonRoundtrip_PreservesFields),
     ("BranchObserver scopes rejection to branch group", BranchObserver_ScopesRejectionToBranchGroup),
     ("StrategyPlanResolver FindMechanicForPrediction filters branch", StrategyPlanResolver_FindMechanicForPrediction_FiltersByBranch),
@@ -4701,6 +4704,46 @@ static void ActorTrackedAoe_RotationConversion_MatchesArenaProjection()
             ActorTrackedAoeService.ConvertFfxivRotationToRender(rot),
             $"sample rot={rot} matches ArenaProjection");
     }
+}
+
+static void RectShape_Contains_RotationMatchesGameFacing()
+{
+    // RectShape.RotationDeg は FanShape と同じ FFXIV rotation 系（0=南/+Z, 前方=(sinR,cosR)）。
+    // Width=x ローカル軸, Depth=z ローカル軸（前方）。
+    // 回転0：前方=南(+Z)。前方軸(±Depth/2)上の点は範囲内、幅軸(±Width/2)外は範囲外。
+    var rect0 = new RectShape { Center = Vector3.Zero, Width = 2f, Depth = 20f, RotationDeg = 0f };
+    True(rect0.Contains(new Vector3(0f, 0f, 8f)), "rot0: forward(south +Z) point inside");
+    False(rect0.Contains(new Vector3(8f, 0f, 0f)), "rot0: east point outside (beyond width axis)");
+
+    // 回転45°：前方=南東(+X,+Z)。前方軸上の点(6,6)は奥行内＝範囲内、
+    // 直交する幅軸方向(6,-6)は幅±1しかないので範囲外であるべき。
+    // 旧実装(rad=-RotationDeg)は鏡像になり left/right が反転し、この2点の内外が逆転する。
+    var rect45 = new RectShape { Center = Vector3.Zero, Width = 2f, Depth = 20f, RotationDeg = 45f };
+    True(rect45.Contains(new Vector3(6f, 0f, 6f)), "rot45: forward(SE) point inside");
+    False(rect45.Contains(new Vector3(6f, 0f, -6f)), "rot45: width-axis(SW) point outside");
+}
+
+static void LinePerpendicularPreset_SideNormal_MatchesPlayerLeftRight()
+{
+    // from→to を向いた人の左右（XZ平面・俯瞰 +X=東/+Z=南、北=上）。
+    // 地上の事実：北を向くと右手は東。右=(-dz,0,dx)、左=(dz,0,-dx)。
+    var from = Vector3.Zero;
+
+    // to が北(-Z)：右手=東(+X)、左手=西(-X)
+    var toNorth = new Vector3(0f, 0f, -10f);
+    var rightN = LinePerpendicularPreset.PerpendicularOffset(from, toNorth, "right", 5f);
+    var leftN = LinePerpendicularPreset.PerpendicularOffset(from, toNorth, "left", 5f);
+    NearlyEqual(5f, rightN.X - toNorth.X, "facing north: right is east (+X)");
+    NearlyEqual(0f, rightN.Z - toNorth.Z, "facing north: right has no Z component");
+    NearlyEqual(-5f, leftN.X - toNorth.X, "facing north: left is west (-X)");
+
+    // to が東(+X)：右手=南(+Z)、左手=北(-Z)
+    var toEast = new Vector3(10f, 0f, 0f);
+    var rightE = LinePerpendicularPreset.PerpendicularOffset(from, toEast, "right", 5f);
+    var leftE = LinePerpendicularPreset.PerpendicularOffset(from, toEast, "left", 5f);
+    NearlyEqual(5f, rightE.Z - toEast.Z, "facing east: right is south (+Z)");
+    NearlyEqual(0f, rightE.X - toEast.X, "facing east: right has no X component");
+    NearlyEqual(-5f, leftE.Z - toEast.Z, "facing east: left is north (-Z)");
 }
 
 static void ActorTrackedAoe_TowardsTarget_FacesCardinalDirection()
