@@ -22,10 +22,14 @@ public sealed class WavHandler : IActionHandler, IDisposable
     private readonly IDalamudPluginInterface _pluginInterface;
     private readonly AudioDeviceEnumerator _deviceEnumerator;
     private readonly IPluginLog _log;
-    // 再生中のプレイヤーを追跡し、Dispose（プラグイン解放 / xlrestart）で確実に停止・破棄する。
+    // 再生中のプレイヤーと付随資源（reader / WASAPI 用 MMDevice）を追跡し、
+    // Dispose（プラグイン解放 / xlrestart）で確実に停止・破棄する。
     // 追跡しないと、解放後に PlaybackStopped が解放間際の資源を触ってクラッシュしうる。
+    // MMDevice(COM) は WasapiOut.Dispose では解放されないため自前で追跡する（指定デバイス時のリーク対策）。
     private readonly object _gate = new();
-    private readonly HashSet<IWavePlayer> _active = new();
+    private readonly Dictionary<IWavePlayer, Playback> _active = new();
+
+    private readonly record struct Playback(AudioFileReader Reader, MMDevice? Device);
 
     public WavHandler(
         Configuration configuration,
@@ -63,31 +67,38 @@ public sealed class WavHandler : IActionHandler, IDisposable
 
         // 各再生は独立したライフサイクル：ファイル読込→出力デバイス→再生→停止後 Dispose。
         // PlaybackStopped で Dispose チェーンを発火させる fire-and-forget スタイル。
+        AudioFileReader? reader = null;
+        IWavePlayer? player = null;
+        MMDevice? device = null;
         try
         {
-            var reader = new AudioFileReader(resolved) { Volume = volume };
-            IWavePlayer player = CreatePlayer();
+            reader = new AudioFileReader(resolved) { Volume = volume };
+            (player, device) = CreatePlayer();
 
-            player.PlaybackStopped += (_, _) =>
+            var capturedPlayer = player;
+            var capturedReader = reader;
+            var capturedDevice = device;
+            capturedPlayer.PlaybackStopped += (_, _) =>
             {
-                try
-                {
-                    player.Dispose();
-                    reader.Dispose();
-                }
-                catch
-                {
-                    // Dispose 中の例外は無視
-                }
+                // 二重破棄を避けるため、_active から取り外せた側だけが資源を解放する
+                // （Dispose() が先に取り外していればそちらが解放する）。
+                bool owned;
                 lock (_gate)
                 {
-                    _active.Remove(player);
+                    owned = _active.Remove(capturedPlayer);
                 }
+                if (!owned)
+                {
+                    return;
+                }
+                try { capturedPlayer.Dispose(); } catch { /* Dispose 中の例外は無視 */ }
+                try { capturedReader.Dispose(); } catch { /* ignore */ }
+                try { capturedDevice?.Dispose(); } catch { /* ignore */ }
             };
 
             lock (_gate)
             {
-                _active.Add(player);
+                _active[player] = new Playback(reader, device);
             }
             player.Init(reader);
             player.Play();
@@ -95,10 +106,22 @@ public sealed class WavHandler : IActionHandler, IDisposable
         catch (Exception ex)
         {
             _log.Error(ex, "[FfxivEchoes] WAV 再生エラー：{File}", resolved);
+            // 登録前に失敗した場合のみここで後始末する（登録済みなら所有権は Dispose() 側）。
+            bool registered;
+            lock (_gate)
+            {
+                registered = player is not null && _active.ContainsKey(player);
+            }
+            if (!registered)
+            {
+                try { player?.Dispose(); } catch { /* ignore */ }
+                try { reader?.Dispose(); } catch { /* ignore */ }
+                try { device?.Dispose(); } catch { /* ignore */ }
+            }
         }
     }
 
-    private IWavePlayer CreatePlayer()
+    private (IWavePlayer Player, MMDevice? Device) CreatePlayer()
     {
         var deviceId = _configuration.AudioDevice;
         if (!string.IsNullOrEmpty(deviceId) && deviceId != AudioDeviceEnumerator.SystemDefaultId)
@@ -106,11 +129,20 @@ public sealed class WavHandler : IActionHandler, IDisposable
             var device = _deviceEnumerator.FindDeviceById(deviceId);
             if (device is not null)
             {
-                return new WasapiOut(device, AudioClientShareMode.Shared, true, 100);
+                try
+                {
+                    return (new WasapiOut(device, AudioClientShareMode.Shared, true, 100), device);
+                }
+                catch
+                {
+                    // WasapiOut 生成失敗時に MMDevice(COM) を取りこぼさない。
+                    device.Dispose();
+                    throw;
+                }
             }
             _log.Warning("[FfxivEchoes] 指定デバイス '{Id}' が見つかりません。既定デバイスを使用", deviceId);
         }
-        return new WaveOutEvent();
+        return (new WaveOutEvent(), null);
     }
 
     private string? ResolvePath(string file)
@@ -127,19 +159,21 @@ public sealed class WavHandler : IActionHandler, IDisposable
 
     public void Dispose()
     {
-        // 再生中のプレイヤーをすべて停止・破棄する。Stop() は PlaybackStopped を発火させ
-        // 上のハンドラが資源を解放する。Stop() は _gate の外で呼び（PlaybackStopped が
-        // _gate を取るためデッドロック回避）、スナップショットだけ _gate 内で取る。
-        List<IWavePlayer> players;
+        // 再生中のプレイヤーをすべて停止・破棄する。先に _active から取り外して所有権を確定させ、
+        // その後 Stop() を呼ぶ（Stop() が発火させる PlaybackStopped は _active.Remove に失敗し
+        // 二重破棄しない）。Stop() は _gate の外で呼ぶ（ハンドラが _gate を取るためデッドロック回避）。
+        List<KeyValuePair<IWavePlayer, Playback>> snapshot;
         lock (_gate)
         {
-            players = new List<IWavePlayer>(_active);
+            snapshot = new List<KeyValuePair<IWavePlayer, Playback>>(_active);
             _active.Clear();
         }
-        foreach (var player in players)
+        foreach (var (player, playback) in snapshot)
         {
             try { player.Stop(); } catch { /* ignore */ }
             try { player.Dispose(); } catch { /* ignore */ }
+            try { playback.Reader.Dispose(); } catch { /* ignore */ }
+            try { playback.Device?.Dispose(); } catch { /* ignore */ }
         }
     }
 }
