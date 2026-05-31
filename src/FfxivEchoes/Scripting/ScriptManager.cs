@@ -15,10 +15,12 @@ namespace FfxivEchoes.Scripting;
 /// </summary>
 /// <remarks>
 /// 安全性検討項目：
-/// - 任意 .dll の動的ロードは UAC を無視できる経路になりうる。本実装では
-///   AssemblyLoadContext を分離し isolation を確保しているが、サンドボックスは
-///   未実装。必要に応じて将来 .NET の RuntimeHelpers.AppDomain 風のサンドボックスや
-///   System.Reflection.MetadataLoadContext での走査検証を追加する。
+/// - 任意 .dll の動的ロードは UAC を無視できる経路になりうる。<see cref="LoadAll"/> は
+///   Assembly.LoadFrom で既定の AssemblyLoadContext にロードするため isolation も
+///   サンドボックスも無い（以前のコメントの「ALC を分離し isolation を確保」は事実誤認だった）。
+///   現状の安全担保は「既定では LoadAll を一切呼ばず休眠させる」オプトイン設計のみ。
+///   将来サンドボックス化するなら collectible な分離 ALC、または
+///   System.Reflection.MetadataLoadContext での走査検証（ロードせず型だけ検査）を導入する。
 /// - .csx (Roslyn スクリプト) ロードは未対応。動的コンパイルが必要なら
 ///   Microsoft.CodeAnalysis.CSharp.Scripting NuGet を導入予定。
 ///
