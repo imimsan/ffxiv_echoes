@@ -8,6 +8,7 @@ using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Interface.Utility;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
+using FfxivEchoes.Diagnostics;
 using FfxivEchoes.SafeZone;
 using FfxivEchoes.Triggers;
 using FfxivEchoes.Triggers.Models;
@@ -218,6 +219,18 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
     }
 
     public override void Draw()
+    {
+        try
+        {
+            DrawCore();
+        }
+        catch (Exception ex)
+        {
+            FrameErrorThrottle.Report(Plugin.Log, ex, "MinimapWindow.Draw");
+        }
+    }
+
+    private void DrawCore()
     {
         var now = DateTimeOffset.UtcNow;
 

@@ -88,13 +88,20 @@ public static class AutoSafeCallPlanner
 
         foreach (var marker in file.RaidWideMarkers)
         {
+            // Id を持つ marker は Id 完全一致のみで判定する。Id 不一致時に名前へ fallback すると、
+            // 同名の別 cast_id（例: ボス移動技 0x28D3「ぶっとびテレポ」の marker が、同名の実攻撃
+            // 0x28D4 の安置 arena_view を巻き込んで誤抑止する）を raid-wide と誤判定してしまう。
             if (!string.IsNullOrWhiteSpace(marker.Id) &&
-                AoeResolver.TryParseCastId(marker.Id, out var markerId) &&
-                markerId == actionId)
+                AoeResolver.TryParseCastId(marker.Id, out var markerId))
             {
-                return marker;
+                if (markerId == actionId)
+                {
+                    return marker;
+                }
+                continue;
             }
 
+            // Id を持たない marker のみ、後方互換として名前一致を許可する。
             if (!string.IsNullOrWhiteSpace(marker.Name) &&
                 !string.IsNullOrWhiteSpace(castName) &&
                 string.Equals(marker.Name, castName, StringComparison.OrdinalIgnoreCase))

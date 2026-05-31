@@ -5,6 +5,7 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
+using FfxivEchoes.Diagnostics;
 
 namespace FfxivEchoes.Windows;
 
@@ -245,6 +246,18 @@ public sealed class WorldOverlayWindow : Window, IDisposable
     }
 
     public override void Draw()
+    {
+        try
+        {
+            DrawCore();
+        }
+        catch (Exception ex)
+        {
+            FrameErrorThrottle.Report(Plugin.Log, ex, "WorldOverlayWindow.Draw");
+        }
+    }
+
+    private void DrawCore()
     {
         var now = DateTimeOffset.UtcNow;
         ArrowItem[] arrows;

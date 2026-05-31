@@ -5,6 +5,7 @@ using Dalamud.Interface;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using FfxivEchoes.Capture;
+using FfxivEchoes.Diagnostics;
 
 namespace FfxivEchoes.Windows;
 
@@ -45,6 +46,18 @@ public sealed class ArenaRulerWindow : Window, IDisposable
     public void Dispose() { }
 
     public override void Draw()
+    {
+        try
+        {
+            DrawCore();
+        }
+        catch (Exception ex)
+        {
+            FrameErrorThrottle.Report(Plugin.Log, ex, "ArenaRulerWindow.Draw");
+        }
+    }
+
+    private void DrawCore()
     {
         var lp = _objectTable.LocalPlayer;
         if (lp is null)
