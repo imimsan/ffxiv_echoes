@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Speech.Synthesis;
+using System.Threading.Tasks;
 using Dalamud.Plugin.Services;
 using FfxivEchoes.Events;
 using FfxivEchoes.Triggers.Models;
@@ -52,38 +53,49 @@ public sealed class TtsHandler : IActionHandler, IDisposable
         // boost > 1 のときは NAudio 経由（増幅可）。1 のときは SAPI 直出し（軽い）。
         var useNAudio = boost > 1.001f;
 
-        try
-        {
-            if (!string.IsNullOrEmpty(action.Voice))
-            {
-                TrySelectVoice(action.Voice);
-            }
-            else if (!string.IsNullOrEmpty(_configuration.DefaultVoice))
-            {
-                TrySelectVoice(_configuration.DefaultVoice);
-            }
+        var text = action.Text!;
+        var voice = !string.IsNullOrEmpty(action.Voice) ? action.Voice : _configuration.DefaultVoice;
+        var rate = ClampRate(action.Rate);
 
-            _synthesizer.Rate = ClampRate(action.Rate);
-
-            if (useNAudio)
-            {
-                SpeakViaNAudio(action.Text!, (float)(volume * boost));
-            }
-            else
-            {
-                SpeakViaSapiDirect(action.Text!, volume);
-            }
-        }
-        catch (Exception ex)
+        // SAPI 音声合成（特に NAudio 経路の同期 Speak は cold ~340ms / warm 数十ms）は
+        // フレームスレッドをブロックし「重い/カクつく」の主因になる。_synthesizer / NAudio は
+        // Dalamud API を触らないため、バックグラウンドスレッドで実行する（フレームスレッドへ
+        // 戻す必要は無い）。_synthesizer へのアクセスは _gate で直列化する。
+        _ = Task.Run(() =>
         {
-            _log.Error(ex, "[FfxivEchoes] TTS 発話に失敗（text={Text}）", action.Text);
-        }
+            try
+            {
+                if (useNAudio)
+                {
+                    SpeakViaNAudio(text, voice, rate, (float)(volume * boost));
+                }
+                else
+                {
+                    SpeakViaSapiDirect(text, voice, rate, volume);
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.Error(ex, "[FfxivEchoes] TTS 発話に失敗（text={Text}）", text);
+            }
+        });
     }
 
-    private void SpeakViaSapiDirect(string text, double volume)
+    /// <summary>ボイス選択と話速設定。呼び出し側は <see cref="_gate"/> を保持していること。</summary>
+    private void ApplyVoiceAndRate(string? voice, int rate)
+    {
+        if (!string.IsNullOrEmpty(voice))
+        {
+            TrySelectVoice(voice);
+        }
+        _synthesizer.Rate = rate;
+    }
+
+    private void SpeakViaSapiDirect(string text, string? voice, int rate, double volume)
     {
         lock (_gate)
         {
+            ApplyVoiceAndRate(voice, rate);
             try { _synthesizer.SetOutputToDefaultAudioDevice(); } catch { /* ignore */ }
             _synthesizer.Volume = (int)Math.Round(volume * 100);
             _synthesizer.SpeakAsyncCancelAll();
@@ -95,19 +107,19 @@ public sealed class TtsHandler : IActionHandler, IDisposable
     /// SAPI 出力を MemoryStream に書き出して NAudio で再生。
     /// VolumeSampleProvider で 1.0 を超える増幅が可能（最大 3.0 ≒ +9.5dB）。
     /// </summary>
-    private void SpeakViaNAudio(string text, float effectiveVolume)
+    private void SpeakViaNAudio(string text, string? voice, int rate, float effectiveVolume)
     {
-        // 既存の発話を打ち切り
-        try { _synthesizer.SpeakAsyncCancelAll(); } catch { /* ignore */ }
-
         var ms = new MemoryStream();
         try
         {
             lock (_gate)
             {
+                // 既存の発話を打ち切り（_synthesizer アクセスはすべて _gate 内で直列化する）
+                try { _synthesizer.SpeakAsyncCancelAll(); } catch { /* ignore */ }
+                ApplyVoiceAndRate(voice, rate);
                 _synthesizer.Volume = 100; // SAPI 側はフル、増幅は NAudio で行う
                 _synthesizer.SetOutputToWaveStream(ms);
-                _synthesizer.Speak(text); // 同期合成（短い text 想定）
+                _synthesizer.Speak(text); // 同期合成（バックグラウンドスレッドで実行されフレームを止めない）
             }
         }
         catch (Exception ex)
@@ -208,8 +220,13 @@ public sealed class TtsHandler : IActionHandler, IDisposable
             try { player?.Stop(); } catch { /* ignore */ }
             try { player?.Dispose(); } catch { /* ignore */ }
 
-            _synthesizer.SpeakAsyncCancelAll();
-            _synthesizer.Dispose();
+            // バックグラウンドの合成タスク（_gate 保持中）と競合して ObjectDisposedException を
+            // 撒かないよう、_synthesizer の破棄も _gate 内で直列化する。
+            lock (_gate)
+            {
+                try { _synthesizer.SpeakAsyncCancelAll(); } catch { /* ignore */ }
+                _synthesizer.Dispose();
+            }
         }
         catch
         {
