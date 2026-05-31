@@ -125,7 +125,11 @@ public sealed class CastCapture : IDisposable
         var totalCast = actor.TotalCastTime;
         var currentCast = actor.CurrentCastTime;
         var sourceId = actor.EntityId;
-        var sourceName = actor.Name.TextValue;
+        // Name.TextValue は native→managed デコードで string を確保するため、状態生成 /
+        // イベント発行が必要なフレームでだけ取得する（idle のまま変化しない大多数のフレームでは
+        // 読まない）。in-fight の GC churn を削減。
+        string? nameCache = null;
+        string SrcName() => nameCache ??= actor.Name.TextValue;
 
         if (!_states.TryGetValue(key, out var prev))
         {
@@ -135,16 +139,16 @@ public sealed class CastCapture : IDisposable
                 var name = ResolveActionName(actionId);
                 var target = ResolveTargetSnapshot(actor);
                 var ev = new CastStartedEvent(
-                    DateTimeOffset.UtcNow, sourceId, sourceName, actionId, name,
+                    DateTimeOffset.UtcNow, sourceId, SrcName(), actionId, name,
                     totalCast, target.EntityId, target.World);
                 _bus.Publish(ev);
-                _states[key] = CastState.Casting(sourceId, sourceName, actionId, name, totalCast, currentCast);
+                _states[key] = CastState.Casting(sourceId, SrcName(), actionId, name, totalCast, currentCast);
             }
             else
             {
                 // 即時アクション（cast_time=0）の publish は ActionEffectCapture が担当する。
                 // ここでは状態だけ Idle にする。
-                _states[key] = CastState.Idle(sourceId, sourceName);
+                _states[key] = CastState.Idle(sourceId, SrcName());
             }
             return;
         }
@@ -155,9 +159,9 @@ public sealed class CastCapture : IDisposable
             var name = ResolveActionName(actionId);
             var target = ResolveTargetSnapshot(actor);
             _bus.Publish(new CastStartedEvent(
-                DateTimeOffset.UtcNow, sourceId, sourceName, actionId, name,
+                DateTimeOffset.UtcNow, sourceId, SrcName(), actionId, name,
                 totalCast, target.EntityId, target.World));
-            _states[key] = CastState.Casting(sourceId, sourceName, actionId, name, totalCast, currentCast);
+            _states[key] = CastState.Casting(sourceId, SrcName(), actionId, name, totalCast, currentCast);
             return;
         }
 
@@ -176,7 +180,7 @@ public sealed class CastCapture : IDisposable
                     DateTimeOffset.UtcNow, prev.SourceId, prev.SourceName,
                     prev.CastActionId, prev.CastActionName));
             }
-            _states[key] = CastState.Idle(sourceId, sourceName);
+            _states[key] = CastState.Idle(sourceId, SrcName());
             return;
         }
 
@@ -189,9 +193,9 @@ public sealed class CastCapture : IDisposable
             var name = ResolveActionName(actionId);
             var target = ResolveTargetSnapshot(actor);
             _bus.Publish(new CastStartedEvent(
-                DateTimeOffset.UtcNow, sourceId, sourceName, actionId, name,
+                DateTimeOffset.UtcNow, sourceId, SrcName(), actionId, name,
                 totalCast, target.EntityId, target.World));
-            _states[key] = CastState.Casting(sourceId, sourceName, actionId, name, totalCast, currentCast);
+            _states[key] = CastState.Casting(sourceId, SrcName(), actionId, name, totalCast, currentCast);
             return;
         }
 

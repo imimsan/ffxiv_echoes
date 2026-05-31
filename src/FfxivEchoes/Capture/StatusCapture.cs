@@ -133,7 +133,9 @@ public sealed class StatusCapture : IDisposable
     private void UpdateActor(IBattleChara chara)
     {
         var actorId = chara.GameObjectId;
-        var actorName = chara.Name.TextValue;
+        // Name.TextValue は string を確保するため、StatusGained / StatusLost を実際に publish する
+        // フレームでだけ遅延取得する（状態無変化の大多数のフレームでは読まない）。in-fight GC 削減。
+        string? actorName = null;
 
         if (!_states.TryGetValue(actorId, out var st))
         {
@@ -168,6 +170,7 @@ public sealed class StatusCapture : IDisposable
             if (!prev.TryGetValue(key, out var old))
             {
                 var name = ResolveStatusName(snap.StatusId);
+                actorName ??= chara.Name.TextValue;
                 _bus.Publish(new StatusGainedEvent(
                     DateTimeOffset.UtcNow, (uint)actorId, actorName,
                     snap.StatusId, name, snap.RemainingTime, snap.Stacks, snap.SourceId,
@@ -201,6 +204,7 @@ public sealed class StatusCapture : IDisposable
                 continue;
             }
             var name = ResolveStatusName(old.StatusId);
+            actorName ??= chara.Name.TextValue;
             _bus.Publish(new StatusLostEvent(
                 DateTimeOffset.UtcNow, (uint)actorId, actorName, old.StatusId, name,
                 IsPlayer: IsPlayerStatus(old.StatusId, old.SourceId)));

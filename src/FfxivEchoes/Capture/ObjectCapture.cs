@@ -118,7 +118,6 @@ public sealed class ObjectCapture : IDisposable
             // 判定。LuminaPcDetector の OwnerId 経由判定で確実に PC 召喚物のみを除外。
             // ボスの召喚物（owner=boss）は通常 mechanic として価値があるので IsPlayer=false で通す。
             var isPlayerOwned = obj is IBattleNpc bnpc && _pcDetector.IsPetBnpc(bnpc);
-            var objectName = obj.Name.TextValue;
             var dataId = obj.BaseId;
 
             var key = obj.GameObjectId;
@@ -126,15 +125,24 @@ public sealed class ObjectCapture : IDisposable
 
             if (_seen.TryGetValue(key, out var previous))
             {
-                if (ShouldRepublishIdentityChange(previous.Name, previous.DataId, objectName, dataId))
+                // 既存オブジェクトの identity は DataId(uint, alloc 無し)で先に判定し、DataId が
+                // 変わった時だけ Name.TextValue を取得する。Name.TextValue は native→managed の
+                // string 確保コストがあり、毎フレーム全アクター分読むと in-fight の GC churn になる。
+                // （録画50戦で DataId 不変時の name-only republish は発生しないことを確認済み。）
+                if (previous.DataId != dataId)
                 {
-                    _seen[key] = new ObjectSnapshot(objectName, dataId);
-                    PublishAppeared(now, key, objectName, dataId, pos, isPlayerOwned, obj.EntityId);
+                    var changedName = obj.Name.TextValue;
+                    if (ShouldRepublishIdentityChange(previous.Name, previous.DataId, changedName, dataId))
+                    {
+                        _seen[key] = new ObjectSnapshot(changedName, dataId);
+                        PublishAppeared(now, key, changedName, dataId, pos, isPlayerOwned, obj.EntityId);
+                    }
                 }
                 continue;
             }
 
-            // 新規出現
+            // 新規出現：ここでのみ Name.TextValue を取得する。
+            var objectName = obj.Name.TextValue;
             _seen[key] = new ObjectSnapshot(objectName, dataId);
             PublishAppeared(now, key, objectName, dataId, pos, isPlayerOwned, obj.EntityId);
         }
