@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
@@ -21,6 +22,10 @@ public sealed class WavHandler : IActionHandler, IDisposable
     private readonly IDalamudPluginInterface _pluginInterface;
     private readonly AudioDeviceEnumerator _deviceEnumerator;
     private readonly IPluginLog _log;
+    // 再生中のプレイヤーを追跡し、Dispose（プラグイン解放 / xlrestart）で確実に停止・破棄する。
+    // 追跡しないと、解放後に PlaybackStopped が解放間際の資源を触ってクラッシュしうる。
+    private readonly object _gate = new();
+    private readonly HashSet<IWavePlayer> _active = new();
 
     public WavHandler(
         Configuration configuration,
@@ -74,8 +79,16 @@ public sealed class WavHandler : IActionHandler, IDisposable
                 {
                     // Dispose 中の例外は無視
                 }
+                lock (_gate)
+                {
+                    _active.Remove(player);
+                }
             };
 
+            lock (_gate)
+            {
+                _active.Add(player);
+            }
             player.Init(reader);
             player.Play();
         }
@@ -114,6 +127,19 @@ public sealed class WavHandler : IActionHandler, IDisposable
 
     public void Dispose()
     {
-        // Stateless（再生ごとに player/reader を作って Dispose）なので何もしない
+        // 再生中のプレイヤーをすべて停止・破棄する。Stop() は PlaybackStopped を発火させ
+        // 上のハンドラが資源を解放する。Stop() は _gate の外で呼び（PlaybackStopped が
+        // _gate を取るためデッドロック回避）、スナップショットだけ _gate 内で取る。
+        List<IWavePlayer> players;
+        lock (_gate)
+        {
+            players = new List<IWavePlayer>(_active);
+            _active.Clear();
+        }
+        foreach (var player in players)
+        {
+            try { player.Stop(); } catch { /* ignore */ }
+            try { player.Dispose(); } catch { /* ignore */ }
+        }
     }
 }

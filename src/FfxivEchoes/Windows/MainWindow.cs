@@ -79,7 +79,19 @@ public sealed class MainWindow : Window, IDisposable
                     if (ImGui.BeginChild($"##tab-content-{tab.Id}", new Vector2(0, 0),
                             false, ImGuiWindowFlags.HorizontalScrollbar))
                     {
-                        tab.Draw();
+                        // 1 タブの描画例外で EndChild/EndTabItem/EndTabBar がスキップされると
+                        // ImGui スタックが崩れ設定 UI 全体（場合により Dalamud 描画）が壊れる。
+                        // タブ単位で握り、エラー時もスタックを必ず閉じる。
+                        try
+                        {
+                            tab.Draw();
+                        }
+                        catch (Exception ex)
+                        {
+                            Plugin.Log.Error(ex, "[FfxivEchoes] タブ '{Tab}' の描画に失敗", tab.Id);
+                            ImGui.TextColored(new Vector4(1f, 0.4f, 0.4f, 1f),
+                                $"このタブの描画でエラーが発生しました: {ex.Message}");
+                        }
                     }
                     ImGui.EndChild();
                     ImGui.EndTabItem();
