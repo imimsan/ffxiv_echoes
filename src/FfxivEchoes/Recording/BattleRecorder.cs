@@ -79,6 +79,17 @@ public sealed class BattleRecorder : IDisposable
 
     private void OnZoneChange(ZoneChangedEvent ev)
     {
+        // ゾーンが変わったら開いている録画セッションを確実に閉じる。
+        // combat_end は録画の約10%で取りこぼされる（VariableStore / MechanicTriggerService 参照）ため、
+        // territory 変更が CombatEnded より先行すると、セッションが開いたまま残り
+        //   (1) FileStream/StreamWriter ハンドルがリーク
+        //   (2) 新ゾーンのイベントが旧 zone の .jsonl に混入して録画が汚染される
+        // OnCombatStart の残存セッションガードと対称の防御。
+        if (_session is not null)
+        {
+            _session.Dispose();
+            _session = null;
+        }
         _currentZone = string.IsNullOrEmpty(ev.ZoneName) ? "Unknown" : ev.ZoneName;
     }
 
