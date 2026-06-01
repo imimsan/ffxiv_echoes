@@ -72,7 +72,7 @@
     {
       "id": "p5_safe_first",
       "name": "P5激狭安置（1回目）",
-      "enabled": true,
+      "enabled": false,
       "type": "cast_start",
       "match": {
         "cast_id": "0xP5_NARROW_SAFE"
@@ -88,7 +88,12 @@
           "safe_zone": {
             "method": "telegraph_gap",
             "params": {
-              "actors": "$all_telegraphing_actors"
+              "search_origin": "arena_center",
+              "search_radius": 18,
+              "telegraphs": [
+                { "shape": "fan", "origin": "boss", "facing_deg": 0, "angle_width_deg": 160, "radius": 25 },
+                { "shape": "fan", "origin": "boss", "facing_deg": 180, "angle_width_deg": 160, "radius": 25 }
+              ]
             },
             "output_format": {
               "tts_template": "安置 ${direction_clock}時方向",
@@ -103,7 +108,12 @@
           "position": {
             "method": "telegraph_gap",
             "params": {
-              "actors": "$all_telegraphing_actors"
+              "search_origin": "arena_center",
+              "search_radius": 18,
+              "telegraphs": [
+                { "shape": "fan", "origin": "boss", "facing_deg": 0, "angle_width_deg": 160, "radius": 25 },
+                { "shape": "fan", "origin": "boss", "facing_deg": 180, "angle_width_deg": 160, "radius": 25 }
+              ]
             }
           },
           "shape": "circle",
@@ -116,7 +126,12 @@
           "safe_zone": {
             "method": "telegraph_gap",
             "params": {
-              "actors": "$all_telegraphing_actors"
+              "search_origin": "arena_center",
+              "search_radius": 18,
+              "telegraphs": [
+                { "shape": "fan", "origin": "boss", "facing_deg": 0, "angle_width_deg": 160, "radius": 25 },
+                { "shape": "fan", "origin": "boss", "facing_deg": 180, "angle_width_deg": 160, "radius": 25 }
+              ]
             }
           },
           "tolerance": 1.0,
@@ -133,13 +148,13 @@
         }
       ],
       "metadata": {
-        "notes": "telegraph_gapプリセットで複数AoEの隙間を計算、激狭安置に対応。距離フィードバック付き"
+        "notes": "参考例（enabled:false）：telegraph_gapプリセットで複数AoEの隙間を計算し激狭安置に対応。telegraphsは扇2枚の例。録画後に実 cast_id と実テレグラフ形状（origin/facing_deg/angle_width_deg）へ差し替えて有効化する。facing_degは rotation=0=南/CCW正の規約"
       }
     },
     {
       "id": "p5_safe_subsequent",
       "name": "P5激狭安置（2回目以降）",
-      "enabled": true,
+      "enabled": false,
       "type": "cast_start",
       "match": {
         "cast_id": "0xP5_NARROW_SAFE"
@@ -159,7 +174,12 @@
           "position": {
             "method": "telegraph_gap",
             "params": {
-              "actors": "$all_telegraphing_actors"
+              "search_origin": "arena_center",
+              "search_radius": 18,
+              "telegraphs": [
+                { "shape": "fan", "origin": "boss", "facing_deg": 0, "angle_width_deg": 160, "radius": 25 },
+                { "shape": "fan", "origin": "boss", "facing_deg": 180, "angle_width_deg": 160, "radius": 25 }
+              ]
             }
           },
           "shape": "circle",
@@ -305,7 +325,7 @@
               },
               {
                 "method": "inverse_of_telegraph",
-                "params": { "telegraph_source": "$cast_actor" }
+                "params": { "telegraph_source": "cast_actor", "distance": 10 }
               }
             ]
           },
@@ -333,14 +353,12 @@
       },
       "actions": [
         {
-          "type": "set_variable",
-          "trigger_id": "store_position_internal"
+          "type": "store_position",
+          "label": "first_safe_zone"
         }
       ],
-      "set_variable": {
-        "name": "first_safe_zone",
-        "operation": "set",
-        "value": "$self_position"
+      "metadata": {
+        "notes": "store_position アクションで自分の現在位置を変数 first_safe_zone に保存（safe_zone 省略時は self 位置）。2回目トリガーは stored_position プリセットで参照する。旧サンプルの set_variable アクション＋value:$self_position は未実装トークンで無音だったため正規経路へ修正"
       }
     },
     {

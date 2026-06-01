@@ -181,7 +181,7 @@
               "distance": 10
             },
             "output_format": {
-              "tts_template": "ボス${direction_jp}",
+              "tts_template": "ボス${direction_relative_jp}",
               "direction_style": "relative_jp"
             }
           },

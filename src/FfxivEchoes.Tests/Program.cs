@@ -1,5 +1,6 @@
 using FfxivEchoes.Profiles;
 using FfxivEchoes.Actions;
+using FfxivEchoes.Actions.Handlers;
 using FfxivEchoes.Capture;
 using FfxivEchoes.Commands.Handlers;
 using FfxivEchoes.Recording;
@@ -213,6 +214,19 @@ var tests = new List<(string Name, Action Body)>
     ("ReconcileObjectAoeRules updates recording-sourced rules from spawns (T1 §4 優先度1)", ReconcileObjectAoeRules_UpdatesRecordingSourcedRules),
     ("ReconcileObjectAoeRules protects manual and dictionary rules", ReconcileObjectAoeRules_ProtectsManualAndDictionaryRules),
     ("PhaseTransitionPolicy CrossedBelow detects downward threshold crossing", PhaseTransitionPolicy_CrossedBelow),
+    ("TtsHandler dedup suppresses repeated text within window", TtsHandlerDedup_SuppressesRepeatWithinWindow),
+    ("WavHandler dedup suppresses repeated file within window", WavHandlerDedup_SuppressesRepeatWithinWindow),
+    ("TtsHandler IsStale drops over-aged queued speech", TtsHandler_IsStale_DropsOverAged),
+    ("DirectionCall output_format template interpolates direction tokens", DirectionCallTemplate_InterpolatesTokens),
+    ("TelegraphGap FindSafePoint prefers clear gap and stays if origin safe", TelegraphGap_FindSafePoint_PrefersClearGap),
+    ("TelegraphGap FindSafePoint returns null when fully covered", TelegraphGap_FindSafePoint_FullCoverageReturnsNull),
+    ("TelegraphGap FindSafePoint moves out of telegraph", TelegraphGap_FindSafePoint_MovesOutOfTelegraph),
+    ("FilterPastPhase drops past-phase, keeps current and unmapped casts", FilterPastPhase_DropsPastPhaseKeepsCurrentAndUnmapped),
+    ("KnockbackProjection pushes outward (away from source), never toward it", KnockbackProjection_PushesOutwardNotTowardSource),
+    ("KnockbackProjection degenerate self==source falls back to arena center push", KnockbackProjection_DegenerateFallsBackToArenaCenter),
+    ("KnockbackProjection clamps landing to arena radius", KnockbackProjection_ClampsToArenaRadius),
+    ("EventMatcher maps tether events to tether/tether_remove type names", EventMatcher_MapsTetherTypeNames),
+    ("TtsHandler EnqueueByPriority orders priority first and protects from overflow", TtsHandler_EnqueueByPriority_OrdersAndProtects),
 };
 
 var failed = 0;
@@ -242,6 +256,216 @@ static void PhaseTransitionPolicy_CrossedBelow()
     False(PhaseTransitionPolicy.CrossedBelow(70f, 50f, 50f), "70→50 not strictly below threshold");
     False(PhaseTransitionPolicy.CrossedBelow(45f, 55f, 50f), "45→55 rising not below");
     False(PhaseTransitionPolicy.CrossedBelow(float.NaN, 48f, 50f), "NaN prev (first observation) is false");
+}
+
+static void TtsHandlerDedup_SuppressesRepeatWithinWindow()
+{
+    var recent = new System.Collections.Generic.Dictionary<string, System.DateTimeOffset>();
+    var t0 = System.DateTimeOffset.UnixEpoch;
+    True(TtsHandler.ShouldSpeakByDedup("北", t0, recent, 0.5), "初回は通す");
+    False(TtsHandler.ShouldSpeakByDedup("北", t0.AddSeconds(0.2), recent, 0.5), "窓内の同一テキストは抑制");
+    True(TtsHandler.ShouldSpeakByDedup("南", t0.AddSeconds(0.2), recent, 0.5), "別テキストは通す");
+    True(TtsHandler.ShouldSpeakByDedup("北", t0.AddSeconds(0.6), recent, 0.5), "窓経過後は通す");
+    True(TtsHandler.ShouldSpeakByDedup(null, t0, recent, 0.5), "null は常に通す");
+    True(TtsHandler.ShouldSpeakByDedup("", t0, recent, 0.5), "空文字は常に通す");
+}
+
+static void WavHandlerDedup_SuppressesRepeatWithinWindow()
+{
+    var recent = new System.Collections.Generic.Dictionary<string, System.DateTimeOffset>(System.StringComparer.OrdinalIgnoreCase);
+    var t0 = System.DateTimeOffset.UnixEpoch;
+    True(WavHandler.ShouldPlayByDedup("alert.wav", t0, recent, 0.5), "初回は通す");
+    False(WavHandler.ShouldPlayByDedup("alert.wav", t0.AddSeconds(0.3), recent, 0.5), "窓内の同一ファイルは抑制");
+    True(WavHandler.ShouldPlayByDedup("other.wav", t0.AddSeconds(0.3), recent, 0.5), "別ファイルは通す");
+    True(WavHandler.ShouldPlayByDedup("alert.wav", t0.AddSeconds(0.7), recent, 0.5), "窓経過後は通す");
+    True(WavHandler.ShouldPlayByDedup(null, t0, recent, 0.5), "null は常に通す");
+}
+
+static void TtsHandler_IsStale_DropsOverAged()
+{
+    var t0 = System.DateTimeOffset.UnixEpoch;
+    False(TtsHandler.IsStale(t0, t0.AddSeconds(1.0), 2.5), "1.0s 経過は陳腐化していない");
+    True(TtsHandler.IsStale(t0, t0.AddSeconds(3.0), 2.5), "3.0s 経過は陳腐化（ドロップ）");
+}
+
+static void FilterPastPhase_DropsPastPhaseKeepsCurrentAndUnmapped()
+{
+    static RecordingTimelinePrediction Pred(string id) =>
+        new("cast_start", 10.0, "Tech", id, null, null, 1, 0, 1, 1.0, 0.0);
+
+    var file = new TriggerFile
+    {
+        StrategyProfiles =
+        {
+            new StrategyProfile
+            {
+                Id = "p",
+                Enabled = true,
+                Mechanics =
+                {
+                    new MechanicStrategy { Id = "m1", Enabled = true, Phase = "P1", AttachedTo = new MatchCondition { CastId = "0xPAST" } },
+                    new MechanicStrategy { Id = "m2", Enabled = true, Phase = "P2", AttachedTo = new MatchCondition { CastId = "0xCUR" } },
+                },
+            },
+        },
+    };
+
+    var preds = new System.Collections.Generic.List<RecordingTimelinePrediction>
+    {
+        Pred("0xPAST"), Pred("0xCUR"), Pred("0xUNMAPPED"),
+    };
+
+    // P2 を現在フェーズ、P1 を過去とみなす phaseActiveCheck
+    var result = UpcomingTimelinePolicy.FilterPastPhasePredictions(preds, file, phase => phase == "P2");
+    var ids = new System.Collections.Generic.HashSet<string>(result.Select(p => p.Id));
+
+    False(ids.Contains("0xPAST"), "過去フェーズ P1 の cast は除外");
+    True(ids.Contains("0xCUR"), "現フェーズ P2 の cast は残す");
+    True(ids.Contains("0xUNMAPPED"), "phase 未マップの cast は残す（安全側）");
+}
+
+static void TelegraphGap_FindSafePoint_PrefersClearGap()
+{
+    var origin = new System.Numerics.Vector3(0f, 0f, 0f);
+    var shapes = new System.Collections.Generic.List<TelegraphShape>
+    {
+        new CircleShape { Center = new System.Numerics.Vector3(6f, 0f, 0f), Radius = 3f },
+        new CircleShape { Center = new System.Numerics.Vector3(-6f, 0f, 0f), Radius = 3f },
+    };
+    var p = TelegraphGapPreset.FindSafePoint(origin, 12f, shapes, 1.0f);
+    True(p is not null, "隙間があれば安全点を返す");
+    foreach (var s in shapes)
+    {
+        False(s.Contains(p!.Value), "安全点は telegraph 外");
+    }
+    // origin が安全（両円から十分離れている）なら不要な移動をしない＝その場待機。
+    True(p!.Value.X == 0f && p.Value.Z == 0f, "origin が安全なら origin を返す");
+}
+
+static void TelegraphGap_FindSafePoint_FullCoverageReturnsNull()
+{
+    var shapes = new System.Collections.Generic.List<TelegraphShape>
+    {
+        new CircleShape { Center = new System.Numerics.Vector3(0f, 0f, 0f), Radius = 100f },
+    };
+    var p = TelegraphGapPreset.FindSafePoint(new System.Numerics.Vector3(0f, 0f, 0f), 10f, shapes, 1.0f);
+    True(p is null, "全領域が telegraph なら null（無音で安全側に倒す）");
+}
+
+static void TelegraphGap_FindSafePoint_MovesOutOfTelegraph()
+{
+    var shapes = new System.Collections.Generic.List<TelegraphShape>
+    {
+        new CircleShape { Center = new System.Numerics.Vector3(0f, 0f, 0f), Radius = 4f },
+    };
+    var p = TelegraphGapPreset.FindSafePoint(new System.Numerics.Vector3(0f, 0f, 0f), 12f, shapes, 1.0f);
+    True(p is not null, "外側に安全点があれば返す");
+    False(shapes[0].Contains(p!.Value), "返り点は telegraph 外");
+}
+
+static void DirectionCallTemplate_InterpolatesTokens()
+{
+    var info = new DirectionInfo(90f, "N", 10.5f, 0f);
+    Equal("安置 10.5時方向", DirectionCallHandler.ApplyTemplate("安置 ${direction_clock}時方向", info), "clock トークン");
+    Equal("北へ", DirectionCallHandler.ApplyTemplate("${direction_cardinal_jp}へ", info), "cardinal_jp トークン");
+    Equal("Nへ", DirectionCallHandler.ApplyTemplate("${direction_cardinal}へ", info), "cardinal トークン");
+    Equal("ボス右", DirectionCallHandler.ApplyTemplate("ボス${direction_relative_jp}", info), "relative_jp トークン");
+    Equal("90度", DirectionCallHandler.ApplyTemplate("${direction_deg}度", info), "deg トークン");
+    Equal("そのまま ${unknown}", DirectionCallHandler.ApplyTemplate("そのまま ${unknown}", info), "未知トークンは原文維持");
+}
+
+static void KnockbackProjection_PushesOutwardNotTowardSource()
+{
+    var center = new Vector3(100f, 0f, 100f);
+
+    // self が source の真東 → さらに東(+X)へ投射される。逆向き(source へ吸い込む)なら AoE 中心へ誘導＝全滅。
+    var selfEast = new Vector3(105f, 0f, 100f);
+    var landE = KnockbackProjectionPreset.ProjectLanding(selfEast, center, center, 10f, false, null);
+    NotNull(landE, "東押しは着地点を返す");
+    NearlyEqual(115f, landE!.Value.X, "東へ +10 投射した X");
+    NearlyEqual(100f, landE.Value.Z, "東押しでは Z 不変");
+    True(landE.Value.X > selfEast.X, "source から離れる向き（東）に押される＝符号反転していない");
+
+    // self が source の真北(self.Z<source.Z) → -Z(北)へ。FFXIV は -Z=北。
+    var selfNorth = new Vector3(100f, 0f, 95f);
+    var landN = KnockbackProjectionPreset.ProjectLanding(selfNorth, center, center, 10f, false, null);
+    NotNull(landN, "北押しは着地点を返す");
+    NearlyEqual(85f, landN!.Value.Z, "北へ -10 投射した Z");
+    True(landN.Value.Z < selfNorth.Z, "北（-Z）へ押される＝符号反転していない");
+}
+
+static void KnockbackProjection_DegenerateFallsBackToArenaCenter()
+{
+    var center = new Vector3(100f, 0f, 90f);
+    var self = new Vector3(100f, 0f, 100f);
+
+    // source==self の縮退 → アリーナ中心(100,90)からの外向き(+Z)へフォールバック。
+    var land = KnockbackProjectionPreset.ProjectLanding(self, self, center, 10f, false, null);
+    NotNull(land, "縮退時はアリーナ中心フォールバックで着地点を返す");
+    NearlyEqual(110f, land!.Value.Z, "中心(z=90)から外向き(+Z)へ 10");
+
+    // self==source==center の二重縮退 → 方向定義不能 → null（無音＝安全側）。
+    var doubleDegenerate = KnockbackProjectionPreset.ProjectLanding(center, center, center, 10f, false, null);
+    True(doubleDegenerate is null, "二重縮退は null（無音）");
+}
+
+static void KnockbackProjection_ClampsToArenaRadius()
+{
+    var center = new Vector3(100f, 0f, 100f);
+    var self = new Vector3(118f, 0f, 100f); // 中心から東へ 18
+
+    // 投射前 (128,100) は中心から 28 > 半径20 → 東境界 (120,100) に丸める。
+    var clamped = KnockbackProjectionPreset.ProjectLanding(self, center, center, 10f, true, 20f);
+    NotNull(clamped, "clamp ありでも着地点を返す");
+    NearlyEqual(120f, clamped!.Value.X, "半径 20 でアリーナ東境界に clamp");
+
+    // arena_radius 未指定なら clamp せず純投射（境界外の着地点＝落下警告に使える）。
+    var raw = KnockbackProjectionPreset.ProjectLanding(self, center, center, 10f, true, null);
+    NotNull(raw, "arena_radius 未指定でも着地点を返す");
+    NearlyEqual(128f, raw!.Value.X, "arena_radius 未指定なら clamp せず純投射");
+}
+
+static void EventMatcher_MapsTetherTypeNames()
+{
+    var appeared = new TetherAppearedEvent(
+        System.DateTimeOffset.UnixEpoch, 1u, "Boss", 2u, "Player", 17u, 30f);
+    Equal("tether", FfxivEchoes.Triggers.Matching.EventMatcher.EventTypeName(appeared), "tether 出現の type 名");
+
+    var removed = new TetherRemovedEvent(System.DateTimeOffset.UnixEpoch, 1u, 2u, 17u);
+    Equal("tether_remove", FfxivEchoes.Triggers.Matching.EventMatcher.EventTypeName(removed), "tether 消失の type 名");
+}
+
+static void TtsHandler_EnqueueByPriority_OrdersAndProtects()
+{
+    var t0 = System.DateTimeOffset.UnixEpoch;
+    static TtsHandler.SpeechRequest Req(string text, int prio, System.DateTimeOffset t) =>
+        new TtsHandler.SpeechRequest(text, null, 0, 1.0, 1f, false, t, prio);
+    static string Join(System.Collections.Generic.LinkedList<TtsHandler.SpeechRequest> q)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var r in q)
+        {
+            if (sb.Length > 0) sb.Append(',');
+            sb.Append(r.Text);
+        }
+        return sb.ToString();
+    }
+
+    // 優先コールは通常コール群より前・各 tier 内 FIFO で挿す。
+    var q = new System.Collections.Generic.LinkedList<TtsHandler.SpeechRequest>();
+    TtsHandler.EnqueueByPriority(q, Req("a", 0, t0), 6);
+    TtsHandler.EnqueueByPriority(q, Req("b", 0, t0), 6);
+    TtsHandler.EnqueueByPriority(q, Req("p1", 1, t0), 6);
+    TtsHandler.EnqueueByPriority(q, Req("p2", 1, t0), 6);
+    Equal("p1,p2,a,b", Join(q), "優先は前・各 tier 内 FIFO");
+
+    // 溢れ時は最古の通常コールを落とし、優先コールは守る（maxQueue=3）。
+    var q2 = new System.Collections.Generic.LinkedList<TtsHandler.SpeechRequest>();
+    TtsHandler.EnqueueByPriority(q2, Req("p", 1, t0), 3);
+    TtsHandler.EnqueueByPriority(q2, Req("n1", 0, t0), 3);
+    TtsHandler.EnqueueByPriority(q2, Req("n2", 0, t0), 3);
+    TtsHandler.EnqueueByPriority(q2, Req("n3", 0, t0), 3); // count 4 > 3 → 最古通常 n1 を落とす
+    Equal("p,n2,n3", Join(q2), "溢れ時は最古の通常を落とし優先を守る");
 }
 
 static void AggregateFiles_KeepsRepeatedCastTimings()
