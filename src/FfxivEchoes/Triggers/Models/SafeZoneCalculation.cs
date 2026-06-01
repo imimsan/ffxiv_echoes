@@ -20,6 +20,32 @@ public sealed class SafeZoneCalculation
 
     [JsonPropertyName("output_format")]
     public SafeZoneOutputFormat? OutputFormat { get; set; }
+
+    /// <summary>
+    /// JsonElement が安置計算オブジェクト（"method" を持つ）なら SafeZoneCalculation へ変換する。
+    /// field_marker の "position" / screen_arrow の "to" のように、safe_zone 以外のキーに
+    /// 安置計算を書けるスキーマに対し、ハンドラが計算式として解釈するためのフォールバック。
+    /// 計算式でない（文字列 / {x,y,z} / null）場合は null を返す。
+    /// </summary>
+    public static SafeZoneCalculation? FromElement(JsonElement? element)
+    {
+        if (element is not { } el || el.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+        if (!el.TryGetProperty("method", out _))
+        {
+            return null;
+        }
+        try
+        {
+            return el.Deserialize<SafeZoneCalculation>();
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
 }
 
 public sealed class SafeZoneOutputFormat

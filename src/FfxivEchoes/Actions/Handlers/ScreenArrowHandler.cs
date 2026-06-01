@@ -27,11 +27,12 @@ public sealed class ScreenArrowHandler : IActionHandler
 
     public void Execute(ActionDefinition action, TriggerFiredEvent context)
     {
-        // To が SafeZone なら計算、文字列なら "self" / 名前を解釈
         var ctx = _contextBuilder.Build(lastEvent: context.SourceEvent);
 
-        // SafeZone-driven target
-        if (action.SafeZone is { } sz)
+        // safe_zone 優先。スキーマ上 screen_arrow は to に安置計算を書けるため、
+        // safe_zone 不在時は to の method 指定をフォールバックで解釈する（無音化防止）。
+        var calc = action.SafeZone ?? SafeZoneCalculation.FromElement(action.To);
+        if (calc is { } sz)
         {
             var result = _engine.Calculate(sz, ctx);
             if (result is null)
@@ -49,6 +50,6 @@ public sealed class ScreenArrowHandler : IActionHandler
             return;
         }
 
-        _log.Warning("[FfxivEchoes] screen_arrow に safe_zone 指定がありません");
+        _log.Warning("[FfxivEchoes] screen_arrow に safe_zone（または to の method 指定）がありません");
     }
 }

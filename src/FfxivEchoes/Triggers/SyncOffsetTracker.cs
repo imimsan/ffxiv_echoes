@@ -29,6 +29,7 @@ public sealed class SyncOffsetTracker : IDisposable
     private readonly IDisposable _castSub;
     private readonly IDisposable _zoneSub;
     private readonly IDisposable _combatStartSub;
+    private readonly IDisposable _phaseSub;
 
     private string _currentZone = "Unknown";
     private AggregatedEvents? _aggCache;
@@ -36,6 +37,13 @@ public sealed class SyncOffsetTracker : IDisposable
     private double _offsetSec;
     private DateTimeOffset _lastUpdatedAt;
     private string? _lastTriggerLabel;
+    // フェーズ遷移直後の短時間だけ、録画 aggregate 経路の大ジャンプ再アンカーを許可する武装時刻。
+    // フェーズ境界ではオフセット基準が正当に大きく変わりうるため、その直後の再アンカーをガードで弾かない。
+    // ただし「遷移後しばらく経ってから来た無関係なキャスト」に大ジャンプを消費されないよう時刻窓で限定する。
+    private DateTimeOffset? _largeJumpArmedAt;
+
+    // フェーズ遷移から大ジャンプ再アンカーを許可する猶予（秒）。
+    private const double LargeJumpWindowSec = 2.0;
 
     private const double MaxAcceptableJumpSec = 30.0;
 
@@ -60,6 +68,14 @@ public sealed class SyncOffsetTracker : IDisposable
             ResetState();
             ReloadAggregate();
         });
+        // フェーズ遷移を購読：直後の短い時刻窓だけ録画 aggregate 経路の大ジャンプ再アンカーを許可。
+        _phaseSub = bus.Subscribe<PhaseTransitionedEvent>(_ =>
+        {
+            lock (_gate)
+            {
+                _largeJumpArmedAt = DateTimeOffset.UtcNow;
+            }
+        });
     }
 
     public void Dispose()
@@ -67,6 +83,7 @@ public sealed class SyncOffsetTracker : IDisposable
         _castSub.Dispose();
         _zoneSub.Dispose();
         _combatStartSub.Dispose();
+        _phaseSub.Dispose();
     }
 
     /// <summary>現在の同期オフセット（秒）。録画の予測時刻に加えて使う。</summary>
@@ -88,6 +105,7 @@ public sealed class SyncOffsetTracker : IDisposable
             _offsetSec = 0;
             _lastUpdatedAt = default;
             _lastTriggerLabel = null;
+            _largeJumpArmedAt = null;
         }
     }
 
@@ -146,7 +164,18 @@ public sealed class SyncOffsetTracker : IDisposable
                 aggEv,
                 actualRel,
                 CurrentOffsetSec);
-            ApplyOffset(actualRel - expected, $"rec:{ev.CastActionName}", allowLargeJump: true);
+            // 録画経路は通常ジャンプガードを効かせる（フェーズ跨ぎで同一 cast_id が再利用された際に
+            // 前半フェーズの観測時刻を拾って大きな誤オフセットへ飛ぶのを防ぐ）。
+            // フェーズ遷移直後の時刻窓内（LargeJumpWindowSec）に来たキャストだけ正当な再アンカーとして
+            // 大ジャンプを許可する。窓外/未武装なら通常ガード。武装は一度の判定で失効させる。
+            bool allowJump;
+            lock (_gate)
+            {
+                allowJump = _largeJumpArmedAt is { } armed &&
+                            (DateTimeOffset.UtcNow - armed).TotalSeconds <= LargeJumpWindowSec;
+                _largeJumpArmedAt = null;
+            }
+            ApplyOffset(actualRel - expected, $"rec:{ev.CastActionName}", allowLargeJump: allowJump);
             return;
         }
     }

@@ -32,14 +32,17 @@ public sealed class FieldMarkerHandler : IActionHandler
 
     public void Execute(ActionDefinition action, TriggerFiredEvent context)
     {
-        if (action.SafeZone is null)
+        // safe_zone 優先。スキーマ上 field_marker は position に安置計算を書けるため、
+        // safe_zone 不在時は position の method 指定をフォールバックで解釈する（無音化防止）。
+        var calc = action.SafeZone ?? SafeZoneCalculation.FromElement(action.Position);
+        if (calc is null)
         {
-            _log.Warning("[FfxivEchoes] field_marker に safe_zone 指定がありません");
+            _log.Warning("[FfxivEchoes] field_marker に safe_zone（または position の method 指定）がありません");
             return;
         }
 
         var ctx = _contextBuilder.Build(lastEvent: context.SourceEvent);
-        var result = _engine.Calculate(action.SafeZone, ctx);
+        var result = _engine.Calculate(calc, ctx);
         if (result is null)
         {
             _log.Debug("[FfxivEchoes] field_marker の SafeZone 解決失敗");
