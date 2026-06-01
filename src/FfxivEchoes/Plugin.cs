@@ -344,7 +344,8 @@ public sealed class Plugin : IDalamudPlugin
         var actionLookup = _luminaActionLookup;
         _autoTelegraph = new AutoTelegraphService(
             _eventBus, actionLookup, ObjectTable, _worldOverlayWindow, _minimapWindow,
-            _triggerStore, Log);
+            _triggerStore, Log,
+            branchActiveCheck: _branchObserver.IsActiveOrCommon);
         _addObjectAoe = new AddObjectAoeService(
             Framework, _eventBus, _minimapWindow, _triggerStore,
             _safeCallDictionary, _recordingScanner, actionLookup, ObjectTable, Log);

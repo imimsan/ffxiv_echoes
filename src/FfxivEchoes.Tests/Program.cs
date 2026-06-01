@@ -227,6 +227,7 @@ var tests = new List<(string Name, Action Body)>
     ("KnockbackProjection clamps landing to arena radius", KnockbackProjection_ClampsToArenaRadius),
     ("EventMatcher maps tether events to tether/tether_remove type names", EventMatcher_MapsTetherTypeNames),
     ("TtsHandler EnqueueByPriority orders priority first and protects from overflow", TtsHandler_EnqueueByPriority_OrdersAndProtects),
+    ("AutoTelegraph ShouldConsiderSuppress excludes branch-rejected and explicit-trigger mechanics", AutoTelegraph_ShouldConsiderSuppress_ExcludesRejectedAndTriggered),
 };
 
 var failed = 0;
@@ -466,6 +467,19 @@ static void TtsHandler_EnqueueByPriority_OrdersAndProtects()
     TtsHandler.EnqueueByPriority(q2, Req("n2", 0, t0), 3);
     TtsHandler.EnqueueByPriority(q2, Req("n3", 0, t0), 3); // count 4 > 3 → 最古通常 n1 を落とす
     Equal("p,n2,n3", Join(q2), "溢れ時は最古の通常を落とし優先を守る");
+}
+
+static void AutoTelegraph_ShouldConsiderSuppress_ExcludesRejectedAndTriggered()
+{
+    // legacy(AttachedTo)で発火しうる mechanic（明示 Trigger 無し・分岐許可）だけ抑制を検討してよい。
+    True(AutoTelegraphService.ShouldConsiderSuppress(mechTriggerCount: 0, branchAllowed: true),
+        "明示Trigger無し＋分岐許可なら抑制検討可");
+    // 分岐棄却された mechanic は MechanicTriggerService が撃たないので抑制すると両方無音化＝事故。
+    False(AutoTelegraphService.ShouldConsiderSuppress(mechTriggerCount: 0, branchAllowed: false),
+        "分岐棄却 mechanic は抑制対象外（無音化回帰の防止）");
+    // 明示 Triggers を持つ mechanic は legacy では撃たれないので抑制対象外。
+    False(AutoTelegraphService.ShouldConsiderSuppress(mechTriggerCount: 2, branchAllowed: true),
+        "明示Triggerあり mechanic は抑制対象外（無音化回帰の防止）");
 }
 
 static void AggregateFiles_KeepsRepeatedCastTimings()

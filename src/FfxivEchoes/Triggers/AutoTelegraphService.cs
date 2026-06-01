@@ -30,6 +30,8 @@ public sealed class AutoTelegraphService : IDisposable
     private readonly TriggerStore _store;
     private readonly IEventBus _bus;
     private readonly IPluginLog _log;
+    // generic 自動安置 TTS の抑制判定を MechanicTriggerService の発火条件と一致させるための分岐チェック。
+    private readonly Func<string?, bool>? _branchActiveCheck;
 
     private readonly IDisposable _castStartSub;
     private readonly IDisposable _actionSub;
@@ -55,7 +57,8 @@ public sealed class AutoTelegraphService : IDisposable
         WorldOverlayWindow worldOverlay,
         IMinimapSink minimap,
         TriggerStore store,
-        IPluginLog log)
+        IPluginLog log,
+        Func<string?, bool>? branchActiveCheck = null)
     {
         _bus = bus;
         _actionLookup = actionLookup;
@@ -64,6 +67,7 @@ public sealed class AutoTelegraphService : IDisposable
         _minimap = minimap;
         _store = store;
         _log = log;
+        _branchActiveCheck = branchActiveCheck;
 
         _castStartSub = bus.Subscribe<CastStartedEvent>(OnCastStart);
         _actionSub = bus.Subscribe<ActionUsedEvent>(OnActionUsed);
@@ -508,19 +512,16 @@ public sealed class AutoTelegraphService : IDisposable
     {
         // ユーザーが同じキャストに攻略 mechanic を割り当てて「読み上げる」場合、generic な自動安置コール
         // （「外周安置」等）は二重読みになるため抑制する。視覚（ミニマップ AddArenaView）は別経路で
-        // 既に描かれているのでここでの return では消えない。mechanic が読み上げない（視覚のみ／空）なら
-        // 抑制せず自動コールを残す＝抑制しすぎて無音化しない graceful な設計。
+        // 既に描かれているのでここでの return では消えない。
+        // 重要：抑制条件は MechanicTriggerService が実際に読み上げる条件と厳密に一致させる。条件が緩いと
+        // 「mechanic は撃たない（分岐棄却/トリガー不一致）のに自動安置だけ抑制」して両方無音化＝事故になる。
         var file = _store.GetByZone(_currentZone);
-        if (file is not null)
+        if (file is not null && WillLegacyMechanicSpeak(file, ev))
         {
-            var (profile, mech) = StrategyPlanResolver.FindMechanicForCast(file, ev.CastActionId, ev.CastActionName);
-            if (profile is not null && mech is not null && MechanicEmitsTts(file, profile, mech))
-            {
-                _log.Debug(
-                    "[FfxivEchoes] AutoTelegraph: 自動安置TTSを抑制（mechanic '{Label}' が読み上げるため） cast={Name}",
-                    mech.Label, ev.CastActionName);
-                return;
-            }
+            _log.Debug(
+                "[FfxivEchoes] AutoTelegraph: 自動安置TTSを抑制（mechanic が読み上げるため） cast={Name}",
+                ev.CastActionName);
+            return;
         }
 
         var actions = new List<ActionDefinition>
@@ -541,11 +542,32 @@ public sealed class AutoTelegraphService : IDisposable
             SourceEvent: ev));
     }
 
-    /// <summary>その mechanic が発火時に TTS を 1 つ以上出すか（generic 自動コール抑制の判定用）。</summary>
-    private static bool MechanicEmitsTts(TriggerFile file, StrategyProfile profile, MechanicStrategy mech)
+    /// <summary>
+    /// この cast に対して MechanicTriggerService の legacy(AttachedTo)経路が実際に mechanic を発火し、
+    /// かつ TTS を読み上げるか。generic 自動安置コールの抑制可否判定に使う。
+    /// </summary>
+    /// <remarks>
+    /// MechanicTriggerService.OnCastStart の legacy 発火条件（FindMechanicForCast に branchActiveCheck を
+    /// 渡す + HasNoExplicitTriggers + IsBranchAllowed）と FireMechanic の「BuildReminderActions 非空」を
+    /// 厳密に複製する。条件を緩めると、分岐棄却 mechanic や明示 Triggers を持つ mechanic（legacy では
+    /// 撃たれない）まで「読み上げる」と誤判定し、自動安置も mechanic も両方無音化する事故になるため。
+    /// 明示 Triggers を持つ mechanic（新パスで撃たれうる）は安全側で抑制対象から外す＝抑制しすぎない。
+    /// </remarks>
+    private bool WillLegacyMechanicSpeak(TriggerFile file, CastStartedEvent ev)
     {
-        var actions = StrategyPlanResolver.BuildReminderActions(file, profile, mech);
-        foreach (var a in actions)
+        var (profile, mech) = StrategyPlanResolver.FindMechanicForCast(
+            file, ev.CastActionId, ev.CastActionName, _branchActiveCheck);
+        if (profile is null || mech is null)
+        {
+            return false;
+        }
+        var branchAllowed = _branchActiveCheck?.Invoke(mech.BranchId) ?? true;
+        // 重い BuildReminderActions は cheap な発火可能性ゲートを通ったときだけ呼ぶ。
+        if (!ShouldConsiderSuppress(mech.Triggers.Count, branchAllowed))
+        {
+            return false;
+        }
+        foreach (var a in StrategyPlanResolver.BuildReminderActions(file, profile, mech))
         {
             if (string.Equals(a.Type, "tts", StringComparison.OrdinalIgnoreCase))
             {
@@ -554,6 +576,14 @@ public sealed class AutoTelegraphService : IDisposable
         }
         return false;
     }
+
+    /// <summary>
+    /// 自動安置コールの抑制を「検討してよい」か（＝MechanicTriggerService の legacy 経路が発火しうるか）。
+    /// 明示 Triggers を持つ mechanic は legacy では撃たれず、分岐棄却 mechanic も撃たれないため、
+    /// どちらも抑制対象から外す（外さないと両方無音化する回帰になる）。純ロジックでテスト可能。
+    /// </summary>
+    public static bool ShouldConsiderSuppress(int mechTriggerCount, bool branchAllowed)
+        => mechTriggerCount == 0 && branchAllowed;
 
     private bool IsFriendlyActor(uint id)
     {
