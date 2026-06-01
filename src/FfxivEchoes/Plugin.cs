@@ -303,6 +303,8 @@ public sealed class Plugin : IDalamudPlugin
             new MidpointPreset(ObjectTable),
             new BetweenActorsPreset(ObjectTable),
             new LinePerpendicularPreset(ObjectTable),
+            // ノックバック着地点予測（KB+塔/落下対策。中点ではなく実投射先を出す）
+            new KnockbackProjectionPreset(ObjectTable),
             // F7: 高度 2 種（telegraph_gap + intersection）
             new TelegraphGapPreset(),
             intersectionPreset,
