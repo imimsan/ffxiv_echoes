@@ -104,6 +104,88 @@ public static class UpcomingTimelinePolicy
         return result;
     }
 
+    /// <summary>
+    /// 録画予測（cast_start 等）から、過去フェーズに属する攻撃を除外する。
+    /// 録画予測には phase 注釈が無いため、<see cref="FilterBranchRejectedPredictions"/> と同じ手法で
+    /// アクティブプロファイルの mechanic を AttachedTo.CastId / trigger.Match.CastId で逆引きして
+    /// mechanic.Phase を解決する。あるキャストに紐づく phase のうち少なくとも 1 つが active なら表示する
+    /// （= 同一 cast_id が複数フェーズに登場しても、現在以降のフェーズに属するなら残す）。
+    /// phase に紐づかないキャストはそのまま通す（後方互換・安全側）。
+    /// </summary>
+    /// <param name="phaseActiveCheck">
+    /// 通常は <see cref="CurrentPhaseTracker.IsPhaseActive"/>。true なら表示。
+    /// </param>
+    public static IReadOnlyList<RecordingTimelinePrediction> FilterPastPhasePredictions(
+        IReadOnlyList<RecordingTimelinePrediction> predictions,
+        TriggerFile file,
+        Func<string?, bool> phaseActiveCheck)
+    {
+        var profile = StrategyPlanResolver.SelectActiveProfile(file);
+        if (profile is null)
+        {
+            return predictions;
+        }
+
+        var castIdToPhases = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        void Register(string? castId, string phase)
+        {
+            if (string.IsNullOrEmpty(castId)) return;
+            if (!castIdToPhases.TryGetValue(castId, out var set))
+            {
+                set = new HashSet<string>(StringComparer.Ordinal);
+                castIdToPhases[castId] = set;
+            }
+            set.Add(phase);
+        }
+
+        foreach (var mech in profile.Mechanics)
+        {
+            if (!mech.Enabled || string.IsNullOrEmpty(mech.Phase)) continue;
+            Register(mech.AttachedTo?.CastId, mech.Phase!);
+            foreach (var trig in mech.Triggers)
+            {
+                if (string.Equals(trig.Type, "cast", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(trig.Type, "action_used", StringComparison.OrdinalIgnoreCase))
+                {
+                    Register(trig.Match?.CastId, mech.Phase!);
+                }
+            }
+        }
+
+        if (castIdToPhases.Count == 0)
+        {
+            return predictions;
+        }
+
+        var result = new List<RecordingTimelinePrediction>(predictions.Count);
+        foreach (var prediction in predictions)
+        {
+            if (string.IsNullOrEmpty(prediction.Id) ||
+                !castIdToPhases.TryGetValue(prediction.Id, out var phases))
+            {
+                // phase に紐づかないキャストは常に表示（安全側）
+                result.Add(prediction);
+                continue;
+            }
+
+            var anyActive = false;
+            foreach (var phase in phases)
+            {
+                if (phaseActiveCheck(phase))
+                {
+                    anyActive = true;
+                    break;
+                }
+            }
+            if (anyActive)
+            {
+                result.Add(prediction);
+            }
+        }
+
+        return result;
+    }
+
     public static bool ShouldDeduplicateLabelPair(string? firstEventType, string? secondEventType)
     {
         return !IsAutoAttack(firstEventType) && !IsAutoAttack(secondEventType);

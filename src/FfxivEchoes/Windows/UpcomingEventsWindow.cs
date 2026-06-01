@@ -20,7 +20,9 @@ namespace FfxivEchoes.Windows;
 /// </summary>
 public sealed class UpcomingEventsWindow : Window, IDisposable
 {
-    private const int MaxItems = 8;
+    // 2 体フェーズで両ボスの予定を時系列順に拾えるよう余裕を持たせる（描画段で各カラム/グループが
+    // 個別に行数を制限する）。8 だと先頭切り捨てで片方のボスが丸ごと落ちることがあった。
+    private const int MaxItems = 16;
     private const float ImminentSec = 5f;
     private const float Width = 320f;
     private const float Height = 260f;
@@ -45,9 +47,10 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
         RecordingScanner recordings, SyncOffsetTracker syncOffset,
         BranchObserverService? branchObserver = null,
         CurrentPhaseTracker? phaseTracker = null)
+        // NoResize は付けない：2 体フェーズで各カラムが狭く技名が読み切れないとき、
+        // ユーザーがウィンドウを横に広げて可読性を確保できるようにする（広げた幅は imgui.ini に永続）。
         : base("##ffxiv-echoes-upcoming",
             ImGuiWindowFlags.NoTitleBar |
-            ImGuiWindowFlags.NoResize |
             ImGuiWindowFlags.NoCollapse |
             ImGuiWindowFlags.NoFocusOnAppearing |
             ImGuiWindowFlags.NoBringToFrontOnFocus |
@@ -177,8 +180,6 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
         var visible = items
             .Where(i => !UpcomingTimelinePolicy.IsRawUnknownActionLabel(i.Label))
             .Where(i => UpcomingTimelinePolicy.ShouldDisplayUpcomingItem(i.Time, nowRel))
-            .ToList();
-        visible = visible
             .OrderBy(i => i.Time)
             .ToList();
         visible = DedupByLabelWithin(visible, 3.0)
@@ -190,23 +191,71 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
             return;
         }
 
-        var scale = ImGuiHelpers.GlobalScale;
-        var draw = ImGui.GetWindowDrawList();
-        var winAvail = ImGui.GetContentRegionAvail();
+        // 表示中の非共通ソース（＝ボス）数で 1 体 / 2 体モードを切り替える。
+        // 2 体同時詠唱フェーズでは左右 2 カラムに分け、どちらのボスの技かを空間的に分離する。
+        var distinctBosses = visible
+            .Select(i => UpcomingTimelinePolicy.SourceGroupName(i.Source, i.Label))
+            .Where(s => !UpcomingTimelinePolicy.IsCommonGroup(s))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        // ちょうど 2 体のときだけ 2 カラム。3 体以上（クローン多体・add 混在・未解決ソース）は
+        // 2 カラムに畳むと 3 体目以降が左カラムへ無言混入し左ボス名・色で誤帰属する（発生源取り違え）ため、
+        // source 別グループ見出しで正しくラベルする単一カラムへフォールバックする。
+        var twoBoss = distinctBosses.Count == 2;
+        if (twoBoss)
+        {
+            // 左右の割り当ては「次の最速詠唱を持つボス」順（＝時系列依存）だとフレームごとに左右が
+            // 入れ替わり目が迷う。名前で安定ソートして、同じ 2 体なら常に同じ側に固定する。
+            distinctBosses.Sort(StringComparer.OrdinalIgnoreCase);
+        }
 
-        const float BarWindowSec = 30f;       // バー全長 = 30 秒先
+        var scale = ImGuiHelpers.GlobalScale;
+        var width = ImGui.GetContentRegionAvail().X;
+
+        DrawPhaseHeader(scale, width, twoBoss);
+
+        if (twoBoss)
+        {
+            DrawTwoColumns(visible, nowRel, distinctBosses[0], distinctBosses[1], scale, width);
+        }
+        else
+        {
+            DrawSingleColumn(visible, nowRel, scale, width);
+        }
+    }
+
+    /// <summary>リスト先頭に現在フェーズ名（2 体フェーズなら「2 体」注記）を 1 行で示す。</summary>
+    /// <remarks>フェーズ未注釈かつ 1 体のときは描画しない（フェーズ非対応コンテンツは従来どおり）。</remarks>
+    private void DrawPhaseHeader(float scale, float width, bool twoBoss)
+    {
+        var phaseId = _phaseTracker?.CurrentPhaseId;
+        if (string.IsNullOrEmpty(phaseId) && !twoBoss)
+        {
+            return;
+        }
+        var label = string.IsNullOrEmpty(phaseId) ? string.Empty : $"フェーズ {phaseId}";
+        if (twoBoss)
+        {
+            label = string.IsNullOrEmpty(label) ? "2 体フェーズ" : $"{label}（2 体）";
+        }
+
+        var draw = ImGui.GetWindowDrawList();
+        var headerH = 18f * scale;
+        var start = ImGui.GetCursorScreenPos();
+        var end = new Vector2(start.X + width, start.Y + headerH);
+        draw.AddRectFilled(start, end, 0xE0202020u, 4f);
+        draw.AddText(new Vector2(start.X + 8f * scale, start.Y + 2f * scale), 0xFFF0D060u, Truncate(label, 30));
+        ImGui.SetCursorScreenPos(new Vector2(start.X, end.Y + 3f * scale));
+    }
+
+    /// <summary>1 体（従来）モード：source 別グループ見出し + 縮むバーを縦に積む。</summary>
+    private void DrawSingleColumn(List<UpcomingItem> visible, double nowRel, float scale, float width)
+    {
+        var draw = ImGui.GetWindowDrawList();
         const int MaxRows = 8;
         var rowH = 22f * scale;
         var rowSpacing = 4f * scale;
         var headerH = 18f * scale;
-
-        // 文字色は常に濃いグレー（黒）。背景白・バー色付きでも一貫して読める。
-        // 「直前になってから白文字に切り替わる → 見えない」問題を解消。
-        const uint TextColor = 0xFF1A1A1Au;
-        // 行背景：ほぼ白（バー外領域も含めて全幅）
-        const uint LaneBgColor = 0xFFF0F0F0u;
-        // 行枠：薄いグレーで行間の区切りを補助
-        const uint LaneBorderColor = 0xFFA0A0A0u;
 
         var groups = visible
             .GroupBy(i => UpcomingTimelinePolicy.SourceGroupName(i.Source, i.Label))
@@ -231,7 +280,7 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
             if (UpcomingTimelinePolicy.ShouldDrawSourceGroupHeader(group.Source))
             {
                 var headerStart = ImGui.GetCursorScreenPos();
-                var headerEnd = new Vector2(headerStart.X + winAvail.X, headerStart.Y + headerH);
+                var headerEnd = new Vector2(headerStart.X + width, headerStart.Y + headerH);
                 draw.AddRectFilled(headerStart, headerEnd, 0xCC101010u, 4f);
                 draw.AddText(
                     new Vector2(headerStart.X + 8f * scale, headerStart.Y + 2f * scale),
@@ -247,91 +296,197 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
                     break;
                 }
 
-            var remaining = (float)(it.Time - nowRel);
-            // バー長：残時間 / 窓長。残時間多いほどバー長い（cactbot 流）。
-            // 0 秒で完全に消える、過去（remaining < 0）は短い赤バーで余韻。
-            var fillRatio = remaining > 0
-                ? Math.Clamp(remaining / BarWindowSec, 0.02f, 1f)
-                : 0.04f;
-
-            // 色階層：cactbot の info/soon/alarm + 過ぎた赤。
-            // 白背景にコントラストする色を選ぶ（薄水・黄でも視認できる）。
-            uint barColor;
-            if (remaining <= 1f)
-            {
-                barColor = 0xFF3030F0u;       // 真赤
-            }
-            else if (remaining <= 5f)
-            {
-                barColor = 0xFF3FA0F8u;       // 橙
-            }
-            else if (remaining <= 15f)
-            {
-                barColor = 0xFF50C8E8u;       // 黄
-            }
-            else
-            {
-                barColor = 0xFFD8C8B0u;       // 薄水
-            }
-
-            var rowStart = ImGui.GetCursorScreenPos();
-            var rowEnd = new Vector2(rowStart.X + winAvail.X, rowStart.Y + rowH);
-            var barWidth = (rowEnd.X - rowStart.X) * fillRatio;
-            var barEnd = new Vector2(rowStart.X + barWidth, rowEnd.Y);
-
-            // 背景レーン（白で全幅）→ 上に色付きバー（縮む）
-            draw.AddRectFilled(rowStart, rowEnd, LaneBgColor, 4f);
-            draw.AddRectFilled(rowStart, barEnd, barColor, 4f);
-            // 行枠（白背景上で行を区切る薄いグレー枠）
-            draw.AddRect(rowStart, rowEnd, LaneBorderColor, 4f, ImDrawFlags.None, 1f);
-
-            // 直近 5 秒以内は赤い枠線で強調（"soon" / "alarm" 段階。
-            // 白枠だと白背景に紛れるので赤に変更）。
-            if (remaining <= 5f && remaining >= -1f)
-            {
-                draw.AddRect(rowStart, rowEnd, 0xFF3030F0u, 4f, ImDrawFlags.None, 2f);
-            }
-
-            // 時刻（バー左端、固定位置・1.05倍）
-            var timeText = remaining < 0 ? $"+{(-remaining):F1}s" : $"{remaining:F1}s";
-            ImGui.SetWindowFontScale(1.05f);
-            var timeSize = ImGui.CalcTextSize(timeText);
-            draw.AddText(
-                new Vector2(rowStart.X + 8f * scale, rowStart.Y + (rowH - timeSize.Y) * 0.5f),
-                TextColor, timeText);
-            // 技名（時刻の右）
-            var rowLabel = UpcomingTimelinePolicy.FormatRowLabel(it.Label, it.Source);
-            var labelText = Truncate(rowLabel, 22);
-            var labelSize = ImGui.CalcTextSize(labelText);
-            draw.AddText(
-                new Vector2(rowStart.X + 60f * scale, rowStart.Y + (rowH - labelSize.Y) * 0.5f),
-                TextColor, labelText);
-            ImGui.SetWindowFontScale(1f);
-
-            // 行全体に当たり判定 → ホバー時に詳細 tooltip
-            ImGui.SetCursorScreenPos(rowStart);
-            ImGui.InvisibleButton($"##upcoming-row-{rowIndex}", new Vector2(winAvail.X, rowH));
-            if (ImGui.IsItemHovered())
-            {
-                ImGui.BeginTooltip();
-                ImGui.TextUnformatted(rowLabel);
-                if (!string.IsNullOrEmpty(it.Source))
-                {
-                    ImGui.TextDisabled($"source: {it.Source}");
-                }
-                ImGui.TextDisabled($"残り {timeText}");
-                if (!string.IsNullOrEmpty(it.Sub))
-                {
-                    ImGui.TextDisabled(it.Sub);
-                }
-                ImGui.EndTooltip();
-            }
-            ImGui.SetCursorScreenPos(new Vector2(rowStart.X, rowEnd.Y + rowSpacing));
+                var rowStart = ImGui.GetCursorScreenPos();
+                DrawBarRow(scale, rowStart, width, rowH, it, nowRel, $"##upcoming-row-{rowIndex}", null, 22);
+                ImGui.SetCursorScreenPos(new Vector2(rowStart.X, rowStart.Y + rowH + rowSpacing));
                 rowsDrawn++;
                 rowIndex++;
             }
         }
     }
+
+    /// <summary>2 体モード：左右 2 カラムに各ボスの予定を時系列で分離表示する。</summary>
+    private void DrawTwoColumns(
+        List<UpcomingItem> visible, double nowRel, string leftBoss, string rightBoss, float scale, float width)
+    {
+        var rowH = 22f * scale;
+        var rowSpacing = 4f * scale;
+        var headerH = 18f * scale;
+        var colGap = 6f * scale;
+        var colWidth = (width - colGap) / 2f;
+        const int MaxRowsPerCol = 7;
+
+        var leftColor = SourceColor(leftBoss);
+        var rightColor = SourceColor(rightBoss);
+        if (leftColor == rightColor)
+        {
+            rightColor = SourceColorAlt(rightBoss);
+        }
+
+        var leftItems = new List<UpcomingItem>();
+        var rightItems = new List<UpcomingItem>();
+        foreach (var it in visible)
+        {
+            var group = UpcomingTimelinePolicy.SourceGroupName(it.Source, it.Label);
+            if (string.Equals(group, rightBoss, StringComparison.OrdinalIgnoreCase))
+            {
+                rightItems.Add(it);
+            }
+            else
+            {
+                // 左ボス + 共通 + その他ソースは左カラムへ寄せる（取りこぼし防止）。
+                leftItems.Add(it);
+            }
+        }
+
+        var top = ImGui.GetCursorScreenPos();
+        DrawColumn(new Vector2(top.X, top.Y), colWidth, rowH, rowSpacing, headerH, scale,
+            leftBoss, leftColor, leftItems, nowRel, MaxRowsPerCol, 0);
+        DrawColumn(new Vector2(top.X + colWidth + colGap, top.Y), colWidth, rowH, rowSpacing, headerH, scale,
+            rightBoss, rightColor, rightItems, nowRel, MaxRowsPerCol, 1);
+    }
+
+    private void DrawColumn(
+        Vector2 origin, float colWidth, float rowH, float rowSpacing, float headerH, float scale,
+        string boss, uint bossColor, List<UpcomingItem> items, double nowRel, int maxRows, int colIndex)
+    {
+        var draw = ImGui.GetWindowDrawList();
+        var headerEnd = new Vector2(origin.X + colWidth, origin.Y + headerH);
+        draw.AddRectFilled(origin, headerEnd, 0xCC101010u, 4f);
+        // ボス色のタグ帯（左端）＋ボス名。
+        draw.AddRectFilled(origin, new Vector2(origin.X + 4f * scale, headerEnd.Y), bossColor, 0f);
+        draw.AddText(new Vector2(origin.X + 10f * scale, origin.Y + 2f * scale), 0xFFE6E6E6u, Truncate(boss, 12));
+
+        // ラベル最大文字数はカラム幅から動的に決める。固定 11 だと狭い既定幅(≈147px)で日本語技名が
+        // 隣カラムへはみ出し、ユーザーがウィンドウを広げても表示が増えない。時刻表示分(≈58px)を引いて
+        // 1 文字 ≈ 12px で見積もる（最低 4 文字は確保）。
+        var maxLabelChars = Math.Max(4, (int)((colWidth - 58f * scale) / (12f * scale)));
+
+        var y = headerEnd.Y + 2f * scale;
+        var rows = 0;
+        foreach (var it in items)
+        {
+            if (rows >= maxRows)
+            {
+                break;
+            }
+            // このカラムのボス本人の技はボス色帯、共通ノート等はカラム色と紛れないよう中立グレー帯にする。
+            var grp = UpcomingTimelinePolicy.SourceGroupName(it.Source, it.Label);
+            var band = string.Equals(grp, boss, StringComparison.OrdinalIgnoreCase) ? bossColor : CommonBandColor;
+            DrawBarRow(scale, new Vector2(origin.X, y), colWidth, rowH, it, nowRel,
+                $"##upcoming-c{colIndex}-r{rows}", band, maxLabelChars);
+            y += rowH + rowSpacing;
+            rows++;
+        }
+    }
+
+    /// <summary>2 カラム時、ボス本人でない行（共通ノート等）の色帯に使う中立グレー。</summary>
+    private const uint CommonBandColor = 0xFF808080u;
+
+    /// <summary>1 行（縮むバー）を指定スクリーン矩形に描く。両モード共通。</summary>
+    /// <param name="sourceBand">指定があれば左端に発生源色帯を引く（2 体モードでカラム色と束ねる）。</param>
+    private void DrawBarRow(
+        float scale, Vector2 rowStart, float rowWidth, float rowH,
+        UpcomingItem it, double nowRel, string buttonId, uint? sourceBand, int maxLabelChars)
+    {
+        const float BarWindowSec = 30f;       // バー全長 = 30 秒先
+        // 文字色は常に濃いグレー（黒）。背景白・バー色付きでも一貫して読める。
+        const uint TextColor = 0xFF1A1A1Au;
+        const uint LaneBgColor = 0xFFF0F0F0u;
+        const uint LaneBorderColor = 0xFFA0A0A0u;
+
+        var draw = ImGui.GetWindowDrawList();
+        var remaining = (float)(it.Time - nowRel);
+        // バー長：残時間 / 窓長。残時間多いほどバー長い（cactbot 流）。過去は短い赤バーで余韻。
+        var fillRatio = remaining > 0
+            ? Math.Clamp(remaining / BarWindowSec, 0.02f, 1f)
+            : 0.04f;
+        var barColor = BarColorForRemaining(remaining);
+
+        var rowEnd = new Vector2(rowStart.X + rowWidth, rowStart.Y + rowH);
+        var barEnd = new Vector2(rowStart.X + rowWidth * fillRatio, rowEnd.Y);
+
+        draw.AddRectFilled(rowStart, rowEnd, LaneBgColor, 4f);
+        draw.AddRectFilled(rowStart, barEnd, barColor, 4f);
+        draw.AddRect(rowStart, rowEnd, LaneBorderColor, 4f, ImDrawFlags.None, 1f);
+        // 直近 5 秒以内は赤枠で強調（白枠だと白背景に紛れるため）。
+        if (remaining <= 5f && remaining >= -1f)
+        {
+            draw.AddRect(rowStart, rowEnd, 0xFF3030F0u, 4f, ImDrawFlags.None, 2f);
+        }
+
+        var textLeft = rowStart.X + 8f * scale;
+        if (sourceBand is { } band)
+        {
+            draw.AddRectFilled(rowStart, new Vector2(rowStart.X + 3f * scale, rowEnd.Y), band, 0f);
+            textLeft = rowStart.X + 7f * scale;
+        }
+
+        var timeText = remaining < 0 ? $"+{(-remaining):F1}s" : $"{remaining:F1}s";
+        ImGui.SetWindowFontScale(1.05f);
+        var timeSize = ImGui.CalcTextSize(timeText);
+        draw.AddText(new Vector2(textLeft, rowStart.Y + (rowH - timeSize.Y) * 0.5f), TextColor, timeText);
+        var rowLabel = UpcomingTimelinePolicy.FormatRowLabel(it.Label, it.Source);
+        var labelText = Truncate(rowLabel, maxLabelChars);
+        var labelSize = ImGui.CalcTextSize(labelText);
+        // 技名X：色帯なし(1体)時は rowStart+60f で従来と一致。色帯あり(2体)時は 7+52=59f。
+        draw.AddText(new Vector2(textLeft + 52f * scale, rowStart.Y + (rowH - labelSize.Y) * 0.5f), TextColor, labelText);
+        ImGui.SetWindowFontScale(1f);
+
+        // 行全体に当たり判定 → ホバー時に詳細 tooltip
+        ImGui.SetCursorScreenPos(rowStart);
+        ImGui.InvisibleButton(buttonId, new Vector2(rowWidth, rowH));
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.BeginTooltip();
+            ImGui.TextUnformatted(rowLabel);
+            if (!string.IsNullOrEmpty(it.Source))
+            {
+                ImGui.TextDisabled($"source: {it.Source}");
+            }
+            ImGui.TextDisabled($"残り {timeText}");
+            if (!string.IsNullOrEmpty(it.Sub))
+            {
+                ImGui.TextDisabled(it.Sub);
+            }
+            ImGui.EndTooltip();
+        }
+    }
+
+    // 色階層：cactbot の info/soon/alarm + 過ぎた赤。白背景にコントラストする色。
+    private static uint BarColorForRemaining(float remaining)
+    {
+        if (remaining <= 1f) return 0xFF3030F0u;   // 真赤
+        if (remaining <= 5f) return 0xFF3FA0F8u;    // 橙
+        if (remaining <= 15f) return 0xFF50C8E8u;   // 黄
+        return 0xFFD8C8B0u;                          // 薄水
+    }
+
+    private static uint Rgb(byte r, byte g, byte b)
+        => 0xFF000000u | ((uint)b << 16) | ((uint)g << 8) | r;
+
+    // 発生源（ボス）名→安定色。2 体フェーズの左右カラム識別と行色帯に使う。
+    private static readonly uint[] SourcePalette =
+    {
+        Rgb(66, 133, 244),   // 青
+        Rgb(244, 140, 66),   // 橙
+        Rgb(76, 175, 80),    // 緑
+        Rgb(171, 99, 200),   // 紫
+    };
+
+    private static uint SourceColorIndex(string source, uint offset)
+    {
+        var hash = 2166136261u;
+        foreach (var ch in source)
+        {
+            hash = (hash ^ ch) * 16777619u;
+        }
+        return SourcePalette[(hash + offset) % (uint)SourcePalette.Length];
+    }
+
+    private static uint SourceColor(string source) => SourceColorIndex(source, 0);
+
+    private static uint SourceColorAlt(string source) => SourceColorIndex(source, 1);
 
     /// <summary>
     /// 同名イベントが指定秒内に並ぶケースを 1 件に集約（最も早いものを残す）。
@@ -595,6 +750,13 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
             {
                 displayPredictions = UpcomingTimelinePolicy.FilterBranchRejectedPredictions(
                     displayPredictions, file, branchCheck);
+            }
+            // 過去フェーズの予測技がバーに残留しないよう、攻略ノートと同じく phase 絞り込みを適用する
+            // （録画予測には phase 注釈が無いため mechanic 逆引きで解決）。phase 未注釈なら全表示で後方互換。
+            if (file is not null && phaseCheck is not null)
+            {
+                displayPredictions = UpcomingTimelinePolicy.FilterPastPhasePredictions(
+                    displayPredictions, file, phaseCheck);
             }
             foreach (var prediction in displayPredictions)
             {
