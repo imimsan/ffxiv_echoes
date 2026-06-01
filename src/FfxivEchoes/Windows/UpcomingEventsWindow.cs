@@ -578,10 +578,12 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
         }
 
         var list = new List<UpcomingItem>();
-        var offset = _syncOffset.CurrentOffsetSec;
         foreach (var template in templates)
         {
-            var t = template.RelativeTime + (template.ApplySyncOffset ? offset : 0.0);
+            // 表示バーは発生源（ボス）別オフセットを使う。2 体フェーズで両ボスが独立にドリフトしても
+            // 各ボスのバーが正しく追従する（source 未記録/1 体運用ではグローバルにフォールバック）。
+            var t = template.RelativeTime
+                + (template.ApplySyncOffset ? _syncOffset.OffsetForSource(template.Source) : 0.0);
             if (!UpcomingTimelinePolicy.ShouldDisplayUpcomingItem(t, nowRel)) continue;
             list.Add(new UpcomingItem(
                 Time: t,

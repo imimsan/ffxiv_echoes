@@ -506,6 +506,23 @@ public sealed class AutoTelegraphService : IDisposable
 
     private void PublishAutoSafeCall(CastStartedEvent ev, AutoSafeCall safeCall)
     {
+        // ユーザーが同じキャストに攻略 mechanic を割り当てて「読み上げる」場合、generic な自動安置コール
+        // （「外周安置」等）は二重読みになるため抑制する。視覚（ミニマップ AddArenaView）は別経路で
+        // 既に描かれているのでここでの return では消えない。mechanic が読み上げない（視覚のみ／空）なら
+        // 抑制せず自動コールを残す＝抑制しすぎて無音化しない graceful な設計。
+        var file = _store.GetByZone(_currentZone);
+        if (file is not null)
+        {
+            var (profile, mech) = StrategyPlanResolver.FindMechanicForCast(file, ev.CastActionId, ev.CastActionName);
+            if (profile is not null && mech is not null && MechanicEmitsTts(file, profile, mech))
+            {
+                _log.Debug(
+                    "[FfxivEchoes] AutoTelegraph: 自動安置TTSを抑制（mechanic '{Label}' が読み上げるため） cast={Name}",
+                    mech.Label, ev.CastActionName);
+                return;
+            }
+        }
+
         var actions = new List<ActionDefinition>
         {
             new()
@@ -522,6 +539,20 @@ public sealed class AutoTelegraphService : IDisposable
             TriggerName: safeCall.IsEstimate ? $"推定安置：{ev.CastActionName}" : $"安置：{ev.CastActionName}",
             Actions: actions,
             SourceEvent: ev));
+    }
+
+    /// <summary>その mechanic が発火時に TTS を 1 つ以上出すか（generic 自動コール抑制の判定用）。</summary>
+    private static bool MechanicEmitsTts(TriggerFile file, StrategyProfile profile, MechanicStrategy mech)
+    {
+        var actions = StrategyPlanResolver.BuildReminderActions(file, profile, mech);
+        foreach (var a in actions)
+        {
+            if (string.Equals(a.Type, "tts", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private bool IsFriendlyActor(uint id)

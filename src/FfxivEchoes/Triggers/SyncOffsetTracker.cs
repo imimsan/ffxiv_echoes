@@ -35,6 +35,10 @@ public sealed class SyncOffsetTracker : IDisposable
     private AggregatedEvents? _aggCache;
     private readonly object _gate = new();
     private double _offsetSec;
+    // 発生源（ボス）ごとのオフセット。2 体フェーズで各ボスが独立にドリフトしても、タイムライン表示が
+    // 単一グローバル値の上書きで振動しないよう、ボス別に保持する。グローバル _offsetSec は従来どおり
+    // 維持し（読み上げタイミング等の既存消費者は不変）、これは表示バー用の純加算。
+    private readonly Dictionary<string, double> _offsetBySource = new(StringComparer.OrdinalIgnoreCase);
     private DateTimeOffset _lastUpdatedAt;
     private string? _lastTriggerLabel;
     // フェーズ遷移直後の短時間だけ、録画 aggregate 経路の大ジャンプ再アンカーを許可する武装時刻。
@@ -92,6 +96,23 @@ public sealed class SyncOffsetTracker : IDisposable
         get { lock (_gate) return _offsetSec; }
     }
 
+    /// <summary>
+    /// 指定発生源（ボス）の同期オフセット（秒）。タイムライン表示が 2 体フェーズで一方のボスの
+    /// ドリフトに引きずられないよう、ボス別の値を返す。未記録の source（1 体運用や source 不一致）は
+    /// グローバル <see cref="CurrentOffsetSec"/> にフォールバックするため、従来挙動を退行させない。
+    /// </summary>
+    public double OffsetForSource(string? source)
+    {
+        lock (_gate)
+        {
+            if (!string.IsNullOrEmpty(source) && _offsetBySource.TryGetValue(source!, out var v))
+            {
+                return v;
+            }
+            return _offsetSec;
+        }
+    }
+
     /// <summary>UI 表示用：直近の同期トリガー名と最終更新時刻。</summary>
     public (string? Label, DateTimeOffset At) LastSyncInfo
     {
@@ -103,6 +124,7 @@ public sealed class SyncOffsetTracker : IDisposable
         lock (_gate)
         {
             _offsetSec = 0;
+            _offsetBySource.Clear();
             _lastUpdatedAt = default;
             _lastTriggerLabel = null;
             _largeJumpArmedAt = null;
@@ -142,7 +164,11 @@ public sealed class SyncOffsetTracker : IDisposable
                 out var syncLabel,
                 out var syncPhase))
         {
-            ApplyOffset(syncOffset, syncLabel, allowLargeJump: false);
+            // sync_point 経路はマッチ時点で distance ≤ tolerance（作者が明示した信頼境界）が保証され、
+            // ジャンプ幅 = distance も自動的に tolerance 以下。よって別個の 30 秒ガードは冗長かつ有害で、
+            // tolerance>30s の sync_point（フェーズ境界の大きな再アンカー）を誤って棄却していた。
+            // sync_point 一致は常に大ジャンプ許可（録画 aggregate 経路のガードは現状維持）。
+            ApplyOffset(syncOffset, syncLabel, allowLargeJump: true, source: ev.SourceName);
             // フェーズ境界の sync_point ならフェーズ遷移を通知（CurrentPhaseTracker が前進）。
             if (!string.IsNullOrEmpty(syncPhase))
             {
@@ -175,12 +201,12 @@ public sealed class SyncOffsetTracker : IDisposable
                             (DateTimeOffset.UtcNow - armed).TotalSeconds <= LargeJumpWindowSec;
                 _largeJumpArmedAt = null;
             }
-            ApplyOffset(actualRel - expected, $"rec:{ev.CastActionName}", allowLargeJump: allowJump);
+            ApplyOffset(actualRel - expected, $"rec:{ev.CastActionName}", allowLargeJump: allowJump, source: ev.SourceName);
             return;
         }
     }
 
-    private void ApplyOffset(double newOffset, string label, bool allowLargeJump)
+    private void ApplyOffset(double newOffset, string label, bool allowLargeJump, string? source = null)
     {
         // 急激なジャンプは誤検知扱いで無視（最初の同期で大きい値はそのまま採用）
         lock (_gate)
@@ -193,6 +219,11 @@ public sealed class SyncOffsetTracker : IDisposable
             }
             var diff = newOffset - _offsetSec;
             _offsetSec = newOffset;
+            // 発生源（ボス）別オフセットも更新（2 体フェーズで表示バーがボス別に追従できるように）。
+            if (!string.IsNullOrEmpty(source))
+            {
+                _offsetBySource[source!] = newOffset;
+            }
             _lastUpdatedAt = DateTimeOffset.UtcNow;
             _lastTriggerLabel = label;
             _log.Information("[FfxivEchoes] Sync offset 更新: {Off:+0.0;-0.0;0}s (Δ {Diff:+0.0;-0.0;0}s) via {Label}",
