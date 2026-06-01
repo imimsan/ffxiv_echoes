@@ -161,6 +161,42 @@ public sealed record ObjectDisappearedEvent(
     uint ObjectId,
     string ObjectName) : IGameEvent;
 
+// ─── テザー（線つなぎ） ──────────────────────────────────────────────
+
+/// <summary>
+/// アクター間のテザー（線つなぎ）が出現したときに発行される。ハイパードライブの近/遠分割や
+/// クローンテザーの対象コールに使う。<c>type: "tether"</c> のトリガーがマッチする。
+/// </summary>
+/// <remarks>
+/// <b>注意（重要）</b>: 現時点ではライブ捕捉（TetherCapture）を実装していない。
+/// FFXIVClientStructs のテザー対象フィールドはゲームパッチでオフセットが破壊されやすく、
+/// 誤読すると誤った発生源/対象でコールしうる（＝全滅誘導）ため、ID/オフセットを録画で確定するまで
+/// ライブ読み取りは載せない方針。それまでのライブ運用は付随ステータスがあれば
+/// <c>status_gain</c> + <c>target</c> で代替する（docs/絶ケフカ運用ノート.md 参照）。
+/// このレコードと <c>tether</c> マッチャは、録画再生（FfxivEchoes.Replay）や将来の TetherCapture が
+/// テザーを発行したときに即トリガー化できるようデータモデルを先に用意したもの。
+/// </remarks>
+/// <param name="TetherTypeId">テザー種別 ID（近/遠などの色・種類を区別する。match.status_id で照合）。</param>
+/// <param name="Distance">source と target の距離 m（近/遠の割り当て判定に使う。match.duration_range で照合）。</param>
+public sealed record TetherAppearedEvent(
+    DateTimeOffset Timestamp,
+    uint SourceId,
+    string SourceName,
+    uint TargetId,
+    string TargetName,
+    uint TetherTypeId,
+    float Distance,
+    bool TargetIsLocalPlayer = false
+) : IGameEvent;
+
+/// <summary>テザーが消えたときに発行される。<c>type: "tether_remove"</c> のトリガーがマッチする。</summary>
+public sealed record TetherRemovedEvent(
+    DateTimeOffset Timestamp,
+    uint SourceId,
+    uint TargetId,
+    uint TetherTypeId
+) : IGameEvent;
+
 // ─── プレイヤー位置（アリーナ寸法推定用） ───────────────────────────
 
 /// <summary>

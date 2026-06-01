@@ -46,6 +46,8 @@ public sealed class EventMatcher
             ZoneChangedEvent x => MatchZoneChanged(x, match),
             ObjectAppearedEvent x => MatchObjectAppeared(x, match),
             ObjectDisappearedEvent x => MatchObjectDisappeared(x, match),
+            TetherAppearedEvent x => MatchTether(x, match),
+            TetherRemovedEvent x => MatchTetherRemove(x, match),
             _ => false,
         };
     }
@@ -67,6 +69,30 @@ public sealed class EventMatcher
         return true;
     }
 
+    // テザー専用フィールドは MatchCondition に増やさず、既存フィールドへ意味を割り当てて最小変更にする:
+    //   status_id      → tether_type_id（テザー種別。近/遠で色が違う等）
+    //   duration_range → source-target 距離 m（近/遠の割り当て判定。min/max で帯域マッチ）
+    //   source/source_id → テザー発生源（通常ボス）, target → 被テザー対象
+    private bool MatchTether(TetherAppearedEvent ev, MatchCondition? m)
+    {
+        if (m is null) return true;
+        if (m.SourceId is { } sid && ev.SourceId != sid) return false;
+        if (m.Source is not null && !MatchString(m.Source, ev.SourceName)) return false;
+        if (m.StatusId is { } tetherType && ev.TetherTypeId != tetherType) return false;
+        if (m.Target is not null && !_targetResolver.Matches(ev.TargetId, m.Target)) return false;
+        if (m.DurationRange is { } range && !MatchRange(range, ev.Distance)) return false;
+        return true;
+    }
+
+    private bool MatchTetherRemove(TetherRemovedEvent ev, MatchCondition? m)
+    {
+        if (m is null) return true;
+        if (m.SourceId is { } sid && ev.SourceId != sid) return false;
+        if (m.StatusId is { } tetherType && ev.TetherTypeId != tetherType) return false;
+        if (m.Target is not null && !_targetResolver.Matches(ev.TargetId, m.Target)) return false;
+        return true;
+    }
+
     public static string EventTypeName(IGameEvent ev) => ev switch
     {
         CastStartedEvent => "cast_start",
@@ -82,6 +108,8 @@ public sealed class EventMatcher
         ZoneChangedEvent => "zone_change",
         ObjectAppearedEvent => "object_appear",
         ObjectDisappearedEvent => "object_disappear",
+        TetherAppearedEvent => "tether",
+        TetherRemovedEvent => "tether_remove",
         _ => string.Empty,
     };
 
