@@ -50,6 +50,14 @@ public sealed class ActionDispatcher : IDisposable
         {
             _handlers[h.Type] = h;
         }
+        // overlay_corner_text は専用の隅描画を持たないため、暫定的に中央オーバーレイ（overlay_text）へ
+        // ルートする。これが無いと未知アクション扱いで無音 no-op になり、しかも
+        // AugmentActionsForVisibility が「visual あり」と誤判定して自動オーバーレイまで抑止していた。
+        if (!_handlers.ContainsKey("overlay_corner_text") &&
+            _handlers.TryGetValue("overlay_text", out var overlayText))
+        {
+            _handlers["overlay_corner_text"] = overlayText;
+        }
         _subscription = bus.Subscribe<TriggerFiredEvent>(OnTriggerFired);
         // 戦闘終了で dedup 履歴をクリアする。ワイプ→再挑戦で開幕の正規発火が前回の履歴で
         // 誤って抑制されるのを防ぐ。

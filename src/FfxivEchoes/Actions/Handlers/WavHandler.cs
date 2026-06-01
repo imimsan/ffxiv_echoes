@@ -18,10 +18,15 @@ public sealed class WavHandler : IActionHandler, IDisposable
 {
     public string Type => "wav";
 
+    /// <summary>同一ファイルの連続再生を抑える dedup 窓（秒）。proximity_feedback 等の直呼び経路も覆う。</summary>
+    public const double DedupWindowSeconds = 0.5;
+
     private readonly Configuration _configuration;
     private readonly IDalamudPluginInterface _pluginInterface;
     private readonly AudioDeviceEnumerator _deviceEnumerator;
     private readonly IPluginLog _log;
+    private readonly object _dedupGate = new();
+    private readonly Dictionary<string, DateTimeOffset> _recentPlays = new(StringComparer.OrdinalIgnoreCase);
     // 再生中のプレイヤーと付随資源（reader / WASAPI 用 MMDevice）を追跡し、
     // Dispose（プラグイン解放 / xlrestart）で確実に停止・破棄する。
     // 追跡しないと、解放後に PlaybackStopped が解放間際の資源を触ってクラッシュしうる。
@@ -48,6 +53,15 @@ public sealed class WavHandler : IActionHandler, IDisposable
         if (string.IsNullOrEmpty(action.File))
         {
             return;
+        }
+
+        // 入口 dedup：同一ファイルの極短時間連発（2 体同名技 / proximity_feedback 直呼び）を抑制。
+        lock (_dedupGate)
+        {
+            if (!ShouldPlayByDedup(action.File, DateTimeOffset.UtcNow, _recentPlays, DedupWindowSeconds))
+            {
+                return;
+            }
         }
 
         var volume = (float)Math.Clamp(
@@ -119,6 +133,25 @@ public sealed class WavHandler : IActionHandler, IDisposable
                 try { device?.Dispose(); } catch { /* ignore */ }
             }
         }
+    }
+
+    /// <summary>
+    /// 同一ファイルの連続再生を抑制する（窓は初回起点）。ファイル未指定は常に通す。
+    /// </summary>
+    public static bool ShouldPlayByDedup(
+        string? file, DateTimeOffset now,
+        Dictionary<string, DateTimeOffset> recent, double windowSec)
+    {
+        if (string.IsNullOrEmpty(file))
+        {
+            return true;
+        }
+        if (recent.TryGetValue(file, out var last) && (now - last).TotalSeconds < windowSec)
+        {
+            return false;
+        }
+        recent[file] = now;
+        return true;
     }
 
     private (IWavePlayer Player, MMDevice? Device) CreatePlayer()

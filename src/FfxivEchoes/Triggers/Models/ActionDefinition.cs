@@ -30,6 +30,14 @@ public sealed class ActionDefinition
     [JsonPropertyName("rate")]
     public double Rate { get; set; } = 1.0;
 
+    /// <summary>
+    /// 読み上げ優先度（tts / direction_call）。0=通常、1 以上=優先。
+    /// 優先コール（軽減・安置・HP全快コール等）はキュー内で通常コールより前に挿し、
+    /// キュー溢れ時も通常コールより先に守られる。連続詠唱の混雑で重要コールが埋もれるのを防ぐ。
+    /// </summary>
+    [JsonPropertyName("priority")]
+    public int Priority { get; set; } = 0;
+
     // tts / wav / 共通
     [JsonPropertyName("volume")]
     public double Volume { get; set; } = 1.0;
