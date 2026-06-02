@@ -176,7 +176,13 @@ public sealed class ActionDispatcher : IDisposable
             return false;
         }
 
-        return action.SafeZone is null &&
+        // gimmick(inner_circle/cone/outer_ring 等)を持つ arena_view は意図的な俯瞰図なので残す。
+        // ArenaViewHandler は gimmick だけで正しく描画できる（gimmick 空かつ layout 無しのときだけ
+        // 何も描かない）。この strip は本来「gimmick も user layout も無い＝完全に空」の旧自動予測
+        // arena_view だけを除去するのが目的。gimmick を見ずに layout だけで判定すると、保存済みの
+        // 正規俯瞰図（ライブ構成 被検世界「シグマ」V4.0.json の28件）まで剥がして無描画になる。
+        return string.IsNullOrWhiteSpace(action.Gimmick) &&
+               action.SafeZone is null &&
                (action.StrategyPositions?.Count ?? 0) == 0 &&
                (action.ObjectMarkers?.Count ?? 0) == 0 &&
                (action.AoeZones?.Count ?? 0) == 0;

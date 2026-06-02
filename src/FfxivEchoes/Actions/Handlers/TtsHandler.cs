@@ -32,8 +32,15 @@ public sealed class TtsHandler : IActionHandler, IDisposable
     /// <summary>同一テキストの連続発話を抑える dedup 窓（秒）。dispatcher の 3 秒より短く、正当な二度読みは通す。</summary>
     public const double DedupWindowSeconds = 0.5;
 
-    /// <summary>キューに積まれてからこの秒数を超えた発話はドロップする（手遅れの読み上げで重要コールを遅らせない）。</summary>
-    public const double MaxStaleSeconds = 2.5;
+    /// <summary>
+    /// キューに積まれてからこの秒数を超えた発話はドロップする（手遅れの読み上げで重要コールを遅らせない）。
+    /// 値の根拠：単一ワーカーの同期再生で日本語1発話が約1.0〜1.3秒かかるため、別ギミックが0.1〜0.2秒内に
+    /// 4件バースト詠唱すると（絶ケフカの属性同時詠唱：スリースターズ/ブリザガ/サンダガ/ファイガ等）、
+    /// 3〜4件目が積まれてから2.5秒を超え、別ギミックの警告が無音化していた（録画50戦シミュレーションで
+    /// 23〜42戦で発生）。該当キャストの詠唱時間は4.7〜7.7秒あり、5秒遅延でも着弾前に読み終わる。
+    /// 窓の拡大は「発話を増やす方向のみ・単調」で新たな無音化を生まない（遅延 ＞ 無音、非対称リスク）。
+    /// </summary>
+    public const double MaxStaleSeconds = 5.0;
 
     /// <summary>キュー上限。超過時は最古を捨てる。</summary>
     private const int MaxQueue = 6;
