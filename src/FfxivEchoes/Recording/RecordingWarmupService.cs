@@ -49,6 +49,9 @@ public sealed class RecordingWarmupService : IDisposable
         {
             _scanner.Aggregate(zone);
             _scanner.ListPartyMembers(zone);
+            // 開幕 cast によるプルセグメント分離（前半/後半）も zone 入場時に温める。
+            // 戦闘開幕フレームでの分岐解析（先頭30秒読み + グループ別集計）の同期実行を回避。
+            _scanner.AggregateBySegment(zone);
         }
         catch (Exception ex)
         {

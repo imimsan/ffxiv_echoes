@@ -22,6 +22,8 @@ public sealed class RecordingScanner
     private readonly object _aggCacheGate = new();
     private readonly Dictionary<string, (string Sig, IReadOnlyList<string> Members)> _partyCache = new();
     private readonly object _partyCacheGate = new();
+    private readonly Dictionary<string, (string Sig, SegmentedAggregate Seg)> _segmentCache = new();
+    private readonly object _segmentCacheGate = new();
     // 戦闘中はキャッシュを固定する。録画ファイルは AutoFlush で毎フレーム mtime が変わり署名が
     // 変化するため、固定しないとフェーズ移行のたびに全録画を同期再読込してフレーム落ちする（FIX-03）。
     private volatile bool _combatCacheLocked;
@@ -126,6 +128,64 @@ public sealed class RecordingScanner
             _aggCache[zoneName] = (sig, events);
         }
         return events;
+    }
+
+    /// <summary>
+    /// 録画を開幕 cast でプルセグメント（前半フルプル / 後半頭出し練習プル 等）に自動分離した集計を返す。
+    /// 分岐が検出できない（単群 / データ不足）ゾーンでは <see cref="Aggregate"/> 相当の全合算へ
+    /// フォールバックするため、他コンテンツの挙動は変わらない。戦闘中は <see cref="Aggregate"/> と同じく
+    /// キャッシュ固定（I/O ゼロ）。
+    /// </summary>
+    /// <remarks>
+    /// 全ファイルの先頭 cast が一致する単群コンテンツ（例: 月の底）に加え、2 体が同時に異なる cast を
+    /// 詠唱して毎回先頭 cast がバラけるコンテンツ（例: 暗闇の領域）も、有効グループが 1 つに満たず
+    /// 分岐なし扱い → combined フォールバックになる（回帰なし）。
+    /// </remarks>
+    public SegmentedAggregate AggregateBySegment(string zoneName)
+    {
+        if (_combatCacheLocked)
+        {
+            lock (_segmentCacheGate)
+            {
+                if (_segmentCache.TryGetValue(zoneName, out var locked))
+                {
+                    return locked.Seg;
+                }
+            }
+        }
+
+        var recordings = ListRecordings(zoneName);
+        var sig = ComputeRecordingSignature(recordings);
+        lock (_segmentCacheGate)
+        {
+            if (_segmentCache.TryGetValue(zoneName, out var cached) && cached.Sig == sig)
+            {
+                return cached.Seg;
+            }
+        }
+
+        // combined は Aggregate() の zone キャッシュを再利用（重複 I/O なし）。
+        var combined = Aggregate(zoneName);
+        BranchDetectionResult? branch = null;
+        try
+        {
+            branch = RecordingBranchAnalyzer.Analyze(
+                recordings.Select(r => r.Path),
+                RecordingBranchAnalyzer.DefaultWindowSec,
+                aggregateGroups: true);
+        }
+        catch (Exception ex)
+        {
+            // 解析失敗時は分離なし（combined フォールバック）。HUD は止めない。
+            _log.Debug(ex, "[FfxivEchoes] AggregateBySegment: 分岐解析に失敗 zone={Zone}", zoneName);
+        }
+
+        var seg = RecordingSegmentBuilder.BuildSegmentedAggregate(branch, combined);
+        lock (_segmentCacheGate)
+        {
+            _segmentCache[zoneName] = (sig, seg);
+        }
+        return seg;
     }
 
     /// <summary>
@@ -360,7 +420,9 @@ public sealed class RecordingScanner
                 while ((line = reader.ReadLine()) is not null)
                 {
                     if (string.IsNullOrWhiteSpace(line)) continue;
-                    using var doc = JsonDocument.Parse(line);
+                    // 破損／途中切れ行はファイル全体を捨てず当該行のみスキップ（TryVoteNpcActionFromRecordingLine と同じ防御）。
+                    using var doc = TryParseRecordingLine(line);
+                    if (doc is null) continue;
                     var root = doc.RootElement;
                     if (!root.TryGetProperty("type", out var typeEl)) continue;
                     var t = typeEl.GetString();
@@ -618,6 +680,18 @@ public sealed class RecordingScanner
             npcAppeared,
             actionVotes);
 
+    private static JsonDocument? TryParseRecordingLine(string line)
+    {
+        try
+        {
+            return JsonDocument.Parse(line);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
     public static bool TryVoteNpcActionFromRecordingLine(
         string line,
         uint targetDataId,
@@ -628,7 +702,12 @@ public sealed class RecordingScanner
     {
         if (string.IsNullOrWhiteSpace(line)) return false;
 
-        using var doc = JsonDocument.Parse(line);
+        // ライブ録画は AutoFlush 書き込み中で末尾行が途中切れになることがある。破損／途中切れ行は
+        // 例外を投げず静かにスキップする（RecordingAggregationReader.AggregateFiles と同じ防御）。
+        // さもないと NPC 初回詠唱学習が全録画スキャンのたびに JsonReaderException を投げ、
+        // フレームスレッドを直撃して dalamud.log を例外で氾濫させる。
+        using var doc = TryParseRecordingLine(line);
+        if (doc is null) return false;
         var root = doc.RootElement;
         if (!root.TryGetProperty("type", out var typeEl)) return false;
         var type = typeEl.GetString();

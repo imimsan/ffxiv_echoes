@@ -36,6 +36,7 @@ var tests = new List<(string Name, Action Body)>
     ("RecordingScanner learns object action_used after appearance", RecordingScanner_LearnsObjectActionUsedAfterAppearance),
     ("RecordingScanner filters object action learning by object name", RecordingScanner_FiltersObjectActionLearningByName),
     ("RecordingScanner suppresses repeated old-recording warnings", RecordingScanner_SuppressesRepeatedOldRecordingWarnings),
+    ("RecordingScanner skips malformed/truncated lines without throwing", RecordingScanner_SkipsMalformedRecordingLineWithoutThrowing),
     ("AggregateFiles warns only for below-minimum plugin version", AggregateFiles_WarnsOnlyForBelowMinimumPluginVersion),
     ("Recording aggregation suppression wrapper dedupes across repeated aggregations", RecordingAggregation_SuppressionWrapper_DedupesAcrossRepeatedAggregations),
     ("RecordingScanner signature detects recording changes", RecordingScanner_Signature_DetectsRecordingChanges),
@@ -150,6 +151,11 @@ var tests = new List<(string Name, Action Body)>
     ("Upcoming timeline policy strips source prefix from row labels", UpcomingTimelinePolicy_StripsSourcePrefixFromRowLabels),
     ("Upcoming timeline policy hides common source header", UpcomingTimelinePolicy_HidesCommonSourceHeader),
     ("Upcoming timeline policy drops due and past items", UpcomingTimelinePolicy_DropsDueAndPastItems),
+    ("Upcoming timeline policy drops far-future items beyond horizon", UpcomingTimelinePolicy_DropsFarFutureBeyondHorizon),
+    ("RecordingSegmentBuilder separates pulls and computes common casts", RecordingSegmentBuilder_SeparatesPullsAndCommon),
+    ("TryResolveSegment resolves by opening cast and exclusive cast", UpcomingTimelinePolicy_TryResolveSegment_ResolvesByOpeningAndExclusive),
+    ("SelectActiveAgg picks confirmed segment and degrades safely", UpcomingTimelinePolicy_SelectActiveAgg_PicksConfirmedSegment),
+    ("ResolveEmptyStateMessage avoids misleading record-first text", UpcomingTimelinePolicy_ResolveEmptyStateMessage_ContextAware),
     ("Minimap hides live dots for user-authored layouts", Minimap_HidesLiveDotsForUserAuthoredLayouts),
     ("Minimap keeps self dot for user-authored layouts", Minimap_KeepsSelfDotForUserAuthoredLayouts),
     ("Mechanic arena defaults policy applies profile arena to one mechanic", MechanicArenaDefaultsPolicy_AppliesProfileArenaToMechanic),
@@ -993,6 +999,42 @@ static void RecordingScanner_FiltersObjectActionLearningByName()
 
     Equal(1, votes.Count, "name-filtered object action votes");
     Equal(1, votes[0x67ED], "name-filtered action id");
+}
+
+static void RecordingScanner_SkipsMalformedRecordingLineWithoutThrowing()
+{
+    var seen = new Dictionary<uint, double>();
+    var votes = new Dictionary<uint, int>();
+
+    // ライブ録画は AutoFlush で書き込み中、末尾行が途中で切れることがある。破損/途中切れ行は
+    // 例外を投げず静かに無視されなければならない。さもないと NPC 初回詠唱学習が全録画スキャンの
+    // たびに JsonReaderException を投げ、フレームスレッドを直撃して dalamud.log を氾濫させる。
+    False(RecordingScanner.TryVoteNpcActionFromRecordingLine(
+            "{\"time\":10.0,\"type\":\"object_appear\",\"data_id\":14",
+            targetDataId: 14388,
+            maxDelaySec: 8.0,
+            npcAppeared: seen,
+            actionVotes: votes),
+        "truncated json line should be skipped, not throw");
+
+    False(RecordingScanner.TryVoteNpcActionFromRecordingLine(
+            "not json at all",
+            targetDataId: 14388,
+            maxDelaySec: 8.0,
+            npcAppeared: seen,
+            actionVotes: votes),
+        "non-json line should be skipped, not throw");
+
+    False(RecordingScanner.TryVoteNpcActionFromRecordingLine(
+            "{\"time\":10.0,\"type\":\"object_appear\",\"data_id\":14388,\"position\":{\"x\":1,",
+            targetDataId: 14388,
+            maxDelaySec: 8.0,
+            npcAppeared: seen,
+            actionVotes: votes),
+        "truncated nested json line should be skipped, not throw");
+
+    Equal(0, votes.Count, "no votes from malformed lines");
+    Equal(0, seen.Count, "no appearances tracked from malformed lines");
 }
 
 static void RecordingScanner_SuppressesRepeatedOldRecordingWarnings()
@@ -3495,6 +3537,151 @@ static void UpcomingTimelinePolicy_DropsDueAndPastItems()
     False(
         UpcomingTimelinePolicy.ShouldDisplayUpcomingItem(9.99, 10.0),
         "past items should disappear");
+}
+
+// --- プルセグメント分離（前半/後半）テスト用ヘルパー ---
+static AggregatedEvent SegCastEv(string id, double firstSeen)
+    => new AggregatedEvent(new EventKey("cast_start", id, "name_" + id, null, null), 1, firstSeen);
+
+static AggregatedEvents SegAgg(params AggregatedEvent[] evs)
+    => new AggregatedEvents(evs, evs.Length, evs.Length, evs.Length);
+
+static BranchGroup SegGrp(string firstCastId, AggregatedEvents agg)
+    => new BranchGroup
+    {
+        FirstCastId = firstCastId,
+        FirstCastName = firstCastId,
+        FileCount = 2,
+        FilePaths = new[] { "a.jsonl", "b.jsonl" },
+        Confidence = 0.5,
+        AggregatedEvents = agg,
+    };
+
+static BranchDetectionResult SegResult(params BranchGroup[] groups)
+    => new BranchDetectionResult { TotalFilesScanned = groups.Length * 2, Groups = groups };
+
+static void RecordingSegmentBuilder_SeparatesPullsAndCommon()
+{
+    var front = SegAgg(SegCastEv("0x28D1", 10.2), SegCastEv("0x28CE", 25.0));   // 前半: マジックチャージ/めらめらファイガ
+    var back = SegAgg(SegCastEv("0x28FA", 7.1), SegCastEv("0x2911", 13.3));     // 後半: 心ない天使/アルテマ
+    var combined = SegAgg(
+        SegCastEv("0x28D1", 10.2), SegCastEv("0x28CE", 25.0),
+        SegCastEv("0x28FA", 7.1), SegCastEv("0x2911", 13.3));
+
+    var seg = RecordingSegmentBuilder.BuildSegmentedAggregate(SegResult(SegGrp("0x28D1", front), SegGrp("0x28FA", back)), combined);
+    Equal(2, seg.Segments.Count, "two segments detected");
+    Equal(0, seg.CommonAgg.Events.Count, "no shared cast_id → empty CommonAgg (safe blank before resolve)");
+    True(seg.Segments[0].CastIds.Contains("0x28D1") && seg.Segments[0].CastIds.Contains("0x28CE"), "front segment cast ids");
+    False(seg.Segments[0].CastIds.Contains("0x28FA"), "front segment excludes back-only cast");
+
+    // 共通 cast_id が 1 件ある場合：CommonAgg にその id のみ、最小 first-seen で入る。
+    var frontC = SegAgg(SegCastEv("0x28D1", 10.2), SegCastEv("0x1000", 30.0));
+    var backC = SegAgg(SegCastEv("0x28FA", 7.1), SegCastEv("0x1000", 15.0));
+    var segC = RecordingSegmentBuilder.BuildSegmentedAggregate(SegResult(SegGrp("0x28D1", frontC), SegGrp("0x28FA", backC)), combined);
+    Equal(1, segC.CommonAgg.Events.Count, "one shared cast in CommonAgg");
+    Equal("0x1000", segC.CommonAgg.Events[0].Key.Id, "common cast id");
+    Equal(15.0, segC.CommonAgg.Events[0].FirstSeenSeconds, "common uses earliest first-seen across segments");
+
+    // Groups < 2（単群）→ Segments 空・Combined 透過（他コンテンツ回帰なし）。
+    var segMono = RecordingSegmentBuilder.BuildSegmentedAggregate(SegResult(SegGrp("0x28D1", front)), combined);
+    Equal(0, segMono.Segments.Count, "single group → no segments");
+    True(ReferenceEquals(segMono.Combined, combined), "combined passthrough for single group");
+    var segNull = RecordingSegmentBuilder.BuildSegmentedAggregate(null, combined);
+    Equal(0, segNull.Segments.Count, "null branch result → no segments (fallback)");
+}
+
+static void UpcomingTimelinePolicy_TryResolveSegment_ResolvesByOpeningAndExclusive()
+{
+    var front = SegAgg(SegCastEv("0x28D1", 10.2), SegCastEv("0x28CE", 25.0));
+    var back = SegAgg(SegCastEv("0x28FA", 7.1), SegCastEv("0x2911", 13.3));
+    var combined = SegAgg(SegCastEv("0x28D1", 10.2), SegCastEv("0x28FA", 7.1));
+    var segments = RecordingSegmentBuilder.BuildSegmentedAggregate(SegResult(SegGrp("0x28D1", front), SegGrp("0x28FA", back)), combined).Segments;
+    var noParty = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    True(UpcomingTimelinePolicy.TryResolveSegment(segments, 0x28D1u, noParty, "ケフカ", out var r1), "front opening cast resolves");
+    Equal("0x28D1", r1, "resolved to front");
+    True(UpcomingTimelinePolicy.TryResolveSegment(segments, 0x28FAu, noParty, "ケフカ", out var r2), "back opening cast resolves");
+    Equal("0x28FA", r2, "resolved to back");
+
+    // 排他フォールバック：後半固有 cast（アルテマ）でも後半に確定。
+    True(UpcomingTimelinePolicy.TryResolveSegment(segments, 0x2911u, noParty, "ケフカ", out var r3), "back-only cast resolves via exclusive fallback");
+    Equal("0x28FA", r3, "exclusive fallback → back");
+
+    // PC（パーティ）の詠唱は無視。
+    var party = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "PlayerName" };
+    False(UpcomingTimelinePolicy.TryResolveSegment(segments, 0x28D1u, party, "PlayerName", out _), "party member cast is ignored");
+
+    // 未知 cast は確定しない。
+    False(UpcomingTimelinePolicy.TryResolveSegment(segments, 0x9999u, noParty, "ケフカ", out _), "unknown cast does not resolve");
+    // セグメント未分離なら確定しない。
+    False(UpcomingTimelinePolicy.TryResolveSegment(System.Array.Empty<RecordingSegment>(), 0x28D1u, noParty, "ケフカ", out _), "no segments → no resolve");
+}
+
+static void UpcomingTimelinePolicy_SelectActiveAgg_PicksConfirmedSegment()
+{
+    var front = SegAgg(SegCastEv("0x28D1", 10.2), SegCastEv("0x28CE", 25.0));
+    var back = SegAgg(SegCastEv("0x28FA", 7.1), SegCastEv("0x2911", 13.3));
+    var combined = SegAgg(SegCastEv("0x28D1", 10.2), SegCastEv("0x28FA", 7.1), SegCastEv("0x2911", 13.3));
+    var seg = RecordingSegmentBuilder.BuildSegmentedAggregate(SegResult(SegGrp("0x28D1", front), SegGrp("0x28FA", back)), combined);
+
+    // Segments < 2 → Combined（後方互換）。
+    var segMono = RecordingSegmentBuilder.BuildSegmentedAggregate(SegResult(SegGrp("0x28D1", front)), combined);
+    True(ReferenceEquals(UpcomingTimelinePolicy.SelectActiveAgg(segMono, null), combined), "mono → combined");
+
+    // 未確定 → CommonAgg（Sigma は空＝安全縮退）。
+    Equal(0, UpcomingTimelinePolicy.SelectActiveAgg(seg, null).Events.Count, "unconfirmed → empty common (no wrong-half leak)");
+
+    // 前半確定 → 前半のみ、後半技（心ない天使/アルテマ）を含まない。
+    var frontAgg = UpcomingTimelinePolicy.SelectActiveAgg(seg, "0x28D1");
+    True(frontAgg.Events.Any(e => e.Key.Id == "0x28D1"), "front-confirmed has front cast");
+    False(frontAgg.Events.Any(e => e.Key.Id == "0x28FA"), "front-confirmed excludes 心ない天使");
+    False(frontAgg.Events.Any(e => e.Key.Id == "0x2911"), "front-confirmed excludes アルテマ");
+
+    // 後半確定 → 後半のみ、前半技を含まない。
+    var backAgg = UpcomingTimelinePolicy.SelectActiveAgg(seg, "0x28FA");
+    True(backAgg.Events.Any(e => e.Key.Id == "0x2911"), "back-confirmed has アルテマ");
+    False(backAgg.Events.Any(e => e.Key.Id == "0x28D1"), "back-confirmed excludes マジックチャージ");
+}
+
+static void UpcomingTimelinePolicy_ResolveEmptyStateMessage_ContextAware()
+{
+    // 分離済み・未確定（開幕の最初のボス技待ち）→「録画しろ」ではなく「判定中」。
+    Equal(UpcomingTimelinePolicy.EmptyWaitingForBossCast,
+        UpcomingTimelinePolicy.ResolveEmptyStateMessage(2, segmentResolved: false, hasRecordedEvents: true),
+        "segments detected but unconfirmed → waiting-for-boss-cast message");
+
+    // 確定済みだが直近窓に予測なし（録画はある）→ 中立文言（誤誘導しない）。
+    Equal(UpcomingTimelinePolicy.EmptyNoUpcoming,
+        UpcomingTimelinePolicy.ResolveEmptyStateMessage(2, segmentResolved: true, hasRecordedEvents: true),
+        "resolved but nothing upcoming → neutral message");
+
+    // 単群コンテンツで録画はあるが直近なし → 中立文言。
+    Equal(UpcomingTimelinePolicy.EmptyNoUpcoming,
+        UpcomingTimelinePolicy.ResolveEmptyStateMessage(0, segmentResolved: false, hasRecordedEvents: true),
+        "single-segment with recordings but nothing upcoming → neutral message");
+
+    // 本当に録画ゼロ → 従来の「録画してから1戦」。
+    Equal(UpcomingTimelinePolicy.EmptyNoRecordings,
+        UpcomingTimelinePolicy.ResolveEmptyStateMessage(0, segmentResolved: false, hasRecordedEvents: false),
+        "truly no recordings → record-first message");
+}
+
+static void UpcomingTimelinePolicy_DropsFarFutureBeyondHorizon()
+{
+    // 未来側の表示上限。フェーズ注釈の無いタイムラインで、後半技が遠い相対秒の予測として
+    // 直近バーに混ざるのを防ぐ（前半中に後半項目が出る症状の緩和）。
+    True(
+        UpcomingTimelinePolicy.ShouldDisplayUpcomingItem(10.0 + 20.0, 10.0),
+        "near-future items within the horizon should remain visible");
+    True(
+        UpcomingTimelinePolicy.ShouldDisplayUpcomingItem(10.0 + 45.0, 10.0),
+        "items exactly at the horizon should remain visible");
+    False(
+        UpcomingTimelinePolicy.ShouldDisplayUpcomingItem(10.0 + 200.0, 10.0),
+        "far-future items well beyond the horizon should be hidden");
+    False(
+        UpcomingTimelinePolicy.ShouldDisplayUpcomingItem(10.0 + 45.01, 10.0),
+        "items just past the horizon should be hidden");
 }
 
 static void Minimap_HidesLiveDotsForUserAuthoredLayouts()

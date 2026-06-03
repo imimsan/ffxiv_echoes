@@ -41,6 +41,9 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
 
     private string _currentZone = "Unknown";
     private bool _inCombat;
+    // 実戦で観測したボス cast から確定したプルセグメント（前半/後半 等）の判定キャスト ID。
+    // null = 未確定（開幕の最初のボス cast 観測まで）。CombatStarted / ZoneChanged で reset。
+    private string? _activeSegmentFirstCastId;
 
     public UpcomingEventsWindow(
         IEventBus bus, CombatClock combatClock, TriggerStore store,
@@ -81,21 +84,27 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
         {
             case ZoneChangedEvent z:
                 _currentZone = string.IsNullOrEmpty(z.ZoneName) ? "Unknown" : z.ZoneName;
+                _activeSegmentFirstCastId = null;
                 ClearLiveAutoAttacks();
                 InvalidateCache();
                 UpdateVisibility();
                 break;
             case CombatStartedEvent:
                 _inCombat = true;
+                _activeSegmentFirstCastId = null;
                 ClearLiveAutoAttacks();
                 InvalidateCache();
                 UpdateVisibility();
                 break;
             case CombatEndedEvent:
                 _inCombat = false;
+                _activeSegmentFirstCastId = null;
                 IsOpen = false;
                 ClearLiveAutoAttacks();
                 ClearCache();
+                break;
+            case CastStartedEvent c when _inCombat && _activeSegmentFirstCastId is null:
+                TryAnchorSegment(c);
                 break;
             case BranchResolvedEvent:
                 // 分岐確定 → タイムラインを再構築（rejected branch の mechanic を除外）
@@ -187,7 +196,7 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
             .ToList();
         if (visible.Count == 0)
         {
-            ImGui.TextDisabled("予測データなし — 録画してから 1 戦してください");
+            ImGui.TextDisabled(ResolveEmptyStateMessage());
             return;
         }
 
@@ -707,6 +716,53 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
         }
     }
 
+    // 実戦で観測したボス cast から、前半/後半どちらのプルセグメントに居るかを確定する。
+    // 確定したらタイムラインを再構築し、以後は当該セグメントの予測のみ表示する。
+    private void TryAnchorSegment(CastStartedEvent cast)
+    {
+        SegmentedAggregate seg;
+        try
+        {
+            seg = _recordings.AggregateBySegment(_currentZone);
+        }
+        catch
+        {
+            // 録画 mid-write 等。次の cast で再試行。
+            return;
+        }
+        if (seg.Segments.Count < 2)
+        {
+            return;
+        }
+
+        var party = new HashSet<string>(
+            _recordings.ListPartyMembers(_currentZone),
+            StringComparer.OrdinalIgnoreCase);
+        if (UpcomingTimelinePolicy.TryResolveSegment(
+                seg.Segments, cast.CastActionId, party, cast.SourceName, out var resolved))
+        {
+            _activeSegmentFirstCastId = resolved;
+            InvalidateCache();
+        }
+    }
+
+    // 直近予測が空のときの文言。セグメント分離済みで未確定（開幕の最初のボス技待ち）なら
+    // 「録画してから1戦」ではなく「判定中」を出し、録画済みユーザーへの誤誘導を防ぐ。
+    private string ResolveEmptyStateMessage()
+    {
+        try
+        {
+            var seg = _recordings.AggregateBySegment(_currentZone);
+            var hasEvents = seg.Combined.Events.Count > 0;
+            return UpcomingTimelinePolicy.ResolveEmptyStateMessage(
+                seg.Segments.Count, _activeSegmentFirstCastId is not null, hasEvents);
+        }
+        catch
+        {
+            return UpcomingTimelinePolicy.EmptyNoRecordings;
+        }
+    }
+
     private List<UpcomingTemplate> BuildUpcomingTemplates()
     {
         var list = new List<UpcomingTemplate>();
@@ -714,7 +770,10 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
 
         try
         {
-            agg = _recordings.Aggregate(_currentZone);
+            // 録画を開幕 cast でプルセグメント分離し、確定セグメント（未確定なら共通技のみ）の集計を使う。
+            // これで前半戦闘中に後半技が紛れる混在を断つ。分岐の無いゾーンは従来の全合算にフォールバック。
+            var segmented = _recordings.AggregateBySegment(_currentZone);
+            agg = UpcomingTimelinePolicy.SelectActiveAgg(segmented, _activeSegmentFirstCastId);
         }
         catch
         {

@@ -240,9 +240,137 @@ public static class UpcomingTimelinePolicy
         return !IsCommonGroup(SourceGroupName(source, label));
     }
 
+    /// <summary>直近表示の未来側上限（秒）。バー全長 BarWindowSec=30 の少し先まで見せつつ、
+    /// それ以上遠い予測は出さない。フェーズ注釈の無いタイムラインでは、後半技が録画集計で
+    /// 早い相対秒の別 occurrence として混ざることがあり、上限が無いと前半戦闘中に遠い後半項目が
+    /// 直近バーへ漏れる。上限でこの漏れを抑える（フェーズ注釈があればフェーズ絞り込みが優先）。</summary>
+    public const double DisplayHorizonSec = 45.0;
+
     public static bool ShouldDisplayUpcomingItem(double itemTime, double nowRel)
     {
-        return itemTime > nowRel;
+        return itemTime > nowRel && itemTime <= nowRel + DisplayHorizonSec;
+    }
+
+    /// <summary>
+    /// 実戦で観測したボス cast から、どのプルセグメント（前半/後半 等）に居るかを判定する。
+    /// 一致したら <paramref name="resolvedFirstCastId"/> にそのセグメントの判定キャスト ID を返す。
+    /// </summary>
+    /// <remarks>
+    /// 判定順: (1) 観測 cast がいずれかのセグメントの判定キャスト(FirstCastId)に一致 →確定。
+    /// (2) 排他フォールバック: 観測 cast が「ただ 1 つのセグメントにしか存在しない cast_id」なら
+    /// そのセグメントに確定（開幕 cast を取りこぼしてもログ欠落耐性で確定できる）。
+    /// PC（パーティメンバー）の詠唱は判定に使わない（ボスのギミック cast のみで分岐を決める）。
+    /// </remarks>
+    public static bool TryResolveSegment(
+        IReadOnlyList<RecordingSegment> segments,
+        uint observedCastId,
+        ISet<string> partyMembers,
+        string? sourceName,
+        out string resolvedFirstCastId)
+    {
+        resolvedFirstCastId = string.Empty;
+        if (segments is null || segments.Count < 2 || observedCastId == 0)
+        {
+            return false;
+        }
+        if (!string.IsNullOrEmpty(sourceName) && partyMembers is not null && partyMembers.Contains(sourceName))
+        {
+            return false;
+        }
+
+        // (1) 判定キャスト一致。
+        foreach (var segment in segments)
+        {
+            if (AoeResolver.TryParseCastId(segment.FirstCastId, out var firstId) && firstId == observedCastId)
+            {
+                resolvedFirstCastId = segment.FirstCastId;
+                return true;
+            }
+        }
+
+        // (2) 排他フォールバック: 観測 cast が単一セグメント固有なら確定。
+        string? hit = null;
+        var matchCount = 0;
+        foreach (var segment in segments)
+        {
+            foreach (var idStr in segment.CastIds)
+            {
+                if (AoeResolver.TryParseCastId(idStr, out var cid) && cid == observedCastId)
+                {
+                    matchCount++;
+                    hit = segment.FirstCastId;
+                    break;
+                }
+            }
+        }
+        if (matchCount == 1 && hit is not null)
+        {
+            resolvedFirstCastId = hit;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// プルセグメント確定状態に応じて、タイムライン生成に使う集計を選ぶ。
+    /// セグメント未分離（&lt; 2）なら従来の全合算（他コンテンツ後方互換）、
+    /// 確定済みなら該当セグメントのみ、未確定なら共通技のみ（前半/後半の取り違えを防ぐ安全縮退）。
+    /// </summary>
+    public static AggregatedEvents SelectActiveAgg(SegmentedAggregate segmented, string? activeSegmentFirstCastId)
+    {
+        if (segmented is null)
+        {
+            return new AggregatedEvents(System.Array.Empty<AggregatedEvent>(), 0, 0, 0);
+        }
+        if (segmented.Segments.Count < 2)
+        {
+            return segmented.Combined;
+        }
+        if (!string.IsNullOrEmpty(activeSegmentFirstCastId))
+        {
+            foreach (var segment in segmented.Segments)
+            {
+                if (string.Equals(segment.FirstCastId, activeSegmentFirstCastId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return segment.Events;
+                }
+            }
+        }
+        return segmented.CommonAgg;
+    }
+
+    /// <summary>直近予測が空のときの表示文言（本当に録画が無い場合）。</summary>
+    public const string EmptyNoRecordings = "予測データなし — 録画してから 1 戦してください";
+
+    /// <summary>プルセグメント分離済みだが未確定（開幕の最初のボス技待ち）のときの文言。
+    /// 前半/後半の取り違えを防ぐため確定まで非表示にしているだけで、録画は十分にある。</summary>
+    public const string EmptyWaitingForBossCast = "最初のボス技を待っています…（開幕の判定中）";
+
+    /// <summary>録画はあるが直近窓に予測が無いときの中立文言。「録画しろ」と誤誘導しない。</summary>
+    public const string EmptyNoUpcoming = "この先しばらく直近の予測はありません";
+
+    /// <summary>
+    /// 直近予測が空のとき、文脈に応じた表示文言を返す。録画済みのユーザーに「録画してから1戦」と
+    /// 誤誘導しないための出し分け。
+    /// </summary>
+    /// <param name="segmentCount">プルセグメント数（&gt;=2 で前半/後半等に自動分離済み）。</param>
+    /// <param name="segmentResolved">実戦の最初のボス cast でセグメントが確定済みか。</param>
+    /// <param name="hasRecordedEvents">このゾーンに集計可能な録画イベントが存在するか。</param>
+    public static string ResolveEmptyStateMessage(int segmentCount, bool segmentResolved, bool hasRecordedEvents)
+    {
+        // 複数セグメント検出済みで未確定 = 最初のボス技待ち（取り違え防止で確定まで非表示）。
+        if (segmentCount >= 2 && !segmentResolved)
+        {
+            return EmptyWaitingForBossCast;
+        }
+        // 録画はあるが直近窓に予測が無いだけ（戦闘終盤・間隔が空く区間 等）。誤誘導を避ける。
+        if (hasRecordedEvents)
+        {
+            return EmptyNoUpcoming;
+        }
+        // 本当に録画ゼロ。
+        return EmptyNoRecordings;
     }
 
     public static string FormatRowLabel(string? label, string? source)

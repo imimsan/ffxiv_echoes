@@ -84,6 +84,12 @@ public sealed class AddObjectAoeService : IDisposable
     private readonly Dictionary<string, LearnedAoe> _learnedAoeCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, LearnedAoe> _recordedActionAoeCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _recordedActionAoeMisses = new(StringComparer.OrdinalIgnoreCase);
+    // ステップ4（録画 NPC 初回詠唱学習）の miss/hold を負キャッシュ。これが無いと、解決できない
+    // オブジェクトが出現／0.5 秒ライブスキャン窓ごとにゾーン内全録画をフルスキャン＋全行 Parse
+    // し直し、フレームスレッドを直撃する。cacheKey 単位で記録し、_recordedActionAoeMisses と
+    // 同じライフサイクル（ゾーン変更・トリガー再読込）でクリアする。Reset() では保持＝戦闘跨ぎで
+    // 再スキャンしない（録画は戦闘中に増えないため結果は決定的）。
+    private readonly HashSet<string> _firstCastLearnMisses = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<uint, bool> _playerActionCache = new();
     private readonly List<LiveScanWindow> _liveScanWindows = new();
     private readonly Dictionary<string, DateTimeOffset> _recentCastSourceNames = new(StringComparer.OrdinalIgnoreCase);
@@ -150,6 +156,7 @@ public sealed class AddObjectAoeService : IDisposable
                 _learnedAoeCache.Clear();
                 _recordedActionAoeCache.Clear();
                 _recordedActionAoeMisses.Clear();
+                _firstCastLearnMisses.Clear();
                 _playerActionCache.Clear();
                 _liveScanWindows.Clear();
                 _recentCastSourceNames.Clear();
@@ -173,6 +180,7 @@ public sealed class AddObjectAoeService : IDisposable
             _learnedAoeCache.Clear();
             _recordedActionAoeCache.Clear();
             _recordedActionAoeMisses.Clear();
+            _firstCastLearnMisses.Clear();
         }
     }
 
@@ -265,6 +273,11 @@ public sealed class AddObjectAoeService : IDisposable
         // 4. 録画から「この NPC の出現直後のアクション」を学習し、action lookup で半径＋形状を引く。
         if (_recordings is not null && _actionLookup is not null && dataId != 0)
         {
+            lock (_gate)
+            {
+                // 既に「学習できない」と判明済みなら全録画フルスキャンを再実行しない。
+                if (_firstCastLearnMisses.Contains(cacheKey)) return null;
+            }
             try
             {
                 var candidates = _recordings.FindNpcActionCandidatesAfterAppearance(_currentZone, dataId, name);
@@ -291,6 +304,13 @@ public sealed class AddObjectAoeService : IDisposable
                     _log.Information(
                         "[FfxivEchoes] AddObjectAoe 学習保留: {Name} dataId={DataId} は複数 action 候補があるため自動固定しません ({Count} candidates)",
                         name, dataId, candidates.Count);
+                }
+
+                // 候補なし／自動固定保留に至った。結果は決定的なので負キャッシュし、出現や
+                // 0.5 秒ライブスキャン窓ごとの全録画フルスキャン再実行を止める。
+                lock (_gate)
+                {
+                    _firstCastLearnMisses.Add(cacheKey);
                 }
             }
             catch (Exception ex)
