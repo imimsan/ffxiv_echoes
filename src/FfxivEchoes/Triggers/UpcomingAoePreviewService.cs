@@ -79,6 +79,8 @@ public sealed class UpcomingAoePreviewService : IDisposable
             case ZoneChangedEvent z:
                 _currentZone = string.IsNullOrEmpty(z.ZoneName) ? "Unknown" : z.ZoneName;
                 _cachesDirty = true;
+                // 新ゾーンの初回 source 解決が直前走査のスロットルで遅れないようリセット。
+                _lastTableScan = DateTimeOffset.MinValue;
                 lock (_gate)
                 {
                     _lastConfirmRel.Clear();

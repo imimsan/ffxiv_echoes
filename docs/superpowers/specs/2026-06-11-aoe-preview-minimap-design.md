@@ -65,7 +65,7 @@ MinimapWindow 予測レイヤ（新規 API: SetPredictedAoe / UpdatePredictedAoe
 - actor 解決: 「source 名 → EntityId」キャッシュ + `IObjectTable.SearchById`。miss 時のみ ObjectTable 再走査（0.5 秒に 1 回まで）。
 - 昇格: `CastStartedEvent` を購読し、同一 cast_id（無ければ同一 source+label）の予測アイテムを即削除。以降は既存の確定経路（AutoTelegraphService）が描く。
 - 排他候補（真偽など）: 同時刻帯（±3 秒）の別 cast_id 変種が両方 upcoming に残っている場合、**両方を候補として薄表示**する。分岐確定後は上流の分岐棄却で自動的に 1 つへ絞られる。
-- TTL 安全弁: 各予測アイテムは `Time + 2 秒` を過ぎたら描画対象から外す（予測が外れた場合の残留防止）。`Publish` が 1 秒以上呼ばれない場合もレイヤをクリア（窓が閉じた場合の残留防止）。
+- TTL 安全弁: 候補選択が毎フレーム「残り時間 > 0」を要求するため、予測が外れたアイテムは時刻経過で自動的に描画対象から外れる。`Publish` が 1.5 秒以上呼ばれない場合はミニマップ側でレイヤをクリア（窓が閉じた場合の残留防止）。
 
 ### 4.3 MinimapWindow 予測レイヤ
 
