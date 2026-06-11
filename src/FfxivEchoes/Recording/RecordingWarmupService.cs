@@ -18,11 +18,16 @@ namespace FfxivEchoes.Recording;
 /// </remarks>
 public sealed class RecordingWarmupService : IDisposable
 {
+    // 戦闘終了で録画ファイルが閉じてから再ウォームを始めるまでの猶予。
+    // 録画 writer の最終 flush / close が終わるのを待つ。
+    private static readonly TimeSpan PostCombatWarmupDelay = TimeSpan.FromSeconds(2);
+
     private readonly RecordingScanner _scanner;
     private readonly IPluginLog _log;
     private readonly IDisposable _zoneSub;
     private readonly IDisposable _combatStartSub;
     private readonly IDisposable _combatEndSub;
+    private volatile string _currentZone = "Unknown";
 
     public RecordingWarmupService(IEventBus bus, RecordingScanner scanner, IPluginLog log)
     {
@@ -32,7 +37,7 @@ public sealed class RecordingWarmupService : IDisposable
         // 戦闘中は録画キャッシュを固定して、フェーズ移行時の全録画同期再読込（フレーム落ち）を防ぐ（FIX-03）。
         // ウォームアップで zone 入場時にキャッシュ生成済みなので、固定中もキャッシュヒットする。
         _combatStartSub = bus.Subscribe<CombatStartedEvent>(_ => _scanner.SetCombatCacheLock(true));
-        _combatEndSub = bus.Subscribe<CombatEndedEvent>(_ => _scanner.SetCombatCacheLock(false));
+        _combatEndSub = bus.Subscribe<CombatEndedEvent>(_ => OnCombatEnded());
     }
 
     private void OnZoneChanged(ZoneChangedEvent ev)
@@ -40,7 +45,22 @@ public sealed class RecordingWarmupService : IDisposable
         // ゾーン移動したら固定を解除（前回戦闘が CombatEnded を出さずに離脱したケースに備える）。
         _scanner.SetCombatCacheLock(false);
         var zone = string.IsNullOrEmpty(ev.ZoneName) ? "Unknown" : ev.ZoneName;
+        _currentZone = zone;
         _ = Task.Run(() => WarmUp(zone));
+    }
+
+    private void OnCombatEnded()
+    {
+        _scanner.SetCombatCacheLock(false);
+        // プル終了で録画が 1 本増えてキャッシュ署名が変わる。次プルの CombatStarted フレームで
+        // 全録画の同期再読込（連続プルの開幕の固まり。ファイル数に比例して悪化）が起きないよう、
+        // 録画 close を待ってからバックグラウンドで温め直す。
+        var zone = _currentZone;
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(PostCombatWarmupDelay).ConfigureAwait(false);
+            WarmUp(zone);
+        });
     }
 
     private void WarmUp(string zone)

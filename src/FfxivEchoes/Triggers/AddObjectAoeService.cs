@@ -615,13 +615,23 @@ public sealed class AddObjectAoeService : IDisposable
 
         var file = _store.GetByZone(_currentZone);
         var arena = AutoAoeDisplayPolicy.ResolveArena(file);
+        // 無名床オブジェクト（EObj、data_id 2,000,000 帯）は数が少なく挙動調査中のため、
+        // 受理/棄却の判断を INFO で残す（絶ケフカの氷床 2015266 等の不発火を特定する診断）。
+        var isFloorEObj = string.IsNullOrWhiteSpace(ev.ObjectName) && ev.DataId >= 2000000;
         if (!IsUsableObjectAoePosition(ev.Position, arena.LockedArenaCenter, arena.ArenaRadius))
         {
+            if (isFloorEObj)
+            {
+                _log.Information(
+                    "[FfxivEchoes] AddObjectAoe: 床オブジェクト位置棄却 data_id={DataId} pos=({X:0.0},{Z:0.0}) arenaCenter={Center} r={R}",
+                    ev.DataId, ev.Position.X, ev.Position.Z, arena.LockedArenaCenter, arena.ArenaRadius);
+            }
             return;
         }
 
         var key = MakeGroupKey(ev.DataId, ev.ObjectName);
         var now = ev.Timestamp;
+        int memberCount;
         lock (_gate)
         {
             CleanupExpiredGroups(now);
@@ -632,6 +642,14 @@ public sealed class AddObjectAoeService : IDisposable
                 _groups[key] = group;
             }
             group.Add(ev.DataId, ev.EntityId ?? ev.ObjectId, ev.Position, now, ev.ObjectName);
+            memberCount = group.Members.Count;
+        }
+
+        if (isFloorEObj)
+        {
+            _log.Information(
+                "[FfxivEchoes] AddObjectAoe: 床オブジェクト受理 data_id={DataId} pos=({X:0.0},{Z:0.0}) members={Count}",
+                ev.DataId, ev.Position.X, ev.Position.Z, memberCount);
         }
 
         // 単体オブジェクト AoE は「学習済みか」を見てから発火可否を決める。
@@ -886,11 +904,10 @@ public sealed class AddObjectAoeService : IDisposable
         lock (_gate)
         {
             CleanupExpiredGroups(now);
-            if (!AutoAoeDisplayPolicy.IsEnabled(file))
-            {
-                _groups.Clear();
-                return;
-            }
+            // 注意: ここで IsEnabled(file)=false を理由に _groups.Clear() してはならない。
+            // show_auto_telegraphs は「自動推測」の抑制フラグで、手動 object_aoe_rules の
+            // グループまで消すと OFF ゾーンでルールが永遠に発火しない（絶ケフカで顕在化）。
+            // 自動/手動の出し分けは下の ShouldDrawObjectGroup(hasManualRule) が行う。
 
             foreach (var (key, group) in _groups)
             {
