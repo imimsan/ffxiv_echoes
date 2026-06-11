@@ -896,11 +896,13 @@ public sealed class AddObjectAoeService : IDisposable
             {
                 // 発火条件：複数体（既定 ≥2）、または学習済みの単発 NPC 1 体でも発火
                 var hasLearned = HasLearnedAoeUnsafe(file, group.DataId, group.Name);
+                var hasRule = HasManualRule(file, group.DataId, group.Name);
                 if (!AutoAoeDisplayPolicy.ShouldDrawObjectGroup(
                         file,
                         group.Members.Count,
                         hasLearned,
-                        MinGroupSize))
+                        MinGroupSize,
+                        hasRule))
                 {
                     continue;
                 }
@@ -1085,6 +1087,11 @@ public sealed class AddObjectAoeService : IDisposable
         }
     }
 
+    /// <summary>攻略登録の手動 object_aoe_rule に一致するか（show_auto_telegraphs ゲートのバイパス判定用）。</summary>
+    private static bool HasManualRule(TriggerFile? file, uint dataId, string name)
+        => ObjectAoeRuleResolver.TryResolve(
+            file, dataId, name, AutoAoeDisplayPolicy.ResolveArena(file), out _);
+
     /// <summary>
     /// グループキーごと（≒ NPC 名）に「Lumina/録画/辞書から半径が分かっているか」をチェック。
     /// 1 体のみでも発火させてよいかの判定に使う。lock 済前提。
@@ -1188,11 +1195,13 @@ public sealed class AddObjectAoeService : IDisposable
             shapeNotes.Add(learned.Value.ShapeNote);
         }
 
+        var hasRule = HasManualRule(file, group.DataId, group.Name);
         if (!AutoAoeDisplayPolicy.ShouldDrawObjectGroup(
                 file,
                 zones.Count,
                 hasLearnedAoe: zones.Count > 0,
-                minGroupSize: MinGroupSize))
+                minGroupSize: MinGroupSize,
+                hasManualRule: hasRule))
         {
             _log.Information(
                 "[FfxivEchoes] AddObjectAoe: {Name} ×{Count} — 半径/形状未学習のため描画しません",

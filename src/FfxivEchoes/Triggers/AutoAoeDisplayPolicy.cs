@@ -18,18 +18,29 @@ public static class AutoAoeDisplayPolicy
         return file?.AutoSettings.ShowAutoTelegraphs == true;
     }
 
+    /// <summary>
+    /// オブジェクトグループ AoE を描画してよいか。攻略登録の手動ルール（hasManualRule）は
+    /// ユーザーの明示的意思なので、自動推測テレグラフの抑制フラグ（show_auto_telegraphs=false）
+    /// では殺さない。学習ベース（hasLearnedAoe）は従来通り自動扱いでフラグに従う。
+    /// </summary>
     public static bool ShouldDrawObjectGroup(
         TriggerFile? file,
         int objectCount,
         bool hasLearnedAoe,
-        int minGroupSize)
+        int minGroupSize,
+        bool hasManualRule = false)
     {
-        if (!IsEnabled(file) || objectCount <= 0)
+        if (objectCount <= 0)
         {
             return false;
         }
 
-        if (hasLearnedAoe && objectCount == 1)
+        if (!hasManualRule && !IsEnabled(file))
+        {
+            return false;
+        }
+
+        if ((hasLearnedAoe || hasManualRule) && objectCount == 1)
         {
             return true;
         }

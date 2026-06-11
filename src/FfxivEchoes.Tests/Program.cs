@@ -242,6 +242,7 @@ var tests = new List<(string Name, Action Body)>
     ("PredictedAoePreview suppressed by confirmed cast", PredictedAoePreview_SuppressedByConfirmedCast),
     ("CastStartedEvent serializes source world and rotation", CastStartedEvent_SerializesSourceWorldAndRotation),
     ("CastStartedEvent omits source fields when null", CastStartedEvent_OmitsSourceFieldsWhenNull),
+    ("ShouldDrawObjectGroup manual rule bypasses auto telegraph gate", ShouldDrawObjectGroup_ManualRuleBypassesAutoGate),
 };
 
 var failed = 0;
@@ -5676,6 +5677,39 @@ static void SequenceEqual<T>(IReadOnlyList<T> expected, IReadOnlyList<T> actual,
 /// <see cref="IActionLookup"/> の単純 in-memory モック。AoeResolver / 3 サービスを
 /// Dalamud / Lumina 抜きでテストできるようにする目的。
 /// </summary>
+static void ShouldDrawObjectGroup_ManualRuleBypassesAutoGate()
+{
+    var fileOff = new TriggerFile
+    {
+        AutoSettings = new AutoSettings { ShowAutoTelegraphs = false },
+    };
+
+    // 手動ルール一致なら show_auto_telegraphs=false でも描画する（1体でも可）
+    True(AutoAoeDisplayPolicy.ShouldDrawObjectGroup(fileOff, 1, hasLearnedAoe: false, minGroupSize: 2, hasManualRule: true),
+        "手動ルールは auto OFF でも 1 体から描画");
+    True(AutoAoeDisplayPolicy.ShouldDrawObjectGroup(fileOff, 4, hasLearnedAoe: false, minGroupSize: 2, hasManualRule: true),
+        "手動ルール複数体も描画");
+
+    // 手動ルール無しは従来通り auto OFF で抑制
+    False(AutoAoeDisplayPolicy.ShouldDrawObjectGroup(fileOff, 4, hasLearnedAoe: true, minGroupSize: 2, hasManualRule: false),
+        "学習のみ（自動推測）は auto OFF で抑制（従来挙動）");
+
+    // auto ON の従来挙動は不変
+    var fileOn = new TriggerFile
+    {
+        AutoSettings = new AutoSettings { ShowAutoTelegraphs = true },
+    };
+    True(AutoAoeDisplayPolicy.ShouldDrawObjectGroup(fileOn, 1, hasLearnedAoe: true, minGroupSize: 2, hasManualRule: false),
+        "auto ON: 学習済み 1 体は描画（従来）");
+    False(AutoAoeDisplayPolicy.ShouldDrawObjectGroup(fileOn, 1, hasLearnedAoe: false, minGroupSize: 2, hasManualRule: false),
+        "auto ON: 未学習 1 体は抑制（従来）");
+    True(AutoAoeDisplayPolicy.ShouldDrawObjectGroup(fileOn, 2, hasLearnedAoe: false, minGroupSize: 2, hasManualRule: false),
+        "auto ON: グループ 2 体は描画（従来）");
+    // 0 体は常に false
+    False(AutoAoeDisplayPolicy.ShouldDrawObjectGroup(fileOff, 0, hasLearnedAoe: false, minGroupSize: 2, hasManualRule: true),
+        "0 体は描画しない");
+}
+
 internal sealed class InMemoryActionLookup : IActionLookup
 {
     private readonly Dictionary<uint, ActionGeometry> _map = new();
