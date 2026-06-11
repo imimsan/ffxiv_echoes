@@ -649,7 +649,7 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
                     var angle = item.DirectionAngleRad is { } rad
                         ? rad
                         : ParseDirectionAngle(item.Direction) * MathF.PI / 180f;
-                    DrawHalfPlane(draw, center, r, angle);
+                    DrawHalfPlane(draw, center, r, angle, fillOverride, strokeOverride);
                     break;
                 }
 
@@ -1255,7 +1255,9 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
         draw.AddCircleFilled(origin, innerR * 0.95f, safeFill, 32);
     }
 
-    private static void DrawHalfPlane(ImDrawListPtr draw, Vector2 center, float r, float angle)
+    private static void DrawHalfPlane(
+        ImDrawListPtr draw, Vector2 center, float r, float angle,
+        uint? fillOverride = null, uint? strokeOverride = null)
     {
         const int Segments = 36;
         var dangerRadius = r * 1.02f;
@@ -1269,12 +1271,12 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
                 center.X + MathF.Cos(a) * dangerRadius,
                 center.Y + MathF.Sin(a) * dangerRadius));
         }
-        draw.PathFillConvex(ColDanger);
+        draw.PathFillConvex(fillOverride ?? ColDanger);
 
         var tangent = angle + MathF.PI / 2f;
         var aSide = new Vector2(center.X + MathF.Cos(tangent) * r, center.Y + MathF.Sin(tangent) * r);
         var bSide = new Vector2(center.X - MathF.Cos(tangent) * r, center.Y - MathF.Sin(tangent) * r);
-        draw.AddLine(aSide, bSide, ColDangerLine, 2.5f);
+        draw.AddLine(aSide, bSide, strokeOverride ?? ColDangerLine, 2.5f);
 
         var safeCenter = new Vector2(
             center.X - MathF.Cos(angle) * r * 0.58f,
