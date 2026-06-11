@@ -84,7 +84,7 @@ MinimapWindow 予測レイヤ（新規 API: SetPredictedAoe / UpdatePredictedAoe
 ### 4.5 録画位置記録（案 B 仕込み）
 
 - `CastStartedEvent` に `SourceWorld (Vector3?)` と `SourceRotation (float?)` を追加（キャプチャ地点で actor から取得。取得不能なら null）。
-- `EventSerializer` の cast_start 出力に `source_x/y/z`（小数 3 桁丸め）と `source_rot`（ラジアン、3 桁丸め）を追加。null なら省略（既存の optional フィールドと同じ流儀）。
+- `EventSerializer` の cast_start 出力に `source_x/y/z`（小数 3 桁丸め）と `source_rot`（ラジアン、4 桁丸め）を追加。null なら省略（既存の optional フィールドと同じ流儀）。
 - 既存の読み手（RecordingAggregationReader 等）は未知フィールドを無視するため互換性影響なし。読み手・集計・再生は本スコープ外。
 
 ## 5. データフロー（1 フレーム）
