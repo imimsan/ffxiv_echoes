@@ -236,6 +236,10 @@ var tests = new List<(string Name, Action Body)>
     ("EventMatcher maps tether events to tether/tether_remove type names", EventMatcher_MapsTetherTypeNames),
     ("TtsHandler EnqueueByPriority orders priority first and protects from overflow", TtsHandler_EnqueueByPriority_OrdersAndProtects),
     ("AutoTelegraph ShouldConsiderSuppress excludes branch-rejected and explicit-trigger mechanics", AutoTelegraph_ShouldConsiderSuppress_ExcludesRejectedAndTriggered),
+    ("PredictedAoePreview selects cast_start candidates within window", PredictedAoePreview_SelectsCandidatesWithinWindow),
+    ("PredictedAoePreview dedups same cast and caps count", PredictedAoePreview_DedupsSameCastAndCapsCount),
+    ("PredictedAoePreview skips oversized AoE", PredictedAoePreview_SkipsOversizedAoe),
+    ("PredictedAoePreview suppressed by confirmed cast", PredictedAoePreview_SuppressedByConfirmedCast),
 };
 
 var failed = 0;
@@ -5517,6 +5521,60 @@ static void HasPlaceholderActionUsedTarget_PassesValidTargets()
         TargetWorld: null);
     False(AutoTelegraphService.HasPlaceholderActionUsedTarget(noWorld),
         "TargetWorld null は placeholder と判定しない（snapshot 失敗ケース）");
+}
+
+static void PredictedAoePreview_SelectsCandidatesWithinWindow()
+{
+    var items = new List<UpcomingItem>
+    {
+        new(Time: 99.0, Icon: "⚡", Label: "過去技", Sub: "", EventType: "cast_start", Source: "ケフカ", Color: 0u, Id: "0x9E11"),
+        new(Time: 102.0, Icon: "⚡", Label: "両翼斬り", Sub: "", EventType: "cast_start", Source: "ケフカ", Color: 0u, Id: "0x9E00"),
+        new(Time: 103.0, Icon: "AA", Label: "AA", Sub: "", EventType: "auto_attack", Source: "ケフカ", Color: 0u),
+        new(Time: 104.0, Icon: "⚡", Label: "両翼斬り", Sub: "", EventType: "cast_start", Source: "ケフカ", Color: 0u, Id: "0x9E01"),
+        new(Time: 105.0, Icon: "東", Label: "散開", Sub: "note", EventType: "note", Source: null, Color: 0u),
+        new(Time: 130.0, Icon: "⚡", Label: "ウェイブ", Sub: "", EventType: "cast_start", Source: "ケフカ", Color: 0u, Id: "0x9E10"),
+    };
+    var output = new List<UpcomingItem>();
+    PredictedAoePreviewPolicy.SelectPreviewCandidates(items, nowRel: 100.0, advanceSec: 10.0, maxItems: 4, output);
+
+    Equal(2, output.Count, "窓内の cast_start のみ（過去・窓外・AA・note は除外）");
+    Equal("0x9E00", output[0].Id, "時刻順 1 件目");
+    Equal("0x9E01", output[1].Id, "同名でも別 cast_id（真偽の両候補）は両方残る");
+}
+
+static void PredictedAoePreview_DedupsSameCastAndCapsCount()
+{
+    var items = new List<UpcomingItem>
+    {
+        new(Time: 101.0, Icon: "⚡", Label: "技A", Sub: "", EventType: "cast_start", Source: "ケフカ", Color: 0u, Id: "0x9E00"),
+        new(Time: 102.0, Icon: "⚡", Label: "技A", Sub: "", EventType: "cast_start", Source: "ケフカ", Color: 0u, Id: "0x9E00"),
+        new(Time: 103.0, Icon: "⚡", Label: "技B", Sub: "", EventType: "cast_start", Source: "ケフカ", Color: 0u, Id: "0x9E01"),
+        new(Time: 104.0, Icon: "⚡", Label: "技C", Sub: "", EventType: "cast_start", Source: "ケフカ", Color: 0u, Id: "0x9E02"),
+        new(Time: 105.0, Icon: "⚡", Label: "技D", Sub: "", EventType: "cast_start", Source: "ケフカ", Color: 0u, Id: "0x9E03"),
+    };
+    var output = new List<UpcomingItem>();
+    PredictedAoePreviewPolicy.SelectPreviewCandidates(items, nowRel: 100.0, advanceSec: 10.0, maxItems: 3, output);
+
+    Equal(3, output.Count, "同一 cast_id+source は 1 件に集約され、maxItems で打ち切る");
+    Equal("0x9E00", output[0].Id, "重複は最早 1 件");
+    Equal("0x9E01", output[1].Id, "2 件目");
+    Equal("0x9E02", output[2].Id, "3 件目（0x9E03 は cap で落ちる）");
+}
+
+static void PredictedAoePreview_SkipsOversizedAoe()
+{
+    True(PredictedAoePreviewPolicy.ShouldSkipOversized(2, 25f), "円形 25m は全体扱い");
+    True(PredictedAoePreviewPolicy.ShouldSkipOversized(5, 30f), "PBAoE 30m は全体扱い");
+    False(PredictedAoePreviewPolicy.ShouldSkipOversized(2, 24.9f), "円形 24.9m は表示");
+    True(PredictedAoePreviewPolicy.ShouldSkipOversized(3, 30f), "扇 30m は全体扱い");
+    False(PredictedAoePreviewPolicy.ShouldSkipOversized(3, 29.9f), "扇 29.9m は表示");
+}
+
+static void PredictedAoePreview_SuppressedByConfirmedCast()
+{
+    True(PredictedAoePreviewPolicy.IsSuppressedByConfirmedCast(105.0, 103.0), "確定 ±6s 内は抑制");
+    False(PredictedAoePreviewPolicy.IsSuppressedByConfirmedCast(115.0, 103.0), "12s 離れた次回出現は抑制しない");
+    False(PredictedAoePreviewPolicy.IsSuppressedByConfirmedCast(105.0, null), "未観測なら抑制しない");
 }
 
 static void Equal<T>(T expected, T actual, string label)
