@@ -340,6 +340,50 @@ public static class UpcomingTimelinePolicy
         return segmented.CommonAgg;
     }
 
+    /// <summary>
+    /// 連続プル（絶ケフカ等の Ultimate）でフェーズが進み、別セグメント（後半 等）の判定キャストを
+    /// 観測したかを判定する。現在と同じセグメントへの解決なら false（再アンカしない＝チラつき防止。
+    /// 前半中に前半開幕キャストが再出現しても誤って飛ばない）。
+    /// </summary>
+    public static bool ShouldReanchorSegment(string? currentFirstCastId, string resolvedFirstCastId)
+        => string.IsNullOrEmpty(currentFirstCastId)
+           || !string.Equals(currentFirstCastId, resolvedFirstCastId, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// セグメント相対秒（その練習プルの戦闘開始基準）を、ライブ戦闘の経過秒へ写像する一律オフセット。
+    /// 観測した境界キャストのライブ時刻 <paramref name="nowRel"/> と、そのキャストのセグメント内代表時刻
+    /// <paramref name="representativeTime"/> の差。例: 後半開幕を nowRel=450 で観測・代表時刻 7.165 → +442.835。
+    /// </summary>
+    public static double ComputeSegmentOffset(double nowRel, double representativeTime)
+        => nowRel - representativeTime;
+
+    /// <summary>指定 cast_id の cast_start 集計イベントをセグメント集計から引く（無ければ null）。</summary>
+    public static AggregatedEvent? FindCastStartEvent(AggregatedEvents? agg, uint castId)
+    {
+        if (agg is null) return null;
+        foreach (var ev in agg.Events)
+        {
+            if (ev.Key.Type != "cast_start") continue;
+            if (AoeResolver.TryParseCastId(ev.Key.Id ?? string.Empty, out var id) && id == castId)
+            {
+                return ev;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// セグメント内での境界キャストの代表時刻（最も早い occurrence）。<see cref="ComputeSegmentOffset"/> の
+    /// 基準に使う。集計に無ければ null。
+    /// </summary>
+    public static double? ResolveSegmentRepresentativeTime(AggregatedEvents? activeSegAgg, uint castId)
+    {
+        var ev = FindCastStartEvent(activeSegAgg, castId);
+        if (ev is null) return null;
+        var occurrences = RecordingPredictionPlanner.GetOccurrences(ev);
+        return occurrences.Count > 0 ? occurrences[0].RepresentativeTimeSeconds : (double?)null;
+    }
+
     /// <summary>直近予測が空のときの表示文言（本当に録画が無い場合）。</summary>
     public const string EmptyNoRecordings = "予測データなし — 録画してから 1 戦してください";
 

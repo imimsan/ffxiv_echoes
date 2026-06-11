@@ -44,6 +44,10 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
     // 実戦で観測したボス cast から確定したプルセグメント（前半/後半 等）の判定キャスト ID。
     // null = 未確定（開幕の最初のボス cast 観測まで）。CombatStarted / ZoneChanged で reset。
     private string? _activeSegmentFirstCastId;
+    // 連続プル（絶ケフカ等の Ultimate）でセグメントが切り替わったとき、当該セグメントの相対秒
+    // （その練習プルの戦闘開始基準）をライブ戦闘の経過秒へ写像する一律オフセット。再アンカ時に
+    // nowRel - 境界キャスト代表時刻 で算出し、以後 CollectUpcoming で segment 予測に加算する。
+    private double _segmentRelativeOffset;
 
     public UpcomingEventsWindow(
         IEventBus bus, CombatClock combatClock, TriggerStore store,
@@ -85,6 +89,7 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
             case ZoneChangedEvent z:
                 _currentZone = string.IsNullOrEmpty(z.ZoneName) ? "Unknown" : z.ZoneName;
                 _activeSegmentFirstCastId = null;
+                _segmentRelativeOffset = 0;
                 ClearLiveAutoAttacks();
                 InvalidateCache();
                 UpdateVisibility();
@@ -92,6 +97,7 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
             case CombatStartedEvent:
                 _inCombat = true;
                 _activeSegmentFirstCastId = null;
+                _segmentRelativeOffset = 0;
                 ClearLiveAutoAttacks();
                 InvalidateCache();
                 UpdateVisibility();
@@ -99,12 +105,15 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
             case CombatEndedEvent:
                 _inCombat = false;
                 _activeSegmentFirstCastId = null;
+                _segmentRelativeOffset = 0;
                 IsOpen = false;
                 ClearLiveAutoAttacks();
                 ClearCache();
                 break;
-            case CastStartedEvent c when _inCombat && _activeSegmentFirstCastId is null:
-                TryAnchorSegment(c);
+            // 連続プルではフェーズが進むたびに再判定する。ガードを外し TryAnchorOrDrift 内で
+            // 「別セグメントへ再アンカ」or「同一セグメント内ドリフト微補正」を判断する。
+            case CastStartedEvent c when _inCombat:
+                TryAnchorOrDrift(c);
                 break;
             case BranchResolvedEvent:
                 // 分岐確定 → タイムラインを再構築（rejected branch の mechanic を除外）
@@ -589,10 +598,13 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
         var list = new List<UpcomingItem>();
         foreach (var template in templates)
         {
-            // 表示バーは発生源（ボス）別オフセットを使う。2 体フェーズで両ボスが独立にドリフトしても
-            // 各ボスのバーが正しく追従する（source 未記録/1 体運用ではグローバルにフォールバック）。
-            var t = template.RelativeTime
-                + (template.ApplySyncOffset ? _syncOffset.OffsetForSource(template.Source) : 0.0);
+            // ApplySyncOffset=true（従来 / 単群・未確定）は発生源別 SyncOffset を加算。
+            // ApplySyncOffset=false（セグメント確定モードの予測・ノート）は窓側 _segmentRelativeOffset で
+            // セグメント相対秒→ライブ経過秒へ写像する。両者は排他（二重計上しない）。
+            // ※ライブ AA は _liveAutoAttackTemplates の別ループで絶対時刻処理（ここには来ない）。
+            var t = template.ApplySyncOffset
+                ? template.RelativeTime + _syncOffset.OffsetForSource(template.Source)
+                : template.RelativeTime + _segmentRelativeOffset;
             if (!UpcomingTimelinePolicy.ShouldDisplayUpcomingItem(t, nowRel)) continue;
             list.Add(new UpcomingItem(
                 Time: t,
@@ -716,9 +728,10 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
         }
     }
 
-    // 実戦で観測したボス cast から、前半/後半どちらのプルセグメントに居るかを確定する。
-    // 確定したらタイムラインを再構築し、以後は当該セグメントの予測のみ表示する。
-    private void TryAnchorSegment(CastStartedEvent cast)
+    // 実戦で観測したボス cast から、(a) 別セグメント（前半→後半 等）へ進んだら再アンカし、
+    // 当該セグメントの相対秒をライブ時刻へ写像する offset を更新、(b) 同一セグメント内なら
+    // ドリフト微補正のみ行う。連続プル（絶ケフカ等の Ultimate）で後半タイムラインが正しい時刻で出る。
+    private void TryAnchorOrDrift(CastStartedEvent cast)
     {
         SegmentedAggregate seg;
         try
@@ -735,14 +748,53 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
             return;
         }
 
+        var nowRel = _combatClock.RelativeSecondsAt(cast.Timestamp);
+        if (nowRel is null)
+        {
+            return;
+        }
+
         var party = new HashSet<string>(
             _recordings.ListPartyMembers(_currentZone),
             StringComparer.OrdinalIgnoreCase);
-        if (UpcomingTimelinePolicy.TryResolveSegment(
+        if (!UpcomingTimelinePolicy.TryResolveSegment(
                 seg.Segments, cast.CastActionId, party, cast.SourceName, out var resolved))
         {
+            // 共通 cast（matchCount>=2）/ PC 詠唱 / 未解決 → 再アンカもドリフトもしない（誤反転防止）。
+            return;
+        }
+
+        if (UpcomingTimelinePolicy.ShouldReanchorSegment(_activeSegmentFirstCastId, resolved))
+        {
+            // 別セグメントへ再アンカ。境界キャストの代表時刻 R から offset = nowRel - R。
+            var activeSegAgg = UpcomingTimelinePolicy.SelectActiveAgg(seg, resolved);
+            var r = UpcomingTimelinePolicy.ResolveSegmentRepresentativeTime(activeSegAgg, cast.CastActionId);
+            if (r is null)
+            {
+                return;
+            }
             _activeSegmentFirstCastId = resolved;
+            _segmentRelativeOffset = UpcomingTimelinePolicy.ComputeSegmentOffset(nowRel.Value, r.Value);
             InvalidateCache();
+        }
+        else
+        {
+            // 同一セグメント内のドリフト微補正。occurrence[0] 固定ではなく currentOffset を考慮した
+            // 最近接 occurrence を使い自己整合させる（前半開幕キャストの再出現で offset を誤らない）。
+            var activeSegAgg = UpcomingTimelinePolicy.SelectActiveAgg(seg, _activeSegmentFirstCastId);
+            var ev = UpcomingTimelinePolicy.FindCastStartEvent(activeSegAgg, cast.CastActionId);
+            if (ev is null)
+            {
+                return;
+            }
+            var rDrift = RecordingPredictionPlanner.FindClosestObservedTime(ev, nowRel.Value, _segmentRelativeOffset);
+            var candidate = nowRel.Value - rDrift;
+            // 大きすぎる飛び（フェーズ跨ぎ同一 cast_id 再利用 等）は棄却。InvalidateCache は呼ばず
+            // 毎フレーム加算で反映してフレームコストを増やさない。
+            if (SyncOffsetTracker.ShouldAcceptOffsetJump(true, _segmentRelativeOffset, candidate, allowLargeJump: false))
+            {
+                _segmentRelativeOffset = candidate;
+            }
         }
     }
 
@@ -767,12 +819,17 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
     {
         var list = new List<UpcomingTemplate>();
         AggregatedEvents? agg = null;
+        // セグメント確定済み（連続プルで前半/後半が分離されている）なら、表示時刻は
+        // SyncOffset ではなく窓側の _segmentRelativeOffset で一律補正する（二重計上を避けるため
+        // ApplySyncOffset=false で生成）。分岐の無いゾーン・未確定時は従来の SyncOffset 経路。
+        var useSegmentMode = false;
 
         try
         {
             // 録画を開幕 cast でプルセグメント分離し、確定セグメント（未確定なら共通技のみ）の集計を使う。
             // これで前半戦闘中に後半技が紛れる混在を断つ。分岐の無いゾーンは従来の全合算にフォールバック。
             var segmented = _recordings.AggregateBySegment(_currentZone);
+            useSegmentMode = segmented.Segments.Count >= 2 && _activeSegmentFirstCastId is not null;
             agg = UpcomingTimelinePolicy.SelectActiveAgg(segmented, _activeSegmentFirstCastId);
         }
         catch
@@ -833,7 +890,8 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
                     Sub: FormatPredictionSub(prediction),
                     EventType: prediction.EventType,
                     Source: prediction.Source,
-                    Color: color));
+                    Color: color,
+                    ApplySyncOffset: !useSegmentMode));
             }
         }
 
@@ -852,7 +910,10 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
                     Sub: note.Role is { Length: > 0 } r ? $"role: {r}" : "note",
                     EventType: "note",
                     Source: null,
-                    Color: 0xFF34D34Du));
+                    Color: 0xFF34D34Du,
+                    // ノート時刻もセグメント集計基準で解決されるため、segment モードでは
+                    // SyncOffset でなく _segmentRelativeOffset で補正する（後半でノートがズレない）。
+                    ApplySyncOffset: !useSegmentMode));
             }
         }
 

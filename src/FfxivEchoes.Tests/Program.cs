@@ -156,6 +156,7 @@ var tests = new List<(string Name, Action Body)>
     ("TryResolveSegment resolves by opening cast and exclusive cast", UpcomingTimelinePolicy_TryResolveSegment_ResolvesByOpeningAndExclusive),
     ("SelectActiveAgg picks confirmed segment and degrades safely", UpcomingTimelinePolicy_SelectActiveAgg_PicksConfirmedSegment),
     ("ResolveEmptyStateMessage avoids misleading record-first text", UpcomingTimelinePolicy_ResolveEmptyStateMessage_ContextAware),
+    ("Segment reanchor + offset maps continuous-pull phases to live time", UpcomingTimelinePolicy_SegmentReanchorAndOffset),
     ("Minimap hides live dots for user-authored layouts", Minimap_HidesLiveDotsForUserAuthoredLayouts),
     ("Minimap keeps self dot for user-authored layouts", Minimap_KeepsSelfDotForUserAuthoredLayouts),
     ("Mechanic arena defaults policy applies profile arena to one mechanic", MechanicArenaDefaultsPolicy_AppliesProfileArenaToMechanic),
@@ -3641,6 +3642,42 @@ static void UpcomingTimelinePolicy_SelectActiveAgg_PicksConfirmedSegment()
     var backAgg = UpcomingTimelinePolicy.SelectActiveAgg(seg, "0x28FA");
     True(backAgg.Events.Any(e => e.Key.Id == "0x2911"), "back-confirmed has アルテマ");
     False(backAgg.Events.Any(e => e.Key.Id == "0x28D1"), "back-confirmed excludes マジックチャージ");
+}
+
+static void UpcomingTimelinePolicy_SegmentReanchorAndOffset()
+{
+    // --- 再アンカ判定（誤反転防止） ---
+    True(UpcomingTimelinePolicy.ShouldReanchorSegment(null, "0x28D1"),
+        "first anchor (current null) → reanchor");
+    False(UpcomingTimelinePolicy.ShouldReanchorSegment("0x28D1", "0x28D1"),
+        "same segment (前半開幕の再出現等) → no reanchor (no-op)");
+    True(UpcomingTimelinePolicy.ShouldReanchorSegment("0x28D1", "0x28FA"),
+        "different segment (前半→後半) → reanchor");
+
+    // --- offset 算出（worked example: 実録画実測値） ---
+    Equal(442.835, Math.Round(UpcomingTimelinePolicy.ComputeSegmentOffset(450.0, 7.165), 3),
+        "P2 入場 offset = nowRel(450) - R(0x28FA 7.165)");
+    Equal(0.0, Math.Round(UpcomingTimelinePolicy.ComputeSegmentOffset(10.169, 10.169), 3),
+        "P1 入場 offset ≈ 0（前半は録画相対秒のまま＝従来一致）");
+
+    // --- セグメント代表時刻の引き出し ---
+    var back = SegAgg(SegCastEv("0x28FA", 7.165), SegCastEv("0x2911", 13.264));
+    var r = UpcomingTimelinePolicy.ResolveSegmentRepresentativeTime(back, 0x28FAu);
+    True(r is not null && Math.Abs(r.Value - 7.165) < 1e-6, "後半開幕 0x28FA の代表時刻 = 7.165");
+    True(UpcomingTimelinePolicy.ResolveSegmentRepresentativeTime(back, 0x9999u) is null,
+        "集計に無い cast_id → null");
+    True(UpcomingTimelinePolicy.FindCastStartEvent(back, 0x2911u) is not null, "FindCastStartEvent ヒット");
+    True(UpcomingTimelinePolicy.FindCastStartEvent(back, 0x9999u) is null, "FindCastStartEvent ミス → null");
+
+    // --- worked example: 連続プル P2 でアルテマが正しいライブ時刻に並ぶ ---
+    var offset = UpcomingTimelinePolicy.ComputeSegmentOffset(450.0, r!.Value);
+    var altimaDisplay = 13.264 + offset; // 後半技アルテマ（録画相対 13.264）
+    True(Math.Abs(altimaDisplay - 456.099) < 0.01, "アルテマ表示時刻 ≈ 456.1（連続プル P2）");
+    True(UpcomingTimelinePolicy.ShouldDisplayUpcomingItem(altimaDisplay, 450.0),
+        "アルテマは nowRel=450 で表示窓内（横45s）に入る");
+    // offset を入れないと過去側に落ちて消える（補正の必要性を固定）。
+    False(UpcomingTimelinePolicy.ShouldDisplayUpcomingItem(13.264, 450.0),
+        "offset 無しだと後半技が過去側(<nowRel)に落ちて非表示＝補正必須");
 }
 
 static void UpcomingTimelinePolicy_ResolveEmptyStateMessage_ContextAware()
