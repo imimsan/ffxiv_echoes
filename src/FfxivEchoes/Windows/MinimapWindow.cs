@@ -16,6 +16,27 @@ using FfxivEchoes.Triggers.Models;
 namespace FfxivEchoes.Windows;
 
 /// <summary>
+/// 俯瞰図に事前描画する予測 AoE の 1 件分。UpcomingAoePreviewService が毎フレーム更新する
+/// （位置・向き・残り秒はサービス側でライブ解決済み）。
+/// </summary>
+public readonly record struct PredictedAoePreviewItem(
+    string Label,
+    double RemainingSec,
+    string Gimmick,
+    double FanDeg,
+    float? DirectionAngleRad,
+    Vector3 SourceWorld,
+    float? AoeRadius,
+    float? AoeHalfWidthM,
+    int? AoeCastType,
+    uint? AoeOmenId,
+    float ArenaRadius,
+    string ArenaShape,
+    float ArenaHalfWidth,
+    float ArenaHalfDepth,
+    Vector3? LockedArenaCenter);
+
+/// <summary>
 /// 俯瞰アリーナ図（ミニマップ）。ギミック発生時に安置/危険ゾーンを上面図で表示する。
 /// </summary>
 /// <remarks>
@@ -58,6 +79,12 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
 
     private readonly List<ArenaItem> _items = new();
     private readonly object _gate = new();
+
+    // 予測 AoE 事前描画レイヤ。UpcomingAoePreviewService が毎フレーム差し替える。
+    // タイムライン HUD 非表示等で更新が止まったら PredictedPreviewStaleAfter で自動クリア（残留防止）。
+    private readonly List<PredictedAoePreviewItem> _predictedPreview = new();
+    private DateTimeOffset _predictedPreviewUpdatedAt = DateTimeOffset.MinValue;
+    private static readonly TimeSpan PredictedPreviewStaleAfter = TimeSpan.FromSeconds(1.5);
     private readonly SafeZoneContextBuilder _contextBuilder;
     private readonly IObjectTable _objectTable;
 
@@ -159,6 +186,27 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
     }
 
     /// <summary>
+    /// 予測 AoE レイヤを丸ごと差し替える（毎フレーム呼ばれる前提。リストはコピーされる）。
+    /// 空リストでクリア。
+    /// </summary>
+    public void SetPredictedAoePreview(IReadOnlyList<PredictedAoePreviewItem> items)
+    {
+        lock (_gate)
+        {
+            _predictedPreview.Clear();
+            for (var i = 0; i < items.Count; i++)
+            {
+                _predictedPreview.Add(items[i]);
+            }
+            _predictedPreviewUpdatedAt = DateTimeOffset.UtcNow;
+        }
+        if (items.Count > 0)
+        {
+            IsOpen = true;
+        }
+    }
+
+    /// <summary>
     /// 指定の cast id で登録された Lumina 自動経路の <see cref="ArenaItem"/> を全削除する。
     /// ユーザー定義 zone（<see cref="StrategyAoeZone.SuppressAutoAoe"/> = true）が
     /// 同じ cast に紐付いて入ってきたとき、自動の不正確 AoE をミニマップから消す用途。
@@ -237,9 +285,14 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
         // すべての active items を Priority desc, ExpiresAt asc でソート。
         // Lumina 自動 AoE が同時に複数ある場合は、別タイルにせず 1 枚の地図へ重ねる。
         ArenaDisplayGroup[] activeGroups;
+        PredictedAoePreviewItem[] preview;
         lock (_gate)
         {
             _items.RemoveAll(it => it.ExpiresAt <= now);
+            if (_predictedPreview.Count > 0 && now - _predictedPreviewUpdatedAt > PredictedPreviewStaleAfter)
+            {
+                _predictedPreview.Clear();
+            }
             var activeSorted = _items
                 .OrderByDescending(it => it.Priority)
                 .ThenBy(it => it.ExpiresAt)
@@ -247,9 +300,12 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
             activeGroups = BuildDisplayGroups(activeSorted)
                 .Take(3)  // 最大 3 グループまで同時表示（古い・低優先度は省略）
                 .ToArray();
+            preview = _predictedPreview.Count == 0
+                ? Array.Empty<PredictedAoePreviewItem>()
+                : _predictedPreview.ToArray();
         }
 
-        if (activeGroups.Length == 0)
+        if (activeGroups.Length == 0 && preview.Length == 0)
         {
             IsOpen = false;
             return;
@@ -257,6 +313,27 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
 
         var draw = ImGui.GetWindowDrawList();
         var scale = ImGuiHelpers.GlobalScale;
+
+        if (activeGroups.Length == 0)
+        {
+            // 確定 AoE が無く予測のみ：1 枚目相当のタイルにアリーナ + 予測形状 + ライブ位置を描く
+            var tilePos = ImGui.GetCursorScreenPos();
+            var size = ArenaSize * scale;
+            var center = new Vector2(tilePos.X + size * 0.5f, tilePos.Y + size * 0.5f);
+            var r = size * 0.5f - 4f * scale;
+            var baseItem = BuildPreviewArenaItem(preview[0]);
+            DrawArena(draw, center, r, baseItem);
+            DrawPredictedPreview(draw, center, r, scale, preview);
+            DrawBoss(draw, center, r, scale, baseItem);
+            DrawPlayerPositions(draw, center, r, scale, baseItem, drawLiveContext: true);
+            ImGui.Dummy(new Vector2(size, size));
+            DrawCallout(draw, tilePos, size, scale,
+                $"予測: {preview[0].Label}",
+                $"{Math.Max(0, preview[0].RemainingSec):0.0}s");
+            ImGui.Dummy(new Vector2(size, CalloutHeight * scale));
+            ImGui.Spacing();
+            return;
+        }
 
         // 1 枚目: フルサイズ。2-3 枚目: 半分サイズで並べる
         for (var idx = 0; idx < activeGroups.Length; idx++)
@@ -276,6 +353,10 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
                 DrawGimmickBody(draw, center, r, layer);
                 // 実 AoE 形状の幾何学的描画（Lumina の CastType + 半径から正確な形を描く）
                 DrawActualAoeShape(draw, center, r, layer);
+            }
+            if (idx == 0 && preview.Length > 0)
+            {
+                DrawPredictedPreview(draw, center, r, scale * tileScale, preview);
             }
             DrawSafeZoneOverlay(draw, center, r, scale * tileScale, item);
             DrawStrategyPositions(draw, center, r, scale * tileScale, item);
@@ -308,6 +389,57 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
             ImGui.Spacing();
         }
     }
+
+    // 予測レイヤの配色：確定（赤系）と明確に区別するアンバー。fill α≈0x30、stroke α≈0xA0。
+    private const uint PreviewFill = 0x3024BFFFu;
+    private const uint PreviewStroke = 0xA024BFFFu;
+    private const uint PreviewText = 0xFF24BFFFu;
+
+    private void DrawPredictedPreview(
+        ImDrawListPtr draw, Vector2 center, float r, float scale,
+        PredictedAoePreviewItem[] preview)
+    {
+        foreach (var p in preview)
+        {
+            var item = BuildPreviewArenaItem(p);
+            DrawGimmickBody(draw, center, r, item, PreviewFill, PreviewStroke);
+            DrawActualAoeShape(draw, center, r, item, PreviewFill, PreviewStroke);
+
+            var labelPos = TryProjectWorldToMap(center, r, item, p.SourceWorld, out var sp) ? sp : center;
+            var text = $"{p.Label} {Math.Max(0, p.RemainingSec):0}s";
+            var ts = ImGui.CalcTextSize(text);
+            var anchor = new Vector2(labelPos.X - ts.X * 0.5f, labelPos.Y - ts.Y - 6f * scale);
+            draw.AddText(new Vector2(anchor.X + 1f, anchor.Y + 1f), 0xCC000000u, text);
+            draw.AddText(anchor, PreviewText, text);
+        }
+    }
+
+    private static ArenaItem BuildPreviewArenaItem(PredictedAoePreviewItem p) => new(
+        Gimmick: p.Gimmick,
+        Callout: p.Label,
+        Priority: 0,
+        Direction: null,
+        FanDeg: p.FanDeg,
+        ArenaRadius: p.ArenaRadius,
+        SafeZoneWorld: null,
+        SafeZoneRadius: 3f,
+        DirectionAngleRad: p.DirectionAngleRad,
+        SourceWorld: p.SourceWorld,
+        StrategyPositions: Array.Empty<StrategyPosition>(),
+        AoeRadius: p.AoeRadius,
+        AoeHalfWidthM: p.AoeHalfWidthM,
+        AoeCastType: p.AoeCastType,
+        AoeOmenId: p.AoeOmenId,
+        MultiSourceWorlds: Array.Empty<Vector3>(),
+        ObjectMarkers: Array.Empty<StrategyObjectMarker>(),
+        AoeZones: Array.Empty<StrategyAoeZone>(),
+        PartyStatusHighlights: Array.Empty<StatusHighlightSpec>(),
+        ArenaShape: p.ArenaShape,
+        ArenaHalfWidth: p.ArenaHalfWidth,
+        ArenaHalfDepth: p.ArenaHalfDepth,
+        LockedArenaCenter: p.LockedArenaCenter,
+        ExpiresAt: DateTimeOffset.MaxValue,
+        AutoLuminaCastId: null);
 
     private static IReadOnlyList<ArenaDisplayGroup> BuildDisplayGroups(IReadOnlyList<ArenaItem> sortedItems)
     {
@@ -378,8 +510,13 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
         draw.AddRect(rectMin, rectMax, ColBorder, 0f, ImDrawFlags.None, 1.5f);
     }
 
-    private void DrawGimmickBody(ImDrawListPtr draw, Vector2 center, float r, ArenaItem item)
+    private void DrawGimmickBody(
+        ImDrawListPtr draw, Vector2 center, float r, ArenaItem item,
+        uint? fillOverride = null, uint? strokeOverride = null)
     {
+        var fillCol = fillOverride ?? ColDanger;
+        var lineCol = strokeOverride ?? ColDangerLine;
+
         // ユーザーが AoE ゾーンを明示的に定義しているなら、そちらを正解として優先描画する。
         // 旧 gimmick タイプ（outer_ring / inner_circle / donut / scatter / stack 等）は
         // 半径 55% / 96% といったハードコード値で描かれるので、実ボス技サイズと乖離しがち。
@@ -403,7 +540,7 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
                 {
                     break;
                 }
-                draw.AddCircleFilled(center, r * 0.96f, ColDanger, 64);
+                draw.AddCircleFilled(center, r * 0.96f, fillCol, 64);
                 draw.AddCircleFilled(center, r * 0.30f, ColSafe, 48);
                 DrawDashedCircle(draw, center, r * 0.30f, ColSafeLine, 2.5f, 24);
                 AddCenteredText(draw, center + new Vector2(0, r * 0.45f), "SAFE", ColSafeLine, 1.05f);
@@ -420,8 +557,8 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
                         ? ArenaProjection.WorldRadiusToMap(aoeM, item.ArenaRadius, r)
                         : r * 0.55f;
                     if (aoeR < 6f) aoeR = 6f;
-                    draw.AddCircleFilled(origin, aoeR, ColDanger, 48);
-                    draw.AddCircle(origin, aoeR, ColDangerLine, 48, 2f);
+                    draw.AddCircleFilled(origin, aoeR, fillCol, 48);
+                    draw.AddCircle(origin, aoeR, lineCol, 48, 2f);
                     AddCenteredText(draw, origin, "!", ColText, 1.4f);
                     AddCenteredText(draw, center + new Vector2(0, r * 0.85f), "外周回避", ColSafeLine, 0.9f);
                     break;
@@ -495,7 +632,7 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
                     {
                         draw.PathLineTo(p);
                     }
-                    draw.PathFillConvex(ColDanger);
+                    draw.PathFillConvex(fillCol);
                     // 外周線
                     for (var i = 0; i <= segments; i++)
                     {
@@ -503,7 +640,7 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
                         var a = angle - halfFan + (halfFan * 2f) * t;
                         draw.PathLineTo(new Vector2(origin.X + MathF.Cos(a) * range, origin.Y + MathF.Sin(a) * range));
                     }
-                    draw.PathStroke(ColDangerLine, ImDrawFlags.None, 1.5f);
+                    draw.PathStroke(lineCol, ImDrawFlags.None, 1.5f);
                     break;
                 }
 
@@ -543,7 +680,7 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
                                                   origin.Y + MathF.Sin(a) * range));
                         }
                         foreach (var p in path) draw.PathLineTo(p);
-                        draw.PathFillConvex(ColDanger);
+                        draw.PathFillConvex(fillCol);
                     }
                     // 前後の安置ラベル
                     var safeFront = new Vector2(origin.X + MathF.Cos(facing) * r * 0.7f,
@@ -902,7 +1039,9 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
     /// 抽象 gimmick（inner_circle 等）と独立に、実際のテレグラフ形状で「これが危険」と示す。
     /// CastType: 2=ターゲット中心円、3/13=コーン、4/12=直線、5=PB AoE、6/7/10=Donut、11=十字。
     /// </summary>
-    private void DrawActualAoeShape(ImDrawListPtr draw, Vector2 mapCenter, float mapR, ArenaItem item)
+    private void DrawActualAoeShape(
+        ImDrawListPtr draw, Vector2 mapCenter, float mapR, ArenaItem item,
+        uint? fillOverride = null, uint? strokeOverride = null)
     {
         // multi_aoe は DrawMultiAoeBody で各位置に既に AoE が描かれているのでここではスキップ
         if (item.Gimmick == "multi_aoe") return;
@@ -936,9 +1075,9 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
             : ArenaProjection.WorldRadiusToMap(radiusM, item.ArenaRadius, mapR);
         if (pixelRadius < 4f) pixelRadius = 4f;
 
-        // 半透明赤で塗り、外周線で形を強調
-        var fill = (ColDanger & 0x00FFFFFFu) | 0x55000000u;
-        var stroke = (ColDangerLine & 0x00FFFFFFu) | 0xFF000000u;
+        // 半透明赤で塗り、外周線で形を強調（オーバーライドがあれば差し替え）
+        var fill = fillOverride ?? ((ColDanger & 0x00FFFFFFu) | 0x55000000u);
+        var stroke = strokeOverride ?? ((ColDangerLine & 0x00FFFFFFu) | 0xFF000000u);
 
         var omenId = item.AoeOmenId ?? 0;
         var isDonut = AoeResolver.IsDonutShape(castType, omenId);
