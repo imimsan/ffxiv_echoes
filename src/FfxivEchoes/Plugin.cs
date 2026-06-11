@@ -153,6 +153,9 @@ public sealed class Plugin : IDalamudPlugin
     // ユーザー要望「不要」に基づき撤去済み。タイムラインは UpcomingEventsWindow（cactbot 風）に統合。
     private UpcomingEventsWindow? _upcomingWindow;
 
+    // ── K3: デバフ HUD ────────────────────────────────────
+    private DebuffHudWindow? _debuffHudWindow;
+
     // ── F4-F7: 安置計算プリセット ─────────────────────────
     private readonly SafeZoneEngine _safeZoneEngine;
     private readonly SafeZoneContextBuilder _safeZoneContextBuilder;
@@ -284,6 +287,10 @@ public sealed class Plugin : IDalamudPlugin
             branchObserver: _branchObserver,
             phaseTracker: _phaseTracker);
         WindowSystem.AddWindow(_upcomingWindow);
+
+        // K3: デバフ HUD（自分の弱体一覧）
+        _debuffHudWindow = new DebuffHudWindow(_eventBus, ObjectTable, DataManager, Configuration);
+        WindowSystem.AddWindow(_debuffHudWindow);
 
         // F4-F7: 安置計算プリセット（合計 15 種）
         SafeZoneEngine? engineRef = null;
@@ -550,6 +557,7 @@ public sealed class Plugin : IDalamudPlugin
         SafeDispose(_overlayWindow, nameof(_overlayWindow));
         SafeDispose(_minimapWindow, nameof(_minimapWindow));
         SafeDispose(_upcomingWindow, nameof(_upcomingWindow));
+        SafeDispose(_debuffHudWindow, nameof(_debuffHudWindow));
         SafeDispose(_worldOverlayWindow, nameof(_worldOverlayWindow));
         SafeDispose(_arenaRulerWindow, nameof(_arenaRulerWindow));
 

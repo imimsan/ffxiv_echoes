@@ -243,6 +243,8 @@ var tests = new List<(string Name, Action Body)>
     ("CastStartedEvent serializes source world and rotation", CastStartedEvent_SerializesSourceWorldAndRotation),
     ("CastStartedEvent omits source fields when null", CastStartedEvent_OmitsSourceFieldsWhenNull),
     ("ShouldDrawObjectGroup manual rule bypasses auto telegraph gate", ShouldDrawObjectGroup_ManualRuleBypassesAutoGate),
+    ("DebuffHud formats remaining seconds", DebuffHud_FormatsRemainingSeconds),
+    ("DebuffHud sorts by remaining and filters permanents", DebuffHud_SortsAndFilters),
 };
 
 var failed = 0;
@@ -5708,6 +5710,34 @@ static void ShouldDrawObjectGroup_ManualRuleBypassesAutoGate()
     // 0 体は常に false
     False(AutoAoeDisplayPolicy.ShouldDrawObjectGroup(fileOff, 0, hasLearnedAoe: false, minGroupSize: 2, hasManualRule: true),
         "0 体は描画しない");
+}
+
+static void DebuffHud_FormatsRemainingSeconds()
+{
+    Equal("9.5s", DebuffHudPolicy.FormatRemaining(9.54f), "10秒未満は小数1桁");
+    Equal("59s", DebuffHudPolicy.FormatRemaining(59.4f), "10秒以上は整数秒");
+    Equal("2m05s", DebuffHudPolicy.FormatRemaining(125f), "60秒以上は m+s");
+    Equal("", DebuffHudPolicy.FormatRemaining(0f), "0以下（永続）は空文字");
+    Equal("", DebuffHudPolicy.FormatRemaining(-1f), "負値も空文字");
+}
+
+static void DebuffHud_SortsAndFilters()
+{
+    var rows = new List<DebuffRow>
+    {
+        new(StatusId: 10, Name: "睡眠", RemainingSec: 5.0f, Stacks: 0),
+        new(StatusId: 11, Name: "被魔法ダメージ増加", RemainingSec: 30.0f, Stacks: 2),
+        new(StatusId: 12, Name: "永続デバフ", RemainingSec: 0f, Stacks: 0),
+        new(StatusId: 13, Name: "ヌル名", RemainingSec: 8.0f, Stacks: 0),
+    };
+    var output = new List<DebuffRow>();
+    DebuffHudPolicy.SelectDisplayRows(rows, output);
+
+    Equal(4, output.Count, "永続（remaining<=0）も表示対象（落とさない）");
+    Equal("睡眠", output[0].Name, "残り秒昇順で 1 番目");
+    Equal("ヌル名", output[1].Name, "残り秒昇順で 2 番目");
+    Equal("被魔法ダメージ増加", output[2].Name, "残り秒昇順で 3 番目");
+    Equal("永続デバフ", output[3].Name, "永続は末尾");
 }
 
 internal sealed class InMemoryActionLookup : IActionLookup

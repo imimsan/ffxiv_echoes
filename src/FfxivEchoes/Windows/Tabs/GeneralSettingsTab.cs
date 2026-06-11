@@ -131,5 +131,17 @@ public sealed class GeneralSettingsTab : ITab
         {
             _configuration.Save();
         }
+
+        ImGui.Spacing();
+        ImGui.Text("HUD");
+        ImGui.Separator();
+
+        var showDebuffHud = _configuration.ShowDebuffHud;
+        if (ImGui.Checkbox("自分のデバフ一覧を表示", ref showDebuffHud))
+        {
+            _configuration.ShowDebuffHud = showDebuffHud;
+            _configuration.Save();
+        }
+        ImGui.TextDisabled("  戦闘中、自分に付いた弱体の名前と残り秒を一覧表示します。");
     }
 }

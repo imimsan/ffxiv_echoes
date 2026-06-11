@@ -54,6 +54,9 @@ public class Configuration : IPluginConfiguration
     public bool ShowPredictedAoeOnMinimap { get; set; } = true;
     public double PredictedAoeAdvanceSec { get; set; } = 10.0;
 
+    // 自分デバフ一覧 HUD
+    public bool ShowDebuffHud { get; set; } = true;
+
     public void Save()
     {
         Plugin.PluginInterface.SavePluginConfig(this);
