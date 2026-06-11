@@ -49,6 +49,9 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
     // nowRel - 境界キャスト代表時刻 で算出し、以後 CollectUpcoming で segment 予測に加算する。
     private double _segmentRelativeOffset;
 
+    /// <summary>俯瞰図への AoE 事前描画ブリッジ。Plugin 起動時に注入される（null なら無効）。</summary>
+    public UpcomingAoePreviewService? AoePreview { get; set; }
+
     public UpcomingEventsWindow(
         IEventBus bus, CombatClock combatClock, TriggerStore store,
         RecordingScanner recordings, SyncOffsetTracker syncOffset,
@@ -177,6 +180,7 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
         }
 
         var items = CollectUpcoming(nowRel.Value);
+        AoePreview?.Publish(items, nowRel.Value);
         DrawHeroAndList(nowRel.Value, items);
     }
 

@@ -76,6 +76,10 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
     private const uint ColRoleHealer = 0xFF6BD377;   // 緑 (#77D36B)
     private const uint ColRoleDps = 0xFF6B6BF6;      // 赤 (#F66B6B)
     private const uint ColRoleNonCombat = 0xFFCCCCCC; // 灰
+    // 予測レイヤの配色：確定（赤系）と明確に区別するアンバー。fill α≈0x30、stroke α≈0xA0。
+    private const uint PreviewFill = 0x3024BFFFu;
+    private const uint PreviewStroke = 0xA024BFFFu;
+    private const uint PreviewText = 0xFF24BFFFu;
 
     private readonly List<ArenaItem> _items = new();
     private readonly object _gate = new();
@@ -389,11 +393,6 @@ public sealed class MinimapWindow : Window, IDisposable, IMinimapSink
             ImGui.Spacing();
         }
     }
-
-    // 予測レイヤの配色：確定（赤系）と明確に区別するアンバー。fill α≈0x30、stroke α≈0xA0。
-    private const uint PreviewFill = 0x3024BFFFu;
-    private const uint PreviewStroke = 0xA024BFFFu;
-    private const uint PreviewText = 0xFF24BFFFu;
 
     private void DrawPredictedPreview(
         ImDrawListPtr draw, Vector2 center, float r, float scale,

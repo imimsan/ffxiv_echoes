@@ -105,6 +105,9 @@ public sealed class Plugin : IDalamudPlugin
     private PredictedObjectSpawnService? _predictedObjectSpawn;
     private PredictedObjectSpawnLearner? _predictedObjectSpawnLearner;
 
+    // ── タイムライン予測 AoE の俯瞰図事前描画 ──────────────────────
+    private UpcomingAoePreviewService? _upcomingAoePreview;
+
     // ── タイムライン分岐の判定サービス（パターン1 / パターン2 を観測で確定）────
     private BranchObserverService? _branchObserver;
 
@@ -370,6 +373,13 @@ public sealed class Plugin : IDalamudPlugin
             branchActiveCheck: _branchObserver.IsActiveOrCommon,
             phaseActiveCheck: _phaseTracker.IsPhaseActive);
 
+        // タイムライン予測 AoE を俯瞰図へ事前描画するサービス。
+        // UpcomingEventsWindow が毎フレーム Publish し、MinimapWindow に反映する。
+        _upcomingAoePreview = new UpcomingAoePreviewService(
+            _eventBus, _triggerStore, _combatClock, DataManager, ObjectTable,
+            _minimapWindow, Configuration, Log);
+        _upcomingWindow!.AoePreview = _upcomingAoePreview;
+
         // 「Cast → N 秒後に Object 出現 → 即時 AoE」パターンを録画学習し、cast 検知時点で
         // 先取り予告を描画するサービス。月の底のパラデイグマ → ケツアクアトル 4 体のような
         // Dalamud ObjectTable 登録遅延が大きいギミックを ObjectTable を待たずに事前可視化。
@@ -497,6 +507,7 @@ public sealed class Plugin : IDalamudPlugin
         // _worldOverlayWindow 解放より前に外す。
         // PredictedCastReminderService は ActorTrackedAoeService に依存するので先に外す。
         SafeDispose(_predictedCastReminder, nameof(_predictedCastReminder));
+        SafeDispose(_upcomingAoePreview, nameof(_upcomingAoePreview));
         SafeDispose(_predictedObjectSpawn, nameof(_predictedObjectSpawn));
         SafeDispose(_branchObserver, nameof(_branchObserver));
         SafeDispose(_phaseTracker, nameof(_phaseTracker));

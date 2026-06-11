@@ -33,12 +33,13 @@ public static class PredictedAoePreviewPolicy
             return;
         }
 
-        foreach (var item in items)
+        for (var i = 0; i < items.Count; i++)
         {
             if (output.Count >= maxItems)
             {
                 break;
             }
+            var item = items[i];
             if (!string.Equals(item.EventType, "cast_start", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
@@ -75,6 +76,7 @@ public static class PredictedAoePreviewPolicy
 
     /// <summary>
     /// 円形（CastType 2/5）25m 以上・その他 30m 以上は回避不能の全体攻撃扱いで事前描画しない。
+    /// 旧 PredictedCastReminderService.TryDrawPredictedMarker と同じ基準。
     /// </summary>
     public static bool ShouldSkipOversized(int castType, float radiusM)
         => (castType is 2 or 5 && radiusM >= 25f) || radiusM >= 30f;
