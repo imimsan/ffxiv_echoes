@@ -613,7 +613,8 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
                 Sub: template.Sub,
                 EventType: template.EventType,
                 Source: template.Source,
-                Color: template.Color));
+                Color: template.Color,
+                Id: template.Id));
         }
 
         UpcomingTemplate[] liveAutoAttacks;
@@ -891,7 +892,8 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
                     EventType: prediction.EventType,
                     Source: prediction.Source,
                     Color: color,
-                    ApplySyncOffset: !useSegmentMode));
+                    ApplySyncOffset: !useSegmentMode,
+                    Id: isAa ? null : prediction.Id));
             }
         }
 
@@ -966,15 +968,6 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
         return s[..maxChars] + "…";
     }
 
-    private readonly record struct UpcomingItem(
-        double Time,
-        string Icon,
-        string Label,
-        string Sub,
-        string EventType,
-        string? Source,
-        uint Color);
-
     private readonly record struct UpcomingTemplate(
         double RelativeTime,
         string Icon,
@@ -983,5 +976,20 @@ public sealed class UpcomingEventsWindow : Window, IDisposable
         string EventType,
         string? Source,
         uint Color,
-        bool ApplySyncOffset = true);
+        bool ApplySyncOffset = true,
+        string? Id = null);
 }
+
+/// <summary>
+/// タイムライン HUD の表示 1 行分。Id は録画予測の cast_id（"0x…" 形式、ノート/ライブ AA は null）。
+/// UpcomingAoePreviewService が AoE 事前描画の形状解決キーとして使う。
+/// </summary>
+public readonly record struct UpcomingItem(
+    double Time,
+    string Icon,
+    string Label,
+    string Sub,
+    string EventType,
+    string? Source,
+    uint Color,
+    string? Id = null);
