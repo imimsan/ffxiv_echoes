@@ -1,3 +1,4 @@
+using System;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility;
 using Dalamud.Plugin;
@@ -104,5 +105,30 @@ public sealed class GeneralSettingsTab : ITab
             _configuration.Save();
         }
         ImGui.TextDisabled("  0 以下で「無期限保持」（デフォルト）。N 日経過したログを自動削除します。");
+
+        ImGui.Separator();
+        ImGui.TextUnformatted("俯瞰図（ミニマップ）");
+
+        var showPredictedAoe = _configuration.ShowPredictedAoeOnMinimap;
+        if (ImGui.Checkbox("予測 AoE を事前表示する", ref showPredictedAoe))
+        {
+            _configuration.ShowPredictedAoeOnMinimap = showPredictedAoe;
+            _configuration.Save();
+        }
+        ImGui.TextDisabled("タイムライン予測の技範囲を、詠唱開始前から俯瞰図に薄く表示します。");
+
+        var advance = (float)_configuration.PredictedAoeAdvanceSec;
+        ImGui.AlignTextToFramePadding();
+        ImGui.Text("事前表示の秒数");
+        ImGui.SameLine(180f * ImGuiHelpers.GlobalScale);
+        ImGui.SetNextItemWidth(180f * ImGuiHelpers.GlobalScale);
+        if (ImGui.SliderFloat("##predicted-aoe-advance", ref advance, 1f, 30f, "%.0f s"))
+        {
+            _configuration.PredictedAoeAdvanceSec = Math.Clamp(advance, 1f, 30f);
+        }
+        if (ImGui.IsItemDeactivatedAfterEdit())
+        {
+            _configuration.Save();
+        }
     }
 }

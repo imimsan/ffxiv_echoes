@@ -50,6 +50,10 @@ public class Configuration : IPluginConfiguration
     public double MergeToleranceSeconds { get; set; } = 2.0;
     public int? LogRetentionDays { get; set; } = null;
 
+    // 俯瞰図（ミニマップ）への予測 AoE 事前描画
+    public bool ShowPredictedAoeOnMinimap { get; set; } = true;
+    public double PredictedAoeAdvanceSec { get; set; } = 10.0;
+
     public void Save()
     {
         Plugin.PluginInterface.SavePluginConfig(this);
@@ -63,6 +67,7 @@ public class Configuration : IPluginConfiguration
         FeedbackVolume = Math.Clamp(FeedbackVolume, 0f, 1f);
         TtsBoost = Math.Clamp(TtsBoost, 1.0f, 5.0f);
         MergeToleranceSeconds = Math.Clamp(MergeToleranceSeconds, 0.0, 60.0);
+        PredictedAoeAdvanceSec = Math.Clamp(PredictedAoeAdvanceSec, 1.0, 30.0);
         if (LogRetentionDays is { } days && days <= 0)
         {
             LogRetentionDays = null;
