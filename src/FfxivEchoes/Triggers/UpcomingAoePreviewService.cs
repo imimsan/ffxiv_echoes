@@ -138,6 +138,14 @@ public sealed class UpcomingAoePreviewService : IDisposable
             items, nowRel, _config.PredictedAoeAdvanceSec,
             PredictedAoePreviewPolicy.MaxPreviewItems, _candidateBuffer);
 
+        // 候補が無い（戦闘中の大半の）フレームでは GetByZone / ResolveArena の
+        // LINQ・文字列アロケーションごとスキップする。
+        if (_candidateBuffer.Count == 0)
+        {
+            ClearIfNeeded();
+            return;
+        }
+
         var file = _store.GetByZone(_currentZone);
         var arena = AutoAoeDisplayPolicy.ResolveArena(file);
 
@@ -273,7 +281,7 @@ public sealed class UpcomingAoePreviewService : IDisposable
 
         if (_sourceIdByName.TryGetValue(sourceName, out var id))
         {
-            if (_objectTable.SearchById(id) is IBattleNpc cachedNpc &&
+            if (_objectTable.SearchByEntityId(id) is IBattleNpc cachedNpc &&
                 string.Equals(cachedNpc.Name.TextValue, sourceName, StringComparison.OrdinalIgnoreCase))
             {
                 return cachedNpc;
