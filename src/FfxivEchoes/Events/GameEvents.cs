@@ -50,7 +50,9 @@ public sealed record CastStartedEvent(
     string CastActionName,
     float CastTime,
     uint? TargetId,
-    System.Numerics.Vector3? TargetWorld = null
+    System.Numerics.Vector3? TargetWorld = null,
+    System.Numerics.Vector3? SourceWorld = null,
+    float? SourceRotation = null
 ) : IGameEvent;
 
 public sealed record CastCompletedEvent(

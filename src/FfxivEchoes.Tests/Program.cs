@@ -240,6 +240,8 @@ var tests = new List<(string Name, Action Body)>
     ("PredictedAoePreview dedups same cast and caps count", PredictedAoePreview_DedupsSameCastAndCapsCount),
     ("PredictedAoePreview skips oversized AoE", PredictedAoePreview_SkipsOversizedAoe),
     ("PredictedAoePreview suppressed by confirmed cast", PredictedAoePreview_SuppressedByConfirmedCast),
+    ("CastStartedEvent serializes source world and rotation", CastStartedEvent_SerializesSourceWorldAndRotation),
+    ("CastStartedEvent omits source fields when null", CastStartedEvent_OmitsSourceFieldsWhenNull),
 };
 
 var failed = 0;
@@ -5175,6 +5177,33 @@ static void CastStartedEvent_SnapshotsTargetWorld()
     var ev = new CastStartedEvent(DateTimeOffset.UtcNow, 1, "Boss", 0x1234, "Ground AoE", 4.0f, 2, target);
 
     Equal(target, ev.TargetWorld!.Value, "cast start should carry target world snapshot");
+}
+
+static void CastStartedEvent_SerializesSourceWorldAndRotation()
+{
+    var start = DateTimeOffset.Parse("2026-05-06T00:00:00.000Z");
+    var ev = new CastStartedEvent(
+        start.AddSeconds(3.0), 1001, "Boss", 0x9E00, "両翼斬り", 5.0f, 2001,
+        TargetWorld: null,
+        SourceWorld: new Vector3(100.5f, 0f, 95.25f),
+        SourceRotation: 1.5708f);
+
+    var json = EventSerializer.Serialize(ev, start);
+
+    True(json.Contains("\"source_x\":100.5", StringComparison.Ordinal), $"source_x serialized: {json}");
+    True(json.Contains("\"source_z\":95.25", StringComparison.Ordinal), $"source_z serialized: {json}");
+    True(json.Contains("\"source_rot\":1.5708", StringComparison.Ordinal), $"source_rot serialized: {json}");
+}
+
+static void CastStartedEvent_OmitsSourceFieldsWhenNull()
+{
+    var start = DateTimeOffset.Parse("2026-05-06T00:00:00.000Z");
+    var ev = new CastStartedEvent(start.AddSeconds(3.0), 1001, "Boss", 0x9E00, "両翼斬り", 5.0f, 2001);
+
+    var json = EventSerializer.Serialize(ev, start);
+
+    False(json.Contains("source_x", StringComparison.Ordinal), $"source_x omitted: {json}");
+    False(json.Contains("source_rot", StringComparison.Ordinal), $"source_rot omitted: {json}");
 }
 
 static void ActorTrackedAoe_StaticSnapshotPolicy_UsesCasterOriginOnly()

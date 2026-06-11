@@ -117,6 +117,16 @@ public static class EventSerializer
                         writer.WriteNumber("target_y", Math.Round(tw.Y, 3));
                         writer.WriteNumber("target_z", Math.Round(tw.Z, 3));
                     }
+                    if (x.SourceWorld is { } sw)
+                    {
+                        writer.WriteNumber("source_x", Math.Round(sw.X, 3));
+                        writer.WriteNumber("source_y", Math.Round(sw.Y, 3));
+                        writer.WriteNumber("source_z", Math.Round(sw.Z, 3));
+                    }
+                    if (x.SourceRotation is { } srot)
+                    {
+                        writer.WriteNumber("source_rot", Math.Round(srot, 4));
+                    }
                     writer.WriteNumber("cast_time", Math.Round(x.CastTime, 2));
                     break;
 

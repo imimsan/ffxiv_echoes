@@ -140,7 +140,8 @@ public sealed class CastCapture : IDisposable
                 var target = ResolveTargetSnapshot(actor);
                 var ev = new CastStartedEvent(
                     DateTimeOffset.UtcNow, sourceId, SrcName(), actionId, name,
-                    totalCast, target.EntityId, target.World);
+                    totalCast, target.EntityId, target.World,
+                    SourceWorld: actor.Position, SourceRotation: actor.Rotation);
                 _bus.Publish(ev);
                 _states[key] = CastState.Casting(sourceId, SrcName(), actionId, name, totalCast, currentCast);
             }
@@ -160,7 +161,8 @@ public sealed class CastCapture : IDisposable
             var target = ResolveTargetSnapshot(actor);
             _bus.Publish(new CastStartedEvent(
                 DateTimeOffset.UtcNow, sourceId, SrcName(), actionId, name,
-                totalCast, target.EntityId, target.World));
+                totalCast, target.EntityId, target.World,
+                SourceWorld: actor.Position, SourceRotation: actor.Rotation));
             _states[key] = CastState.Casting(sourceId, SrcName(), actionId, name, totalCast, currentCast);
             return;
         }
@@ -194,7 +196,8 @@ public sealed class CastCapture : IDisposable
             var target = ResolveTargetSnapshot(actor);
             _bus.Publish(new CastStartedEvent(
                 DateTimeOffset.UtcNow, sourceId, SrcName(), actionId, name,
-                totalCast, target.EntityId, target.World));
+                totalCast, target.EntityId, target.World,
+                SourceWorld: actor.Position, SourceRotation: actor.Rotation));
             _states[key] = CastState.Casting(sourceId, SrcName(), actionId, name, totalCast, currentCast);
             return;
         }
