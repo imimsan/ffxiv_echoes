@@ -37,4 +37,18 @@ internal static class ParamHelper
         }
         return v.ValueKind == JsonValueKind.Number ? v.GetInt32() : null;
     }
+
+    public static bool? GetBool(IReadOnlyDictionary<string, JsonElement>? p, string key)
+    {
+        if (p is null || !p.TryGetValue(key, out var v))
+        {
+            return null;
+        }
+        return v.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            _ => null,
+        };
+    }
 }

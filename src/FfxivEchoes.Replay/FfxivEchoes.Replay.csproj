@@ -1,0 +1,56 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- 本体プロジェクトと同じ TFM。Dalamud 型 (IFramework / IObjectTable etc.) を
+         参照するため。 -->
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- CLAUDE.md memory: build_platform_x64 必須。AnyCPU だと Dalamud に読まれない。 -->
+    <Platform>x64</Platform>
+    <PlatformTarget>x64</PlatformTarget>
+    <Platforms>x64</Platforms>
+    <RootNamespace>FfxivEchoes.Replay</RootNamespace>
+    <AssemblyName>FfxivEchoes.Replay</AssemblyName>
+  </PropertyGroup>
+
+  <!-- Dalamud DLL のルート（DALAMUD_HOME 優先、無ければ XIVLauncher dev hook を既定とする） -->
+  <PropertyGroup>
+    <DalamudLibPath Condition="'$(DALAMUD_HOME)' != ''">$(DALAMUD_HOME)</DalamudLibPath>
+    <DalamudLibPath Condition="'$(DalamudLibPath)' == ''">$(AppData)\XIVLauncher\addon\Hooks\dev</DalamudLibPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 本体プラグインの実コード（Triggers / Events / Windows / Recording / ...）を再利用。 -->
+    <ProjectReference Include="..\FfxivEchoes\FfxivEchoes.csproj" />
+  </ItemGroup>
+
+  <!-- IFramework / IObjectTable / IPluginLog 等の Dalamud 公開 API を harness 側で
+       直接参照するための reference 群。SDK の自動参照は console exe には届かないため、
+       明示的に DLL を指定する。 -->
+  <ItemGroup>
+    <Reference Include="Dalamud">
+      <HintPath>$(DalamudLibPath)\Dalamud.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Lumina">
+      <HintPath>$(DalamudLibPath)\Lumina.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Lumina.Excel">
+      <HintPath>$(DalamudLibPath)\Lumina.Excel.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Serilog">
+      <HintPath>$(DalamudLibPath)\Serilog.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="FFXIVClientStructs">
+      <HintPath>$(DalamudLibPath)\FFXIVClientStructs.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

@@ -11,4 +11,6 @@ public sealed record PartyMemberInfo(
     string Name,
     string Job,
     string Role,
-    string? SubRole);
+    string? SubRole,
+    uint? ObjectId = null,
+    bool IsSelf = false);

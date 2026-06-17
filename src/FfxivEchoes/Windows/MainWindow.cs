@@ -9,13 +9,16 @@ namespace FfxivEchoes.Windows;
 
 public sealed class MainWindow : Window, IDisposable
 {
-    public const string DefaultTabId = "general";
+    // 初回ユーザーが先に見る場所として「使い方」をデフォルトに
+    public const string DefaultTabId = "help";
 
     private readonly IReadOnlyList<ITab> _tabs;
     private string? _focusTabId;
 
     public MainWindow(IReadOnlyList<ITab> tabs, Tabs.TabContext? tabContext = null)
         : base("FFXIV Echoes 設定###ffxiv-echoes-main",
+            // 親ウィンドウは scroll しない。タブごとに BeginChild でスクロールを管理する
+            // （タブバーが画面外に流れないように外側は固定）。
             ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
     {
         SizeConstraints = new WindowSizeConstraints
@@ -30,7 +33,17 @@ public sealed class MainWindow : Window, IDisposable
 
     private readonly Tabs.TabContext? _tabContext;
 
-    public void Dispose() { }
+    public void Dispose()
+    {
+        // タブが IDisposable を実装していれば破棄（LiveHudTab の event subscription など）
+        foreach (var tab in _tabs)
+        {
+            if (tab is IDisposable d)
+            {
+                try { d.Dispose(); } catch { /* 破棄時の例外は無視 */ }
+            }
+        }
+    }
 
     /// <summary>
     /// 設定ウィンドウを開く。<paramref name="tabId"/> 指定時は次フレームでそのタブにフォーカス。
@@ -61,7 +74,26 @@ public sealed class MainWindow : Window, IDisposable
                 if (ImGui.BeginTabItem(tab.Title, flags))
                 {
                     ImGui.Spacing();
-                    tab.Draw();
+                    // 各タブのコンテンツを子コンテナに入れて縦スクロール可能にする。
+                    // タブバーは上部に固定したまま、攻略登録のような長いタブも下までスクロールできる。
+                    if (ImGui.BeginChild($"##tab-content-{tab.Id}", new Vector2(0, 0),
+                            false, ImGuiWindowFlags.HorizontalScrollbar))
+                    {
+                        // 1 タブの描画例外で EndChild/EndTabItem/EndTabBar がスキップされると
+                        // ImGui スタックが崩れ設定 UI 全体（場合により Dalamud 描画）が壊れる。
+                        // タブ単位で握り、エラー時もスタックを必ず閉じる。
+                        try
+                        {
+                            tab.Draw();
+                        }
+                        catch (Exception ex)
+                        {
+                            Plugin.Log.Error(ex, "[FfxivEchoes] タブ '{Tab}' の描画に失敗", tab.Id);
+                            ImGui.TextColored(new Vector4(1f, 0.4f, 0.4f, 1f),
+                                $"このタブの描画でエラーが発生しました: {ex.Message}");
+                        }
+                    }
+                    ImGui.EndChild();
                     ImGui.EndTabItem();
                 }
             }

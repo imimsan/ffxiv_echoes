@@ -1,0 +1,1717 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FFXIV Echoes AoE認識仕様ドラフト</title>
+  <style>
+    :root {
+      --ink: #f4efe7;
+      --muted: #b6b0a4;
+      --dim: #7f7a70;
+      --bg: #11100e;
+      --panel: #1b1814;
+      --panel-2: #231e18;
+      --line: rgba(244, 239, 231, 0.16);
+      --line-strong: rgba(244, 239, 231, 0.34);
+      --red: #ff5b57;
+      --red-soft: rgba(255, 91, 87, 0.28);
+      --amber: #f0b45b;
+      --amber-soft: rgba(240, 180, 91, 0.24);
+      --cyan: #4bd0df;
+      --cyan-soft: rgba(75, 208, 223, 0.18);
+      --green: #8fd16a;
+      --green-soft: rgba(143, 209, 106, 0.18);
+      --violet: #b18cff;
+      --shadow: rgba(0, 0, 0, 0.38);
+      --mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+      --serif: "Yu Mincho", "Hiragino Mincho ProN", "Iowan Old Style", Georgia, serif;
+      --sans: "Yu Gothic UI", "Hiragino Sans", "Meiryo", sans-serif;
+      color-scheme: dark;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      color: var(--ink);
+      background:
+        linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px),
+        linear-gradient(0deg, rgba(255,255,255,0.018) 1px, transparent 1px),
+        radial-gradient(circle at 22% 12%, rgba(75, 208, 223, 0.14), transparent 32rem),
+        radial-gradient(circle at 84% 22%, rgba(240, 180, 91, 0.12), transparent 34rem),
+        var(--bg);
+      background-size: 48px 48px, 48px 48px, auto, auto, auto;
+      font-family: var(--sans);
+      line-height: 1.75;
+      letter-spacing: 0;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.28;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+      background-size: 7px 7px;
+      mask-image: linear-gradient(to bottom, transparent, black 12%, black 88%, transparent);
+      z-index: 5;
+    }
+
+    a {
+      color: var(--cyan);
+      text-decoration: none;
+    }
+
+    a:hover {
+      color: var(--amber);
+    }
+
+    code {
+      font-family: var(--mono);
+      color: #fff4d7;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.08);
+      padding: 0.1rem 0.35rem;
+      border-radius: 4px;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 17rem minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .rail {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 1.25rem 1rem;
+      border-right: 1px solid var(--line);
+      background: rgba(16, 14, 12, 0.86);
+      backdrop-filter: blur(12px);
+      z-index: 10;
+      overflow-y: auto;
+    }
+
+    .brand {
+      display: grid;
+      gap: 0.35rem;
+      padding: 0.45rem 0.35rem 1.2rem;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .brand small {
+      color: var(--amber);
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      text-transform: uppercase;
+    }
+
+    .brand strong {
+      font-family: var(--serif);
+      font-size: 1.25rem;
+      line-height: 1.25;
+    }
+
+    .nav {
+      display: grid;
+      gap: 0.35rem;
+      margin-top: 1.1rem;
+    }
+
+    .nav a {
+      display: grid;
+      grid-template-columns: 2.2rem 1fr;
+      align-items: center;
+      gap: 0.55rem;
+      min-height: 2.55rem;
+      color: var(--muted);
+      border: 1px solid transparent;
+      border-radius: 6px;
+      padding: 0.3rem 0.55rem;
+      transition: border-color 160ms ease, color 160ms ease, background 160ms ease;
+    }
+
+    .nav a span:first-child {
+      font-family: var(--mono);
+      color: var(--dim);
+      font-size: 0.72rem;
+    }
+
+    .nav a:hover,
+    .nav a.is-active {
+      color: var(--ink);
+      background: rgba(255,255,255,0.055);
+      border-color: var(--line);
+    }
+
+    main {
+      min-width: 0;
+    }
+
+    .hero {
+      position: relative;
+      display: grid;
+      min-height: 76vh;
+      overflow: hidden;
+      border-bottom: 1px solid var(--line);
+      background:
+        linear-gradient(120deg, rgba(255, 91, 87, 0.12), transparent 34%),
+        linear-gradient(260deg, rgba(75, 208, 223, 0.11), transparent 36%),
+        #14110e;
+    }
+
+    .hero-grid {
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(rgba(244,239,231,0.06) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(244,239,231,0.045) 1px, transparent 1px);
+      background-size: 3rem 3rem;
+      transform: perspective(900px) rotateX(63deg) translateY(8rem) scale(1.4);
+      transform-origin: bottom;
+      opacity: 0.5;
+    }
+
+    .hero-content {
+      position: relative;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(21rem, 32rem);
+      align-items: center;
+      gap: 3rem;
+      width: min(1180px, calc(100% - 4rem));
+      margin: 0 auto;
+      padding: 4rem 0 3rem;
+      z-index: 1;
+    }
+
+    .hero-copy {
+      max-width: 48rem;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.6rem;
+      color: var(--amber);
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      border: 1px solid rgba(240, 180, 91, 0.35);
+      background: rgba(240, 180, 91, 0.08);
+      padding: 0.25rem 0.55rem;
+      border-radius: 4px;
+    }
+
+    h1 {
+      margin: 1.2rem 0 1rem;
+      font-family: var(--serif);
+      font-size: clamp(2.65rem, 6vw, 6rem);
+      line-height: 0.96;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .lead {
+      max-width: 43rem;
+      color: var(--muted);
+      font-size: 1.03rem;
+    }
+
+    .hero-stats {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.75rem;
+      margin-top: 1.65rem;
+    }
+
+    .stat {
+      min-height: 5.6rem;
+      padding: 0.85rem;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.045);
+      border-radius: 6px;
+    }
+
+    .stat strong {
+      display: block;
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 1.5rem;
+      line-height: 1.1;
+    }
+
+    .stat span {
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+
+    .arena-stage {
+      position: relative;
+      aspect-ratio: 1;
+      min-height: 20rem;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background:
+        radial-gradient(circle, rgba(244,239,231,0.12) 1px, transparent 1px),
+        linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.025));
+      background-size: 1.2rem 1.2rem, auto;
+      box-shadow: 0 24px 80px var(--shadow);
+      overflow: hidden;
+    }
+
+    .arena-stage::before {
+      content: "";
+      position: absolute;
+      inset: 9%;
+      border: 2px solid rgba(244, 239, 231, 0.32);
+      clip-path: polygon(9% 0, 91% 0, 100% 9%, 100% 91%, 91% 100%, 9% 100%, 0 91%, 0 9%);
+    }
+
+    .arena-stage::after {
+      content: "";
+      position: absolute;
+      inset: 13%;
+      border: 1px dashed rgba(244, 239, 231, 0.24);
+      border-radius: 50%;
+    }
+
+    .boss-dot,
+    .self-dot,
+    .object-dot {
+      position: absolute;
+      width: 0.9rem;
+      height: 0.9rem;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 2;
+    }
+
+    .boss-dot {
+      left: 50%;
+      top: 21%;
+      background: var(--red);
+      box-shadow: 0 0 0 0.45rem rgba(255, 91, 87, 0.18), 0 0 2rem rgba(255, 91, 87, 0.55);
+    }
+
+    .self-dot {
+      left: 50%;
+      top: 74%;
+      background: var(--green);
+      border: 2px solid white;
+      box-shadow: 0 0 1.5rem rgba(143, 209, 106, 0.7);
+    }
+
+    .object-dot {
+      background: var(--cyan);
+      border: 2px solid rgba(255,255,255,0.8);
+      animation: objectPulse 2.4s ease-in-out infinite;
+    }
+
+    .object-dot:nth-of-type(3) { left: 25%; top: 35%; animation-delay: 0.1s; }
+    .object-dot:nth-of-type(4) { left: 75%; top: 35%; animation-delay: 0.35s; }
+    .object-dot:nth-of-type(5) { left: 28%; top: 66%; animation-delay: 0.6s; }
+    .object-dot:nth-of-type(6) { left: 72%; top: 66%; animation-delay: 0.85s; }
+
+    .aoe-cone {
+      position: absolute;
+      left: 50%;
+      top: 23%;
+      width: 54%;
+      height: 52%;
+      transform: translate(-50%, 0);
+      transform-origin: 50% 0;
+      clip-path: polygon(50% 0, 0 100%, 100% 100%);
+      background: linear-gradient(to bottom, rgba(255,91,87,0.7), rgba(255,91,87,0.14));
+      border-bottom: 1px solid rgba(255,91,87,0.65);
+      filter: blur(0.2px);
+      animation: coneSweep 5.4s ease-in-out infinite;
+    }
+
+    .aoe-ring {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 62%;
+      height: 62%;
+      transform: translate(-50%, -50%);
+      border-radius: 50%;
+      background:
+        radial-gradient(circle, transparent 31%, rgba(240,180,91,0.62) 32%, rgba(240,180,91,0.26) 54%, transparent 56%);
+      animation: ringWarn 4.8s ease-in-out infinite;
+    }
+
+    .cast-thread {
+      position: absolute;
+      left: 50%;
+      top: 21%;
+      width: 2px;
+      height: 53%;
+      transform-origin: top;
+      background: linear-gradient(to bottom, var(--cyan), transparent);
+      animation: threadLock 3.6s ease-in-out infinite;
+    }
+
+    .phase-strip {
+      position: absolute;
+      left: 1rem;
+      right: 1rem;
+      bottom: 1rem;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0.35rem;
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      z-index: 3;
+    }
+
+    .phase-strip span {
+      position: relative;
+      overflow: hidden;
+      padding: 0.3rem 0.4rem;
+      border: 1px solid var(--line);
+      background: rgba(0,0,0,0.34);
+      color: var(--muted);
+      border-radius: 4px;
+    }
+
+    .phase-strip span::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      transform: translateX(-100%);
+      background: rgba(255,91,87,0.22);
+      animation: phaseFill 6s linear infinite;
+    }
+
+    .phase-strip span:nth-child(2)::after { animation-delay: 1.5s; }
+    .phase-strip span:nth-child(3)::after { animation-delay: 3s; }
+    .phase-strip span:nth-child(4)::after { animation-delay: 4.5s; }
+
+    section {
+      scroll-margin-top: 1rem;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .section-inner {
+      width: min(1120px, calc(100% - 4rem));
+      margin: 0 auto;
+      padding: 4.5rem 0;
+    }
+
+    .section-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(18rem, 28rem);
+      gap: 2rem;
+      align-items: end;
+      margin-bottom: 2.25rem;
+    }
+
+    h2 {
+      margin: 0;
+      font-family: var(--serif);
+      font-size: clamp(2rem, 4vw, 3.5rem);
+      line-height: 1.05;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 0 0 0.6rem;
+      font-size: 1.05rem;
+      color: var(--ink);
+    }
+
+    .section-note {
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .kicker {
+      display: block;
+      margin-bottom: 0.5rem;
+      color: var(--cyan);
+      font-family: var(--mono);
+      font-size: 0.74rem;
+      text-transform: uppercase;
+    }
+
+    .grid-2,
+    .grid-3 {
+      display: grid;
+      gap: 1rem;
+    }
+
+    .grid-2 {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .grid-3 {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .panel,
+    .lane,
+    .source-item,
+    .risk-item,
+    .question {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.045);
+      border-radius: 8px;
+      box-shadow: 0 18px 50px rgba(0,0,0,0.12);
+    }
+
+    .panel {
+      padding: 1.2rem;
+    }
+
+    .panel p,
+    .lane p,
+    .source-item p,
+    .risk-item p,
+    .question p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.93rem;
+    }
+
+    .confidence {
+      display: inline-flex;
+      align-items: center;
+      min-height: 1.6rem;
+      gap: 0.45rem;
+      color: var(--green);
+      font-family: var(--mono);
+      font-size: 0.72rem;
+    }
+
+    .confidence::before {
+      content: "";
+      width: 0.55rem;
+      height: 0.55rem;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0.8rem var(--green);
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 0.65rem;
+      align-items: stretch;
+      counter-reset: flow;
+    }
+
+    .flow-step {
+      position: relative;
+      min-height: 11rem;
+      padding: 1rem;
+      border: 1px solid var(--line);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.025));
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .flow-step::before {
+      counter-increment: flow;
+      content: "0" counter(flow);
+      display: block;
+      margin-bottom: 1rem;
+      color: var(--amber);
+      font-family: var(--mono);
+      font-size: 0.82rem;
+    }
+
+    .flow-step::after {
+      content: "";
+      position: absolute;
+      top: 1.55rem;
+      right: -0.9rem;
+      width: 1.8rem;
+      height: 2px;
+      background: linear-gradient(90deg, var(--cyan), transparent);
+      animation: pulseLine 1.8s ease-in-out infinite;
+    }
+
+    .flow-step:last-child::after {
+      display: none;
+    }
+
+    .flow-step h3 {
+      font-family: var(--mono);
+      font-size: 0.96rem;
+    }
+
+    .event-table,
+    .matrix {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255,255,255,0.035);
+    }
+
+    .event-table th,
+    .event-table td,
+    .matrix th,
+    .matrix td {
+      padding: 0.85rem;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      font-size: 0.9rem;
+    }
+
+    .event-table th,
+    .matrix th {
+      color: var(--amber);
+      font-family: var(--mono);
+      font-size: 0.76rem;
+      background: rgba(240, 180, 91, 0.08);
+    }
+
+    .event-table tr:last-child td,
+    .matrix tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 1.55rem;
+      margin: 0.12rem 0.14rem 0.12rem 0;
+      padding: 0 0.45rem;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      white-space: nowrap;
+    }
+
+    .tag.red { color: #ffd2d0; border-color: rgba(255,91,87,0.45); background: rgba(255,91,87,0.08); }
+    .tag.cyan { color: #c7f8ff; border-color: rgba(75,208,223,0.45); background: rgba(75,208,223,0.08); }
+    .tag.amber { color: #ffe0a8; border-color: rgba(240,180,91,0.45); background: rgba(240,180,91,0.08); }
+    .tag.green { color: #defbd0; border-color: rgba(143,209,106,0.45); background: rgba(143,209,106,0.08); }
+
+    .lanes {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0.85rem;
+    }
+
+    .lane {
+      position: relative;
+      min-height: 17rem;
+      padding: 1.05rem;
+      overflow: hidden;
+    }
+
+    .lane::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-top: 3px solid var(--lane-color, var(--cyan));
+      opacity: 0.8;
+      pointer-events: none;
+    }
+
+    .lane h3 {
+      font-family: var(--mono);
+    }
+
+    .lane ul,
+    .risk-item ul,
+    .panel ul {
+      margin: 0.75rem 0 0;
+      padding-left: 1.1rem;
+      color: var(--muted);
+      font-size: 0.91rem;
+    }
+
+    .shape-lab {
+      display: grid;
+      grid-template-columns: minmax(16rem, 24rem) minmax(0, 1fr);
+      gap: 1rem;
+      align-items: stretch;
+    }
+
+    .shape-controls {
+      display: grid;
+      gap: 0.45rem;
+    }
+
+    .shape-button {
+      width: 100%;
+      min-height: 3rem;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.04);
+      color: var(--muted);
+      font: inherit;
+      text-align: left;
+      border-radius: 6px;
+      padding: 0.55rem 0.7rem;
+      cursor: pointer;
+    }
+
+    .shape-button strong {
+      display: block;
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 0.78rem;
+    }
+
+    .shape-button[aria-pressed="true"] {
+      border-color: rgba(75,208,223,0.65);
+      background: var(--cyan-soft);
+      color: var(--ink);
+    }
+
+    .shape-display {
+      position: relative;
+      min-height: 26rem;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background:
+        linear-gradient(rgba(244,239,231,0.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(244,239,231,0.035) 1px, transparent 1px),
+        rgba(0,0,0,0.22);
+      background-size: 2rem 2rem;
+    }
+
+    .shape-arena {
+      position: absolute;
+      left: 50%;
+      top: 48%;
+      width: min(74%, 28rem);
+      aspect-ratio: 1;
+      transform: translate(-50%, -50%);
+      border: 1px solid var(--line-strong);
+      border-radius: 50%;
+    }
+
+    .shape-arena.square {
+      border-radius: 6px;
+      clip-path: polygon(7% 0, 93% 0, 100% 7%, 100% 93%, 93% 100%, 7% 100%, 0 93%, 0 7%);
+    }
+
+    .shape-actor {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 0.85rem;
+      height: 0.85rem;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      background: var(--red);
+      z-index: 2;
+      box-shadow: 0 0 1.5rem rgba(255,91,87,0.8);
+    }
+
+    .shape-target {
+      position: absolute;
+      left: 66%;
+      top: 62%;
+      width: 0.75rem;
+      height: 0.75rem;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      background: var(--green);
+      border: 2px solid white;
+      z-index: 2;
+    }
+
+    .shape {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      opacity: 0.88;
+      transition: 220ms ease;
+      animation: shapeBreathe 2.6s ease-in-out infinite;
+    }
+
+    .shape.circle {
+      width: 46%;
+      height: 46%;
+      border-radius: 50%;
+      background: var(--red-soft);
+      border: 2px solid var(--red);
+    }
+
+    .shape.donut {
+      width: 62%;
+      height: 62%;
+      border-radius: 50%;
+      background: radial-gradient(circle, transparent 33%, var(--amber-soft) 34%, rgba(240,180,91,0.5) 72%, transparent 73%);
+      border: 2px solid var(--amber);
+    }
+
+    .shape.cone {
+      width: 58%;
+      height: 58%;
+      top: 50%;
+      clip-path: polygon(50% 0, 0 100%, 100% 100%);
+      background: linear-gradient(to bottom, rgba(255,91,87,0.58), rgba(255,91,87,0.12));
+      transform: translate(-50%, -50%) rotate(180deg);
+    }
+
+    .shape.rect {
+      width: 22%;
+      height: 70%;
+      background: rgba(255,91,87,0.34);
+      border: 2px solid var(--red);
+      border-radius: 2px;
+      transform: translate(-50%, -50%) rotate(22deg);
+    }
+
+    .shape.cross {
+      width: 62%;
+      height: 62%;
+      background:
+        linear-gradient(90deg, transparent 38%, rgba(255,91,87,0.45) 38%, rgba(255,91,87,0.45) 62%, transparent 62%),
+        linear-gradient(0deg, transparent 38%, rgba(255,91,87,0.45) 38%, rgba(255,91,87,0.45) 62%, transparent 62%);
+      border: 1px solid rgba(255,91,87,0.35);
+    }
+
+    .shape-caption {
+      position: absolute;
+      left: 1rem;
+      right: 1rem;
+      bottom: 1rem;
+      display: grid;
+      gap: 0.25rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--line);
+    }
+
+    .shape-caption strong {
+      font-family: var(--mono);
+      color: var(--ink);
+    }
+
+    .phase-timeline {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0.65rem;
+      position: relative;
+    }
+
+    .phase-timeline::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 2.15rem;
+      height: 2px;
+      background: var(--line-strong);
+    }
+
+    .phase-timeline::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 1.81rem;
+      width: 0.72rem;
+      height: 0.72rem;
+      border-radius: 50%;
+      background: var(--red);
+      box-shadow: 0 0 1rem rgba(255,91,87,0.8);
+      animation: timelineDot 8s linear infinite;
+    }
+
+    .phase-card {
+      position: relative;
+      min-height: 13rem;
+      padding: 3.6rem 1rem 1rem;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.04);
+      border-radius: 8px;
+    }
+
+    .phase-card::before {
+      content: "";
+      position: absolute;
+      left: 1rem;
+      top: 1.75rem;
+      width: 0.9rem;
+      height: 0.9rem;
+      border-radius: 50%;
+      background: var(--phase-color, var(--cyan));
+      box-shadow: 0 0 1rem var(--phase-color, var(--cyan));
+    }
+
+    .phase-card h3 {
+      font-family: var(--mono);
+    }
+
+    .risk-list,
+    .source-list,
+    .question-list {
+      display: grid;
+      gap: 0.85rem;
+    }
+
+    .risk-item,
+    .source-item,
+    .question {
+      padding: 1rem;
+    }
+
+    .risk-item {
+      border-left: 4px solid var(--risk-color, var(--amber));
+    }
+
+    .source-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 1rem;
+      align-items: start;
+    }
+
+    .source-item code {
+      display: inline-block;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+    }
+
+    .review-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0.65rem;
+    }
+
+    .review-strip div {
+      min-height: 8rem;
+      padding: 0.9rem;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.04);
+      border-radius: 8px;
+    }
+
+    .review-strip strong {
+      display: block;
+      margin-bottom: 0.45rem;
+      color: var(--amber);
+      font-family: var(--mono);
+      font-size: 0.76rem;
+    }
+
+    .footer {
+      padding: 2rem;
+      color: var(--dim);
+      font-size: 0.86rem;
+      text-align: center;
+    }
+
+    @keyframes objectPulse {
+      0%, 100% { transform: translate(-50%, -50%) scale(0.9); box-shadow: 0 0 0 0 rgba(75,208,223,0.0); }
+      45% { transform: translate(-50%, -50%) scale(1.15); box-shadow: 0 0 0 0.9rem rgba(75,208,223,0.12); }
+    }
+
+    @keyframes coneSweep {
+      0%, 100% { opacity: 0.32; transform: translate(-50%, 0) rotate(-4deg) scale(0.98); }
+      45% { opacity: 0.78; transform: translate(-50%, 0) rotate(4deg) scale(1.02); }
+    }
+
+    @keyframes ringWarn {
+      0%, 100% { opacity: 0.2; transform: translate(-50%, -50%) scale(0.94); }
+      50% { opacity: 0.78; transform: translate(-50%, -50%) scale(1.02); }
+    }
+
+    @keyframes threadLock {
+      0%, 100% { opacity: 0.2; transform: rotate(-18deg); }
+      50% { opacity: 0.9; transform: rotate(18deg); }
+    }
+
+    @keyframes phaseFill {
+      0% { transform: translateX(-100%); }
+      23% { transform: translateX(0); }
+      24%, 100% { transform: translateX(100%); }
+    }
+
+    @keyframes pulseLine {
+      0%, 100% { opacity: 0.25; transform: scaleX(0.45); }
+      50% { opacity: 1; transform: scaleX(1); }
+    }
+
+    @keyframes shapeBreathe {
+      0%, 100% { filter: brightness(0.92); }
+      50% { filter: brightness(1.25); }
+    }
+
+    @keyframes timelineDot {
+      0% { left: 0; background: var(--cyan); }
+      24% { left: 24%; background: var(--cyan); }
+      25% { background: var(--red); }
+      49% { left: 49%; background: var(--red); }
+      50% { background: var(--amber); }
+      74% { left: 74%; background: var(--amber); }
+      75% { background: var(--dim); }
+      100% { left: calc(100% - 0.72rem); background: var(--dim); }
+    }
+
+    @media (max-width: 1080px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .rail {
+        position: static;
+        height: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .nav {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .hero-content,
+      .section-head,
+      .shape-lab {
+        grid-template-columns: 1fr;
+      }
+
+      .flow,
+      .lanes,
+      .phase-timeline,
+      .review-strip {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .flow-step::after {
+        display: none;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .hero-content,
+      .section-inner {
+        width: min(100% - 1.5rem, 1120px);
+      }
+
+      .hero-content {
+        padding-top: 2.4rem;
+      }
+
+      .hero-stats,
+      .grid-2,
+      .grid-3,
+      .flow,
+      .lanes,
+      .phase-timeline,
+      .review-strip,
+      .nav {
+        grid-template-columns: 1fr;
+      }
+
+      .event-table,
+      .matrix {
+        display: block;
+        overflow-x: auto;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        animation-duration: 1ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+        transition-duration: 1ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="rail" aria-label="設計書ナビゲーション">
+      <div class="brand">
+        <small>FFXIV Echoes</small>
+        <strong>AoE認識仕様ドラフト</strong>
+      </div>
+      <nav class="nav">
+        <a href="#purpose"><span>01</span><span>目的</span></a>
+        <a href="#flow"><span>02</span><span>全体フロー</span></a>
+        <a href="#events"><span>03</span><span>入力イベント</span></a>
+        <a href="#routes"><span>04</span><span>描画経路</span></a>
+        <a href="#shapes"><span>05</span><span>形状推定</span></a>
+        <a href="#objects"><span>06</span><span>オブジェクトAoE</span></a>
+        <a href="#lifecycle"><span>07</span><span>表示寿命</span></a>
+        <a href="#performance"><span>08</span><span>性能設計</span></a>
+        <a href="#risks"><span>09</span><span>ズレやすい点</span></a>
+        <a href="#review"><span>10</span><span>レビュー観点</span></a>
+        <a href="#sources"><span>11</span><span>根拠</span></a>
+      </nav>
+    </aside>
+
+    <main>
+      <header class="hero">
+        <div class="hero-grid" aria-hidden="true"></div>
+        <div class="hero-content">
+          <div class="hero-copy">
+            <span class="eyebrow">Draft / 2026-05-14 / 認識合わせ用</span>
+            <h1>AoEは「何を拾い、どこへ描くべきか」</h1>
+            <p class="lead">
+              このHTMLは、現時点で私が理解している FFXIV Echoes の AoE 認識・推定・描画仕様を、
+              実装の流れに沿って書き起こしたものです。正解の宣言ではなく、認識違いを見つけるための設計レビュー資料です。
+            </p>
+            <div class="hero-stats" aria-label="設計書の要点">
+              <div class="stat"><strong>3</strong><span>主要描画経路: ミニマップ / 床塗り / オブジェクトAoE</span></div>
+              <div class="stat"><strong>4</strong><span>床塗りフェーズ: 予測 / 確定 / 着弾 / 余韻</span></div>
+              <div class="stat"><strong>50m</strong><span>Lumina EffectRange の自動推定上限</span></div>
+            </div>
+          </div>
+
+          <div class="arena-stage" aria-label="AoE描画イメージ">
+            <div class="aoe-cone"></div>
+            <div class="aoe-ring"></div>
+            <div class="boss-dot" title="Boss"></div>
+            <div class="object-dot" title="Object"></div>
+            <div class="object-dot" title="Object"></div>
+            <div class="object-dot" title="Object"></div>
+            <div class="object-dot" title="Object"></div>
+            <div class="self-dot" title="Self"></div>
+            <div class="cast-thread"></div>
+            <div class="phase-strip">
+              <span>Predicted</span>
+              <span>Confirmed</span>
+              <span>Impact</span>
+              <span>Fade</span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <section id="purpose">
+        <div class="section-inner">
+          <div class="section-head">
+            <div>
+              <span class="kicker">Purpose</span>
+              <h2>この設計書の立ち位置</h2>
+            </div>
+            <p class="section-note">
+              AoE不具合の修正前に、まず「私がどう設計を理解しているか」を可視化します。
+              コードの意図、現在の挙動、ユーザー期待のズレを同じ画面で見られるようにします。
+            </p>
+          </div>
+
+          <div class="grid-3">
+            <div class="panel">
+              <span class="confidence">High confidence</span>
+              <h3>実装から読み取れる仕様</h3>
+              <p>イベント、Lumina推定、描画経路、保存済み object rule の優先順位を、現在のコードに沿って記述します。</p>
+            </div>
+            <div class="panel">
+              <span class="confidence">Review needed</span>
+              <h3>ユーザー期待との差分</h3>
+              <p>「パラデイグマは出現時点で見たい」「着弾と同時では遅い」など、体験上の期待は別枠で明示します。</p>
+            </div>
+            <div class="panel">
+              <span class="confidence">Not canonical</span>
+              <h3>正解ではなく仮説</h3>
+              <p>この文書は仕様確定書ではなく、実装者である私の現時点の認識です。違和感があればそこが修正ポイントです。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="flow">
+        <div class="section-inner">
+          <div class="section-head">
+            <div>
+              <span class="kicker">Mental model</span>
+              <h2>AoE表示は5段階で決まる</h2>
+            </div>
+            <p class="section-note">
+              画面に赤い範囲が出るまでに、入力イベント、形状解決、経路選択、描画、破棄の5つの判断があります。
+              どこか1つがズレると「遅い」「残る」「変な範囲」「重い」になります。
+            </p>
+          </div>
+
+          <div class="flow">
+            <div class="flow-step">
+              <h3>Capture</h3>
+              <p>Cast / ActionEffect / ObjectTable からイベントを作る。PC由来か、対象座標があるかがここで決まる。</p>
+            </div>
+            <div class="flow-step">
+              <h3>Resolve</h3>
+              <p>Lumina Action の EffectRange / CastType / Omen から形状と中心種別を推定する。</p>
+            </div>
+            <div class="flow-step">
+              <h3>Route</h3>
+              <p>ミニマップ、床塗り、オブジェクトAoE、録画予測のどれに流すかを選ぶ。</p>
+            </div>
+            <div class="flow-step">
+              <h3>Render</h3>
+              <p>WorldToScreen でワールド座標を画面に投影し、円・扇・矩形・ドーナツを描く。</p>
+            </div>
+            <div class="flow-step">
+              <h3>Expire</h3>
+              <p>cast完了、cancel、戦闘終了、zone変更、TTLで消す。ここが漏れるとAoEが残る。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="events">
+        <div class="section-inner">
+          <div class="section-head">
+            <div>
+              <span class="kicker">Inputs</span>
+              <h2>入力イベントの契約</h2>
+            </div>
+            <p class="section-note">
+              私の認識では、AoE表示の安全性は「発動元が敵か」「中心座標がどこか」「事前イベントか事後イベントか」に強く依存します。
+            </p>
+          </div>
+
+          <table class="event-table">
+            <thead>
+              <tr>
+                <th>イベント</th>
+                <th>発生タイミング</th>
+                <th>AoEで使う情報</th>
+                <th>危険な曖昧さ</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>CastStartedEvent</code></td>
+                <td>敵 <code>IBattleNpc</code> の <code>IsCasting</code> をフレーム監視し、初観測または非詠唱から詠唱へ変わった時点。事前警告に使える。</td>
+                <td><span class="tag cyan">SourceId</span><span class="tag cyan">CastActionId</span><span class="tag cyan">CastTime</span><span class="tag cyan">TargetWorld</span></td>
+                <td>初観測時点で既に詠唱中なら本当の開始より遅い。<code>TargetWorld</code> は開始時snapshotなので、動く対象中心AoEは着弾時とずれる。</td>
+              </tr>
+              <tr>
+                <td><code>CastCompletedEvent</code></td>
+                <td>詠唱バーが非詠唱に戻り、直前進捗が総詠唱時間に近いときの推定完了。</td>
+                <td><span class="tag red">Impact昇格</span><span class="tag red">Fade開始</span></td>
+                <td>ダメージ発生フレームそのものではない。完了イベントが拾えない場合、Confirmed が TTL まで残る。</td>
+              </tr>
+              <tr>
+                <td><code>ActionUsedEvent</code></td>
+                <td><code>ActionEffectHandler.Receive</code> 由来。インスタント技、詠唱完了後の効果、AAを含む。予告ではなく着弾/補完寄り。</td>
+                <td><span class="tag amber">ActionId</span><span class="tag amber">IsPlayer</span><span class="tag amber">IsAutoAttack</span><span class="tag amber">TargetWorld</span></td>
+                <td>effect target の先頭だけを見るため複数対象の中心ではないことがある。PC技/PCペット/AAを敵技扱いすると誤AoEになる。</td>
+              </tr>
+              <tr>
+                <td><code>ObjectAppearedEvent</code></td>
+                <td><code>BattleNpc</code> / <code>EventObj</code> / <code>EventNpc</code> / <code>Treasure</code> の未観測オブジェクトを見つけた時点。戦闘開始時の再観測も含む。</td>
+                <td><span class="tag green">ObjectName</span><span class="tag green">DataId</span><span class="tag green">Position</span></td>
+                <td>厳密なspawn時刻とは限らない。識別では <code>DataId</code> / <code>EntityId</code> / <code>GameObjectId</code> の違いを混ぜない。</td>
+              </tr>
+              <tr>
+                <td><code>ObjectGroupAppearedEvent</code></td>
+                <td><code>ObjectAppearedEvent</code> 群が <code>object_group</code> 条件に一致したときの派生イベント。録画JSONLには保存されない。</td>
+                <td><span class="tag green">Count</span><span class="tag green">Positions</span></td>
+                <td>Capture生イベントではない。再現やデバッグでは元の object appear 群まで見る必要がある。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="routes">
+        <div class="section-inner">
+          <div class="section-head">
+            <div>
+              <span class="kicker">Routes</span>
+              <h2>描画経路は役割が違う</h2>
+            </div>
+            <p class="section-note">
+              「ミニマップに出る」と「床に出る」は同じ意味ではありません。片方だけ出る、片方だけ遅い、という状態は設計上あり得ます。
+            </p>
+          </div>
+
+          <div class="lanes">
+            <div class="lane" style="--lane-color: var(--cyan);">
+              <h3>AutoTelegraphService</h3>
+              <p>敵キャスト/瞬間アクションをミニマップへ送る経路。</p>
+              <ul>
+                <li><code>show_auto_telegraphs</code> がONのときのみ動く。</li>
+                <li>全体攻撃マーク済み、友軍、巨大すぎる円はスキップ。</li>
+                <li><code>ActionUsedEvent</code> は先読みではなく、ノーキャスト/着弾後補完として扱う。</li>
+                <li>床塗りはここでは描かず、ActorTrackedAoeServiceが担当する。</li>
+              </ul>
+            </div>
+            <div class="lane" style="--lane-color: var(--red);">
+              <h3>ActorTrackedAoeService</h3>
+              <p>ワールド座標に床AoEを毎フレーム描く経路。</p>
+              <ul>
+                <li>CastStarted で Confirmed、CastCompleted で Impact。</li>
+                <li>予測AoEは Predicted として先に出る。</li>
+                <li>caster中心は開始時位置を固定し、target中心は TargetWorld → TargetId → actor位置の順で解決。</li>
+              </ul>
+            </div>
+            <div class="lane" style="--lane-color: var(--amber);">
+              <h3>AddObjectAoeService</h3>
+              <p>パラデイグマ系の出現オブジェクトAoEを描く経路。</p>
+              <ul>
+                <li>保存済み rule → cache → dictionary → recording_action → recording の順で解決。</li>
+                <li>同名候補が多すぎる live group は描かない。</li>
+                <li>発動元actor名の recording_action 誤学習は無視。</li>
+              </ul>
+            </div>
+            <div class="lane" style="--lane-color: var(--green);">
+              <h3>PredictedCastReminder</h3>
+              <p>録画集計から未来のキャストを予測して先出しする経路。</p>
+              <ul>
+                <li>CastStarted が来れば Confirmed へ置き換わる。</li>
+                <li>来なければ予測着弾後およそ1秒で自動消滅する想定。</li>
+                <li>分岐や同期オフセットの精度が表示時刻に影響する。</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="shapes">
+        <div class="section-inner">
+          <div class="section-head">
+            <div>
+              <span class="kicker">Geometry</span>
+              <h2>Lumina CastType の解釈</h2>
+            </div>
+            <p class="section-note">
+              自動AoEの中心は、CastType によって caster中心か target/ground中心かが変わります。
+              ここを間違えると「範囲は出るが場所が違う」になります。
+            </p>
+          </div>
+
+          <div class="shape-lab">
+            <div class="shape-controls" aria-label="CastType選択">
+              <button class="shape-button" data-shape="circle" data-title="CastType 2: target centered circle" data-text="対象/地面中心の円。TargetWorld があれば最優先。Hitbox は加算しない。" aria-pressed="true">
+                <strong>CastType 2</strong> target中心 circle
+              </button>
+              <button class="shape-button" data-shape="cone" data-title="CastType 3: caster cone" data-text="キャスター中心の扇。キャスト開始時のrotationを使い、EffectRangeにHitboxを加算する。">
+                <strong>CastType 3</strong> caster中心 cone
+              </button>
+              <button class="shape-button" data-shape="rect" data-title="CastType 4: caster rect" data-text="キャスター中心の直線/矩形。rotation snapshot と既定半幅を使う。">
+                <strong>CastType 4</strong> caster中心 rect
+              </button>
+              <button class="shape-button" data-shape="circle" data-title="CastType 5: caster PBAoE" data-text="キャスター中心の円。EffectRangeにHitboxを加算する。">
+                <strong>CastType 5</strong> caster中心 circle
+              </button>
+              <button class="shape-button" data-shape="donut" data-title="CastType 6/7/10 or Donut Omen" data-text="キャスター中心のドーナツ。Omen ID から内径比を変える。">
+                <strong>CastType 6/7/10</strong> donut
+              </button>
+              <button class="shape-button" data-shape="cross" data-title="CastType 11: cross" data-text="キャスター中心の十字。直線を縦横に重ねる扱い。">
+                <strong>CastType 11</strong> cross
+              </button>
+              <button class="shape-button" data-shape="rect" data-title="CastType 12: ground rect" data-text="target/ground中心の矩形。旧認識ではcaster中心にしがちで、ズレやすい。">
+                <strong>CastType 12</strong> target中心 rect
+              </button>
+              <button class="shape-button" data-shape="cone" data-title="CastType 13: ground cone" data-text="target/ground中心の扇。Hitbox は加算しない。">
+                <strong>CastType 13</strong> target中心 cone
+              </button>
+            </div>
+
+            <div class="shape-display">
+              <div class="shape-arena square">
+                <div id="shapeViz" class="shape circle"></div>
+                <div class="shape-actor"></div>
+                <div class="shape-target"></div>
+              </div>
+              <div class="shape-caption">
+                <strong id="shapeTitle">CastType 2: target centered circle</strong>
+                <span id="shapeText">対象/地面中心の円。TargetWorld があれば最優先。Hitbox は加算しない。</span>
+              </div>
+            </div>
+          </div>
+
+          <table class="matrix" style="margin-top: 1rem;">
+            <thead>
+              <tr>
+                <th>判定</th>
+                <th>現在の認識</th>
+                <th>自動描画しない条件</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>EffectRange</td>
+                <td><code>0 &lt; range &lt;= 50m</code> を信頼。50m超は特殊/全体/誤データ扱い。</td>
+                <td>range 0 以下、50m超、またはアリーナ半径の1.5倍級の円。</td>
+              </tr>
+              <tr>
+                <td>Omen</td>
+                <td>床塗りの donut 判定は CastType 6/7/10 または Omen 53/60-64 を優先。ミニマップ用 gimmick 推定では Omen 1-5 / 10-14 / 40-42 も補助情報として使う。</td>
+                <td>未知 Omen は CastType fallback。未知 CastType は「適当な円」へ落とさず描かない。</td>
+              </tr>
+              <tr>
+                <td>Hitbox</td>
+                <td>CastType 3/4/5 は caster hitbox を EffectRange に加算。</td>
+                <td>target/ground中心の 2/12/13 には加算しない。</td>
+              </tr>
+              <tr>
+                <td>Rotation</td>
+                <td>Cone / Rect / Cross はキャスト開始時の rotation snapshot を基本にし、描画角は <code>π/2 - rotation</code> へ変換。</td>
+                <td>rotation が取れない特殊ケースは向き指定ルールか手動 AoE Zone へ寄せる。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="objects">
+        <div class="section-inner">
+          <div class="section-head">
+            <div>
+              <span class="kicker">Object AoE</span>
+              <h2>パラデイグマ系の認識</h2>
+            </div>
+            <p class="section-note">
+              オブジェクトAoEは、敵キャストのAoEとは別物です。発動元はボスでも、実際の危険範囲は出現オブジェクトの位置に紐づきます。
+            </p>
+          </div>
+
+          <div class="grid-2">
+            <div class="panel">
+              <h3>優先順位</h3>
+              <p>
+                私の認識では、object AoE はまず保存済み <code>object_aoe_rules</code> を見ます。
+                その後、同一戦闘内cache、dictionary、録画済み action、object出現後の録画学習の順で形状を解決します。
+              </p>
+              <ul>
+                <li>manual/user-authored rule は明示指定なので強い。</li>
+                <li>dictionary / recording_action / recording 由来は学習後に <code>object_aoe_rules</code> へ保存され、次回は最優先になる。</li>
+                <li>同名オブジェクトは DataId が揺れる可能性があるため名前優先。</li>
+              </ul>
+            </div>
+            <div class="panel">
+              <h3>今回の重要な仮説</h3>
+              <p>
+                <code>ゾディアーク</code> のような既知の発動元actorが <code>recording_action</code> の object rule として保存されている場合、
+                それはオブジェクトAoEではなく誤学習として扱うべきです。
+              </p>
+              <ul>
+                <li>保存済み誤ルールは削除せず、実行時に無視する。</li>
+                <li>新規保存時も同条件なら保存しない。</li>
+                <li><code>ケツァクウァトル</code> / <code>ケツァクワァトル</code> は同一候補として扱う。</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="grid-2" style="margin-top: 1rem;">
+            <div class="panel">
+              <h3>ミニマップと床塗り</h3>
+              <p>
+                object AoE は <code>arena_view</code> の <code>AoeZones</code> としてミニマップへ渡されます。
+                <code>AoeZones</code> がある場合、旧 gimmick 近似は抑制し、ユーザー/学習済み zone を正として描画します。
+              </p>
+              <ul>
+                <li><code>live_floor_paint=false</code> なら床塗りせず、ミニマップだけ表示できる。</li>
+                <li><code>suppress_auto_aoe=true</code> なら同一 cast の Lumina 自動ミニマップAoEを消す。</li>
+              </ul>
+            </div>
+            <div class="panel">
+              <h3>group anchor</h3>
+              <p>
+                <code>matched_object</code> は代表位置、<code>each_matched_object</code> は group 内の全位置へ展開されます。
+                パラデイグマのような複数出現では、ここで「1個だけ出る」か「全個体に出る」かが決まります。
+              </p>
+              <ul>
+                <li><code>ObjectGroupAppearedEvent</code> は派生イベントなので、録画には直接残らない。</li>
+                <li>名前一致は <code>exact</code> / <code>startswith</code> / 既定 <code>contains</code>。</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="review-strip" style="margin-top: 1rem;">
+            <div><strong>object_appear</strong>出現イベントが来るなら、位置が明確なので最も早く描ける。</div>
+            <div><strong>live scan</strong>appear が来ない既存ObjectTable上のギミックを拾う救済。</div>
+            <div><strong>max 8</strong>同名候補が9以上ならボスパーツ/背景ノイズの可能性が高い。</div>
+            <div><strong>dedup</strong>同じ object AoE は表示時間中に再発火しない。</div>
+          </div>
+        </div>
+      </section>
+
+      <section id="lifecycle">
+        <div class="section-inner">
+          <div class="section-head">
+            <div>
+              <span class="kicker">Lifecycle</span>
+              <h2>床AoEの表示寿命</h2>
+            </div>
+            <p class="section-note">
+              床塗りは「ただ出して消す」ではなく、段階ごとに濃さと意味が違います。
+              ここをユーザー期待と合わせないと、早すぎる/遅すぎる/残りすぎる印象になります。
+            </p>
+          </div>
+
+          <div class="phase-timeline">
+            <div class="phase-card" style="--phase-color: var(--cyan);">
+              <h3>Predicted</h3>
+              <p>録画予測由来。着弾時刻が近づくほど濃くなる。CastStarted が来れば Confirmed に置換。期限は予測着弾 + 1.0秒。</p>
+            </div>
+            <div class="phase-card" style="--phase-color: var(--red);">
+              <h3>Confirmed</h3>
+              <p>実キャスト開始。キャスト中の確定予告として表示。寿命は原則 CastTime + 3.0秒で、同じ source/cast の Predicted を置換。</p>
+            </div>
+            <div class="phase-card" style="--phase-color: var(--amber);">
+              <h3>Impact</h3>
+              <p>CastCompleted または instant action。着弾済みフィードバックとして 0.3秒だけ強調赤で見せる。</p>
+            </div>
+            <div class="phase-card" style="--phase-color: var(--dim);">
+              <h3>Fade</h3>
+              <p>余韻。1.5秒で透明化し、期限切れで active list から消える。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="performance">
+        <div class="section-inner">
+          <div class="section-head">
+            <div>
+              <span class="kicker">Performance</span>
+              <h2>重くしないための描画境界</h2>
+            </div>
+            <p class="section-note">
+              AoE表示時の重さは、形状数、半径、WorldToScreen回数、投影失敗時の描き直しで増えます。
+              仕様として「描かない判断」を持たせることが、正確さと同じくらい重要です。
+            </p>
+          </div>
+
+          <div class="grid-2">
+            <div class="panel">
+              <h3>現在入っている抑制</h3>
+              <ul>
+                <li>中心距離 - 半径 が 60m を超える床AoEは投影前にskip。</li>
+                <li>円/扇のsegmentsは半径に応じて増やすが 24-64 にclamp。</li>
+                <li>円/扇の頂点配列は <code>ArrayPool</code> を使って確保圧を下げる。</li>
+                <li>live drawer が空になれば WorldOverlayWindow を閉じる。</li>
+              </ul>
+            </div>
+            <div class="panel">
+              <h3>安全側の描画失敗</h3>
+              <p>
+                投影に失敗した点を含む円/扇/中心矩形は、非凸ポリゴン事故を避けるため丸ごと描かない。
+                Rect は中心線 fallback を持つため、情報量を落としてでも破綻しにくくする。
+              </p>
+              <ul>
+                <li>巨大AoEは「全部描く」よりも raid-wide / 明示定義へ寄せる。</li>
+                <li>object group が多すぎる場合は、背景・ボスパーツの誤検出として止める。</li>
+              </ul>
+            </div>
+          </div>
+
+          <table class="matrix" style="margin-top: 1rem;">
+            <thead>
+              <tr>
+                <th>負荷源</th>
+                <th>設計上の境界</th>
+                <th>レビューしたい点</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>同時表示数</td>
+                <td>object AoE は同名候補数・重複発火・表示時間で抑える。</td>
+                <td>パラデイグマで必要な最大同時数を明文化したい。</td>
+              </tr>
+              <tr>
+                <td>巨大円/大扇</td>
+                <td>50m超 EffectRange、arena半径1.5倍級の円、60m外の床AoEは描かない。</td>
+                <td>raid-wide でも手動 user layout だけは残す例外を維持するか。</td>
+              </tr>
+              <tr>
+                <td>短命object</td>
+                <td>出現時に rule を温め、<code>live_floor_paint</code> で床塗り有無を分ける。</td>
+                <td>着弾同時表示に落ちているケースは object_appear / live scan の不足を疑う。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="risks">
+        <div class="section-inner">
+          <div class="section-head">
+            <div>
+              <span class="kicker">Failure modes</span>
+              <h2>ズレやすい点と現在の見立て</h2>
+            </div>
+            <p class="section-note">
+              ここは特にレビューしてほしいところです。私の認識が間違っていれば、次の修正方針も間違います。
+            </p>
+          </div>
+
+          <div class="risk-list">
+            <div class="risk-item" style="--risk-color: var(--red);">
+              <h3>意味不明な巨大AoEが出る</h3>
+              <p>原因候補: ボス本体/ボスパーツが object AoE rule に誤学習される、または live scan が同名候補を拾いすぎる。</p>
+            </div>
+            <div class="risk-item" style="--risk-color: var(--amber);">
+              <h3>パラデイグマのAoEが遅い</h3>
+              <p>原因候補: object_appear が来ず、ActionUsedEvent の Impact まで待っている。期待は object位置確定時点での先出し。</p>
+            </div>
+            <div class="risk-item" style="--risk-color: var(--cyan);">
+              <h3>AoE表示時に重い</h3>
+              <p>原因候補: 同時に多数の大円/扇/矩形を描き、WorldToScreen 呼び出しが増える。segments上限、距離カリング、object group上限で抑える。</p>
+            </div>
+            <div class="risk-item" style="--risk-color: var(--green);">
+              <h3>AoEが残り続ける</h3>
+              <p>原因候補: CastCompleted/Cancel/CombatEnded/ZoneChanged のどこかで active state が掃除されない、または TTL が長すぎる。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="review">
+        <div class="section-inner">
+          <div class="section-head">
+            <div>
+              <span class="kicker">Review</span>
+              <h2>確認したい仕様判断</h2>
+            </div>
+            <p class="section-note">
+              実装修正に戻る前に、以下の認識が合っているかを確認したいです。
+              特に「出すべきでないAoE」と「遅くても許されないAoE」を分けるのが重要です。
+            </p>
+          </div>
+
+          <div class="question-list">
+            <div class="question">
+              <h3>1. パラデイグマ系は「objectが見えた瞬間」に床AoEを出すべきか</h3>
+              <p>私の認識では YES。ActionUsedEvent まで待つのは遅すぎるため、object_appear/live scan/object rule を優先するべきです。</p>
+            </div>
+            <div class="question">
+              <h3>2. ボス本体名の recording_action object rule は常に誤学習扱いでよいか</h3>
+              <p>私の認識では YES。ただし手動で明示した manual rule は例外として残します。</p>
+            </div>
+            <div class="question">
+              <h3>3. Luminaだけで不明なAoEは適当な円を出さない方針でよいか</h3>
+              <p>私の認識では YES。不明な10m円は誤誘導になりやすく、手動 mechanic / AoE Zone に寄せるべきです。</p>
+            </div>
+            <div class="question">
+              <h3>4. 画面床塗りとミニマップは同時に出るべきか</h3>
+              <p>私の認識では原則 YES。ただし floor paint のON/OFFと minimap のON/OFFは独立設定として扱うべきです。</p>
+            </div>
+            <div class="question">
+              <h3>5. ActionUsedEvent は「予告」ではなく「着弾/補完」扱いでよいか</h3>
+              <p>私の認識では YES。ノーキャスト技の補完には使えますが、パラデイグマの先出しには遅すぎます。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="section-inner">
+          <div class="section-head">
+            <div>
+              <span class="kicker">Source map</span>
+              <h2>根拠ファイル</h2>
+            </div>
+            <p class="section-note">
+              この設計書は以下の実装と現在仕様から起こしています。行番号は生成時点の目安です。
+            </p>
+          </div>
+
+          <div class="source-list">
+            <div class="source-item">
+              <p>詠唱イベントの発行条件、完了推定、TargetWorld snapshot。</p>
+              <code>src/FfxivEchoes/Capture/CastCapture.cs:55</code>
+            </div>
+            <div class="source-item">
+              <p>ActionEffect由来イベント、PC/AA判定、TargetWorld採用条件。</p>
+              <code>src/FfxivEchoes/Capture/ActionEffectCapture.cs:140</code>
+            </div>
+            <div class="source-item">
+              <p>ObjectTableからの出現検出、戦闘開始時の再観測。</p>
+              <code>src/FfxivEchoes/Capture/ObjectCapture.cs:80</code>
+            </div>
+            <div class="source-item">
+              <p>イベント契約: cast/action/object のデータ構造。</p>
+              <code>src/FfxivEchoes/Events/GameEvents.cs:45</code>
+            </div>
+            <div class="source-item">
+              <p>Lumina CastType / EffectRange / Omen からのAoE解決。</p>
+              <code>src/FfxivEchoes/Triggers/AoeResolver.cs:13</code>
+            </div>
+            <div class="source-item">
+              <p>敵キャスト/瞬間アクションからミニマップ表示へ流す経路。</p>
+              <code>src/FfxivEchoes/Triggers/AutoTelegraphService.cs:76</code>
+            </div>
+            <div class="source-item">
+              <p>床塗りAoEの登録、フェーズ、描画、期限切れ。</p>
+              <code>src/FfxivEchoes/Triggers/ActorTrackedAoeService.cs:139</code>
+            </div>
+            <div class="source-item">
+              <p>オブジェクトAoEの学習、live scan、group fire。</p>
+              <code>src/FfxivEchoes/Triggers/AddObjectAoeService.cs:157</code>
+            </div>
+            <div class="source-item">
+              <p>object_aoe_rules のmatching、表記ゆれ、誤学習抑止。</p>
+              <code>src/FfxivEchoes/Triggers/ObjectAoeRuleResolver.cs:20</code>
+            </div>
+            <div class="source-item">
+              <p>ミニマップの AoeZones 優先描画と Lumina 自動AoE抑制。</p>
+              <code>src/FfxivEchoes/Windows/MinimapWindow.cs:158</code>
+            </div>
+            <div class="source-item">
+              <p>床図形の投影、segments上限、投影失敗時のskip/fallback。</p>
+              <code>src/FfxivEchoes/Windows/WorldShapeRenderer.cs:28</code>
+            </div>
+            <div class="source-item">
+              <p>ミニマップ/床描画のユーザー向け現行仕様。</p>
+              <code>docs/current-spec.md:82</code>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="footer">
+        Generated as a review artifact. This document intentionally exposes assumptions before implementation.
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const navLinks = [...document.querySelectorAll('.nav a')];
+    const sections = navLinks
+      .map(link => document.querySelector(link.getAttribute('href')))
+      .filter(Boolean);
+
+    const observer = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (!entry.isIntersecting) return;
+        navLinks.forEach(link => {
+          link.classList.toggle('is-active', link.getAttribute('href') === `#${entry.target.id}`);
+        });
+      });
+    }, { rootMargin: '-35% 0px -55% 0px', threshold: 0 });
+
+    sections.forEach(section => observer.observe(section));
+
+    const shapeViz = document.getElementById('shapeViz');
+    const shapeTitle = document.getElementById('shapeTitle');
+    const shapeText = document.getElementById('shapeText');
+    const shapeButtons = [...document.querySelectorAll('.shape-button')];
+
+    shapeButtons.forEach(button => {
+      button.addEventListener('click', () => {
+        shapeButtons.forEach(b => b.setAttribute('aria-pressed', String(b === button)));
+        shapeViz.className = `shape ${button.dataset.shape}`;
+        shapeTitle.textContent = button.dataset.title;
+        shapeText.textContent = button.dataset.text;
+      });
+    });
+  </script>
+</body>
+</html>

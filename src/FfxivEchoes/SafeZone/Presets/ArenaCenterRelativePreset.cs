@@ -18,9 +18,7 @@ public sealed class ArenaCenterRelativePreset : ISafeZonePreset
         var directionStr = ParamHelper.GetString(calc.Params, "direction") ?? "N";
         var distance = ParamHelper.GetFloat(calc.Params, "distance") ?? 18f;
 
-        var center = ctx.Boss is { } b
-            ? new Vector3(b.Position.X, b.Position.Y, b.Position.Z)
-            : ctx.ArenaCenter;
+        var center = ctx.ArenaCenter;
 
         var angleDeg = ParseDirection(directionStr);
         var angleRad = angleDeg * MathF.PI / 180f;

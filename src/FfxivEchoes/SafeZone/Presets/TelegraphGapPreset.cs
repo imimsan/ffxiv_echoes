@@ -34,15 +34,58 @@ public sealed class TelegraphGapPreset : ISafeZonePreset
 
         var origin = ResolveOrigin(calc, ctx);
         var searchRadius = ParamHelper.GetFloat(calc.Params, "search_radius") ?? 18f;
+        // telegraph を指定するキーが存在するか（"telegraphs" 標準 / "actors" は未対応キー）。
+        var hasTelegraphKey = calc.Params.ContainsKey("telegraphs") || calc.Params.ContainsKey("actors");
         var shapes = BuildShapes(calc.Params, ctx);
         if (shapes.Count == 0)
         {
-            return new SafeZoneResult(origin, DirectionInfo.Compute(ctx.SelfPosition, origin));
+            // telegraph を期待するキーがあるのに 0 件 = 解釈失敗（例: 未対応の "actors" キー）。
+            // self 位置を「安置」と誤提示すると AoE 内へ誘導しかねないため null を返す（呼び出し側はガード済み）。
+            // キー自体が無い＝避ける対象が無い場合のみ origin（その場待機）を返す。
+            return hasTelegraphKey
+                ? null
+                : new SafeZoneResult(origin, DirectionInfo.Compute(ctx.SelfPosition, origin));
         }
 
-        // 同心円サンプリング：半径方向に 4 段、角度方向に 24 分割
-        const int RingCount = 4;
-        const int AngleSlices = 24;
+        // クリアランス（隙間の縁ギリギリでなく、この距離だけ全方位の余裕を確保した点を優先）。
+        // 既定 1.0m（プレイヤー hitbox 半径 + α 相当）。0 以下なら従来どおりマージン無し。
+        var clearanceMargin = ParamHelper.GetFloat(calc.Params, "clearance") ?? 1.0f;
+        var safe = FindSafePoint(origin, searchRadius, shapes, clearanceMargin);
+
+        // 安全点ゼロ（全領域 telegraph）：self を「安置」と誤提示しないため null。
+        // 呼び出し側（DirectionCall/FieldMarker/ProximityFeedback）は result null をガード済み。
+        return safe is { } p
+            ? new SafeZoneResult(p, DirectionInfo.Compute(ctx.SelfPosition, p))
+            : null;
+    }
+
+    /// <summary>
+    /// origin 中心の同心円グリッドを走査し、どの telegraph にも含まれない「安置」点を返す。
+    /// <paramref name="clearanceMargin"/> だけ全方位の余裕がある点を優先し、見つからなければ
+    /// 素の安全点（真の激狭安置）を返す。安全点が皆無なら null。形状の内外判定は
+    /// <see cref="TelegraphShape.Contains"/> の再利用のみで、座標符号の独自計算はしない。
+    /// </summary>
+    public static Vector3? FindSafePoint(
+        Vector3 origin, float searchRadius, IReadOnlyList<TelegraphShape> shapes, float clearanceMargin)
+    {
+        const int RingCount = 6;
+        const int AngleSlices = 72;   // 5°粒度
+        if (searchRadius <= 0f)
+        {
+            searchRadius = 1f;
+        }
+
+        Vector3? bareSafe = null;
+
+        // origin（その場待機）を最優先候補にする：既に安全なら不要な移動を避ける。
+        if (!IsInAny(origin, shapes))
+        {
+            bareSafe = origin;
+            if (HasClearance(origin, shapes, clearanceMargin))
+            {
+                return origin;
+            }
+        }
 
         for (var ring = 1; ring <= RingCount; ring++)
         {
@@ -54,15 +97,42 @@ public sealed class TelegraphGapPreset : ISafeZonePreset
                     origin.X + MathF.Sin(angle) * r,
                     origin.Y,
                     origin.Z + MathF.Cos(angle) * r);
-                if (!IsInAny(p, shapes))
+                if (IsInAny(p, shapes))
                 {
-                    return new SafeZoneResult(p, DirectionInfo.Compute(ctx.SelfPosition, p));
+                    continue;
+                }
+                bareSafe ??= p;                       // マージン無しフォールバック（最初の安全点）
+                if (HasClearance(p, shapes, clearanceMargin))
+                {
+                    return p;                         // マージン確保点を優先（縁ギリギリを避ける）
                 }
             }
         }
 
-        // 全領域が telegraph で覆われている：origin を返す（フォールバック）
-        return new SafeZoneResult(origin, DirectionInfo.Compute(ctx.SelfPosition, origin));
+        return bareSafe;                              // マージン点が無ければ素の安全点（真の激狭）
+    }
+
+    /// <summary>点 p の周囲 <paramref name="margin"/> に telegraph が無い（全方位に余裕がある）か。</summary>
+    private static bool HasClearance(Vector3 p, IReadOnlyList<TelegraphShape> shapes, float margin)
+    {
+        if (margin <= 0f)
+        {
+            return true;
+        }
+        const int Probes = 8;
+        for (var k = 0; k < Probes; k++)
+        {
+            var a = k * (2 * MathF.PI / Probes);
+            var probe = new Vector3(
+                p.X + MathF.Sin(a) * margin,
+                p.Y,
+                p.Z + MathF.Cos(a) * margin);
+            if (IsInAny(probe, shapes))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static Vector3 ResolveOrigin(SafeZoneCalculation calc, SafeZoneContext ctx)
@@ -107,7 +177,7 @@ public sealed class TelegraphGapPreset : ISafeZonePreset
         return list;
     }
 
-    private static bool IsInAny(Vector3 p, List<TelegraphShape> shapes)
+    private static bool IsInAny(Vector3 p, IReadOnlyList<TelegraphShape> shapes)
     {
         foreach (var s in shapes)
         {

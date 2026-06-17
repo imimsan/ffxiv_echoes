@@ -30,10 +30,28 @@ public sealed class ZoneCapture : IDisposable
         _clientState.TerritoryChanged -= OnTerritoryChanged;
     }
 
+    /// <summary>
+    /// プラグイン読み込み時に既にゾーン内にいる場合のため、現在の territory を
+    /// 一度だけ ZoneChangedEvent として発行する。すべての subscriber が attach
+    /// された後に Plugin.cs から呼ぶこと。
+    /// </summary>
+    public void PublishInitialState()
+    {
+        var territoryId = _clientState.TerritoryType;
+        if (territoryId == 0)
+        {
+            return;
+        }
+        var name = ResolveTerritoryName(territoryId);
+        _log.Information("[FfxivEchoes] 初期ゾーン → {Id} {Name}", territoryId, name);
+        _bus.Publish(new ZoneChangedEvent(DateTimeOffset.UtcNow, territoryId, name));
+    }
+
     private void OnTerritoryChanged(uint territoryId)
     {
         var name = ResolveTerritoryName(territoryId);
-        _log.Debug("[FfxivEchoes] ZoneChanged → {Id} {Name}", territoryId, name);
+        // 動作確認のため Information で出す（後で Debug に戻して良い）
+        _log.Information("[FfxivEchoes] ZoneChanged → {Id} {Name}", territoryId, name);
         _bus.Publish(new ZoneChangedEvent(DateTimeOffset.UtcNow, territoryId, name));
     }
 

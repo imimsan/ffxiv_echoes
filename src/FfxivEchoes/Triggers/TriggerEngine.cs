@@ -68,6 +68,12 @@ public sealed class TriggerEngine : IDisposable
         {
             _cooldowns.Reset();
         }
+        // 戦闘開始でも cooldown をリセット。CombatEnded を取り逃した場合（プラグイン起動直後・
+        // ゲーム再接続後）に前回戦闘末尾の cooldown が残り、新戦闘の開幕発火が抑制されるのを防ぐ（LC-03）。
+        if (ev is CombatStartedEvent)
+        {
+            _cooldowns.Reset();
+        }
 
         var triggerFile = _store.GetByZone(_currentZone);
         if (triggerFile is null)
@@ -106,6 +112,9 @@ public sealed class TriggerEngine : IDisposable
             }
 
             _cooldowns.MarkFired(trigger.Id, ev.Timestamp);
+
+            _log.Information("[FfxivEchoes] Trigger 発火: {Id} ({Name}) zone={Zone} via {EventType}",
+                trigger.Id, trigger.Name ?? "—", _currentZone, ev.GetType().Name);
 
             // P1: trigger.set_variable があれば実行
             if (trigger.SetVariable is { Name: { Length: > 0 } sv } && _variables is not null)

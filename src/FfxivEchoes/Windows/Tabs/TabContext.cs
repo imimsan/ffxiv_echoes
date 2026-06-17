@@ -9,4 +9,6 @@ public sealed class TabContext
 
     /// <summary>次フレームでフォーカスしたいタブ ID（MainWindow が処理）。</summary>
     public string? PendingFocusTab { get; set; }
+
+    public bool PendingCreateFromRecording { get; set; }
 }

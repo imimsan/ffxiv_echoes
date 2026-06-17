@@ -105,9 +105,68 @@ python -m http.server 8000
 
 `_demo_boss_casts` は **このデモ専用** のフィールドです。実プラグインでは無視されます。デモではここに書かれた時刻通りに「ボスがキャストを開始した」体でトリガーマッチをシミュレートします。
 
+## Replay Inspector
+
+`replay.html` は **trace.json** を時刻軸で再生し、AoE 描画決定を SVG で可視化する別ページです。
+プラグインの `AutoTelegraphService` / `AddObjectAoeService` / `PredictedObjectSpawnService` が
+「どこにどの形状を描こうとしたか」「なぜスキップしたか」をブラウザ上で検証するために使います。
+
+### 起動
+
+```bash
+cd demo
+python -m http.server 8000
+# ブラウザで http://localhost:8000/replay.html
+```
+
+起動時に `sample-trace.json` を自動ロードします。月の底パラデイグマ → ケツアクアトル 4 体予告 →
+確定描画 → 消失 の 30 秒シナリオが入っています。
+
+### 操作
+
+| 要素 | 動作 |
+|------|------|
+| Trace ファイル | クリック or ドロップで自前の trace.json を読み込み |
+| ▶ / ⏸ | 再生 / 一時停止 |
+| ⏮ / ⏭ | 直前 / 次のイベントへステップ |
+| ⟲ | 先頭に巻き戻し |
+| シーカー | スライダで任意時刻へジャンプ |
+| speed | 0.25× 〜 4× |
+
+### 画面要素
+
+- **Arena**：北 = 上 / +Z = 南 / +X = 東。半径 m とアリーナ形状（circle / rect）を SVG で描画。
+  active AoE が形状 (donut / circle / rect / cone / line / chevron) × 色 × アンカーで重なる
+- **Active AoE 一覧**：現在描画中の AoE と残り秒数。predict（オレンジ）/ actor（赤）で色分け
+- **Event Log**：現在時刻 ±5 秒のイベント。draw / remove / skip / cast / object_appear が時刻順に並ぶ
+- **Skip Reasons**：trace 全体で累積した skip 理由をサービス別に集計
+
+### trace.json schema
+
+完全な仕様は [`../docs/superpowers/specs/2026-05-24-aoe-fix-and-browser-replay-design.md`](../docs/superpowers/specs/2026-05-24-aoe-fix-and-browser-replay-design.md) §3 を参照。
+最小要素：
+
+```json
+{
+  "meta": { "schema_version": "1.0", "zone": "月の底" },
+  "arena": { "center_x": 100.0, "center_z": 100.0, "radius_m": 20.0, "shape": "circle" },
+  "events": [
+    { "t": 0.0, "kind": "cast_start", "cast_id": "0x67BF", "cast_name": "...", "cast_time": 5.0 },
+    { "t": 1.0, "kind": "draw_aoe", "id": "...", "service": "...", "shape": "donut",
+      "x_world": 88.79, "z_world": 87.36, "radius_m": 6.0, "inner_radius_m": 2.0,
+      "duration_sec": 14.0, "color": "#FFA500", "label": "..." },
+    { "t": 8.05, "kind": "aoe_skipped", "service": "AutoTelegraphService", "reason": "..." },
+    { "t": 15.0, "kind": "remove_aoe", "id": "...", "reason": "duration_expired" }
+  ]
+}
+```
+
+trace.json は C# 側 `src/FfxivEchoes.Replay/` の harness が録画 jsonl から生成する想定（実装は別タスク）。
+
 ## 関連
 
 - 実プラグイン本体：[`../src/FfxivEchoes/`](../src/FfxivEchoes/)
 - トリガースキーマ仕様：[`../trigger-schema.json`](../trigger-schema.json)
 - メイン仕様書：[`../SPEC.md`](../SPEC.md)
 - ロードマップ：[`../roadmap.md`](../roadmap.md)
+- Replay 設計書：[`../docs/superpowers/specs/2026-05-24-aoe-fix-and-browser-replay-design.md`](../docs/superpowers/specs/2026-05-24-aoe-fix-and-browser-replay-design.md)

@@ -36,14 +36,18 @@ public sealed class EventMatcher
             CastStartedEvent x => MatchCastStarted(x, match),
             CastCompletedEvent x => MatchCastEnd(x.SourceName, x.SourceId, x.CastActionId, x.CastActionName, match),
             CastCanceledEvent x => MatchCastEnd(x.SourceName, x.SourceId, x.CastActionId, x.CastActionName, match),
+            ActionUsedEvent x => MatchActionUsed(x, match),
             StatusGainedEvent x => MatchStatusGained(x, match),
             StatusLostEvent x => MatchStatusLost(x, match),
+            StatusUpdatedEvent x => MatchStatusUpdated(x, match),
             HpChangedEvent x => MatchHpChanged(x, match),
             CombatStartedEvent => true,
             CombatEndedEvent => true,
             ZoneChangedEvent x => MatchZoneChanged(x, match),
             ObjectAppearedEvent x => MatchObjectAppeared(x, match),
             ObjectDisappearedEvent x => MatchObjectDisappeared(x, match),
+            TetherAppearedEvent x => MatchTether(x, match),
+            TetherRemovedEvent x => MatchTetherRemove(x, match),
             _ => false,
         };
     }
@@ -65,11 +69,36 @@ public sealed class EventMatcher
         return true;
     }
 
+    // テザー専用フィールドは MatchCondition に増やさず、既存フィールドへ意味を割り当てて最小変更にする:
+    //   status_id      → tether_type_id（テザー種別。近/遠で色が違う等）
+    //   duration_range → source-target 距離 m（近/遠の割り当て判定。min/max で帯域マッチ）
+    //   source/source_id → テザー発生源（通常ボス）, target → 被テザー対象
+    private bool MatchTether(TetherAppearedEvent ev, MatchCondition? m)
+    {
+        if (m is null) return true;
+        if (m.SourceId is { } sid && ev.SourceId != sid) return false;
+        if (m.Source is not null && !MatchString(m.Source, ev.SourceName)) return false;
+        if (m.StatusId is { } tetherType && ev.TetherTypeId != tetherType) return false;
+        if (m.Target is not null && !_targetResolver.Matches(ev.TargetId, m.Target)) return false;
+        if (m.DurationRange is { } range && !MatchRange(range, ev.Distance)) return false;
+        return true;
+    }
+
+    private bool MatchTetherRemove(TetherRemovedEvent ev, MatchCondition? m)
+    {
+        if (m is null) return true;
+        if (m.SourceId is { } sid && ev.SourceId != sid) return false;
+        if (m.StatusId is { } tetherType && ev.TetherTypeId != tetherType) return false;
+        if (m.Target is not null && !_targetResolver.Matches(ev.TargetId, m.Target)) return false;
+        return true;
+    }
+
     public static string EventTypeName(IGameEvent ev) => ev switch
     {
         CastStartedEvent => "cast_start",
         CastCompletedEvent => "cast_complete",
         CastCanceledEvent => "cast_cancel",
+        ActionUsedEvent => "action_used",
         StatusGainedEvent => "status_gain",
         StatusLostEvent => "status_lose",
         StatusUpdatedEvent => "status_update",
@@ -79,6 +108,8 @@ public sealed class EventMatcher
         ZoneChangedEvent => "zone_change",
         ObjectAppearedEvent => "object_appear",
         ObjectDisappearedEvent => "object_disappear",
+        TetherAppearedEvent => "tether",
+        TetherRemovedEvent => "tether_remove",
         _ => string.Empty,
     };
 
@@ -138,6 +169,35 @@ public sealed class EventMatcher
         return true;
     }
 
+    private bool MatchActionUsed(ActionUsedEvent ev, MatchCondition? m)
+    {
+        if (m is null)
+        {
+            return true;
+        }
+        if (m.ActionId is not null && !MatchHexId(m.ActionId, ev.ActionId))
+        {
+            return false;
+        }
+        if (m.ActionName is not null && !MatchString(m.ActionName, ev.ActionName))
+        {
+            return false;
+        }
+        if (m.Source is not null && !MatchString(m.Source, ev.SourceName))
+        {
+            return false;
+        }
+        if (m.SourceId is { } expected && ev.SourceId != expected)
+        {
+            return false;
+        }
+        if (m.Target is not null && !_targetResolver.Matches(ev.TargetId ?? 0, m.Target))
+        {
+            return false;
+        }
+        return true;
+    }
+
     private bool MatchStatusGained(StatusGainedEvent ev, MatchCondition? m)
     {
         if (m is null)
@@ -152,11 +212,9 @@ public sealed class EventMatcher
         {
             return false;
         }
-        if (m.Source is not null && !MatchString(m.Source, ev.TargetName))
-        {
-            // status_gain の "source" は付与した側。ev.SourceName 相当の情報が無いので暫定で TargetName を使わない
-            return false;
-        }
+        // status_gain の "source"（付与した側）は StatusGainedEvent に名前情報が無いため
+        // 文字列照合できない。以前は誤って付与"対象"の TargetName と照合しており、ボス名 source は
+        // 永久不発・プレイヤー名は無関係なデバフで誤発火していた。source で絞るなら source_id を使う。
         if (m.SourceId is { } sourceId && ev.SourceId != sourceId)
         {
             return false;
@@ -191,6 +249,31 @@ public sealed class EventMatcher
             return false;
         }
         if (m.Target is not null && !_targetResolver.Matches(ev.TargetId, m.Target))
+        {
+            return false;
+        }
+        return true;
+    }
+
+    private bool MatchStatusUpdated(StatusUpdatedEvent ev, MatchCondition? m)
+    {
+        if (m is null)
+        {
+            return true;
+        }
+        if (m.StatusId is { } statusId && ev.StatusId != statusId)
+        {
+            return false;
+        }
+        if (m.Target is not null && !_targetResolver.Matches(ev.TargetId, m.Target))
+        {
+            return false;
+        }
+        if (m.DurationRange is { } durRange && !MatchRange(durRange, ev.RemainingTime))
+        {
+            return false;
+        }
+        if (m.Stacks is { } stacks && !MatchStacks(stacks, ev.Stacks))
         {
             return false;
         }

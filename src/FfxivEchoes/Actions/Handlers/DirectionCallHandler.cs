@@ -52,9 +52,22 @@ public sealed class DirectionCallHandler : IActionHandler
             return;
         }
 
-        var format = (action.Format ?? "cardinal_jp").ToLowerInvariant();
+        // output_format.direction_style があれば action.Format より優先（サンプルが safe_zone 側で文面指定するため）。
+        var outputFormat = action.SafeZone.OutputFormat;
+        var format = (outputFormat?.DirectionStyle ?? action.Format ?? "cardinal_jp").ToLowerInvariant();
         var directionText = FormatDirection(result.FromPlayer, format);
-        var fullText = string.IsNullOrEmpty(action.Text) ? directionText : $"{action.Text} {directionText}";
+
+        // tts_template が指定されていれば ${direction_clock} 等を補間して文面とする。
+        // 無ければ従来どおり action.Text + 方角。
+        string fullText;
+        if (!string.IsNullOrEmpty(outputFormat?.TtsTemplate))
+        {
+            fullText = ApplyTemplate(outputFormat!.TtsTemplate!, result.FromPlayer);
+        }
+        else
+        {
+            fullText = string.IsNullOrEmpty(action.Text) ? directionText : $"{action.Text} {directionText}";
+        }
 
         if (action.Tts ?? true)
         {
@@ -65,6 +78,7 @@ public sealed class DirectionCallHandler : IActionHandler
                 Voice = action.Voice,
                 Volume = action.Volume,
                 Rate = action.Rate,
+                Priority = action.Priority,
             }, context);
         }
 
@@ -76,6 +90,22 @@ public sealed class DirectionCallHandler : IActionHandler
         {
             _chatGui.Print($"[Echoes] {fullText}");
         }
+    }
+
+    /// <summary>
+    /// output_format.tts_template の <c>${...}</c> トークンを方角情報で補間する。
+    /// 未知トークンは原文のまま残す（リテラル ${...} になっても安全側）。
+    /// 対応トークン：direction_clock / direction_cardinal / direction_cardinal_jp /
+    /// direction_relative_jp / direction_deg。
+    /// </summary>
+    public static string ApplyTemplate(string template, DirectionInfo info)
+    {
+        return template
+            .Replace("${direction_clock}", info.DirectionClock.ToString("0.#", CultureInfo.InvariantCulture))
+            .Replace("${direction_cardinal_jp}", CardinalJp(info.DirectionCardinal))
+            .Replace("${direction_relative_jp}", RelativeJp(info.DirectionDeg))
+            .Replace("${direction_cardinal}", info.DirectionCardinal)
+            .Replace("${direction_deg}", info.DirectionDeg.ToString("0", CultureInfo.InvariantCulture));
     }
 
     private static string FormatDirection(DirectionInfo info, string format) => format switch

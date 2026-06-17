@@ -11,16 +11,26 @@ namespace FfxivEchoes.Recording;
 /// 1 戦闘ぶんの録画セッション。<see cref="StreamWriter"/> をラップして JSON Lines 形式で書き出す。
 /// </summary>
 /// <remarks>
-/// 戦闘終了時に <see cref="Dispose"/> を呼ぶこと。途中でゲーム強制終了した場合の保護のため、
-/// <see cref="WriteEvent"/> 毎に AutoFlush を有効にしている。
+/// 戦闘終了時に <see cref="Dispose"/> を呼ぶこと（最終 Flush でクラッシュ保護）。
+/// 旧実装は <see cref="WriteEvent"/> 毎に AutoFlush=true で同期ディスク書き込みしており、
+/// raid-wide 着弾フレームで HpChanged/StatusGained が同フレームに数十件 publish されると
+/// その回数だけフレームスレッド（および ActionEffectCapture のゲームフック）で同期 flush が走り、
+/// 低速ストレージ / OneDrive 監視下の ConfigDirectory で明確なスタッターになっていた。
+/// 現在は AutoFlush=false ＋ <see cref="FlushIntervalEvents"/> 件ごとのバッチ flush にし、
+/// フレーム毎の同期 I/O を排除する。クラッシュ時に失う未 flush 分は直近わずか（学習用途なので許容）。
 /// </remarks>
 public sealed class RecordingSession : IDisposable
 {
+    /// <summary>この件数ごとに Flush する（フレーム毎の同期 I/O を避けつつクラッシュ時の損失を限定）。</summary>
+    private const int FlushIntervalEvents = 64;
+
     private readonly DateTimeOffset _startTime;
     private readonly string _filePath;
     private readonly IPluginLog _log;
+    private readonly Dictionary<uint, string> _partyIdToName;
     private StreamWriter? _writer;
     private int _eventCount;
+    private int _sinceFlush;
 
     public RecordingSession(
         string filePath,
@@ -34,12 +44,25 @@ public sealed class RecordingSession : IDisposable
         _startTime = startTime;
         _log = log;
 
+        // status events の source 名解決マップ。EventSerializer に渡すことで PC self-buff /
+        // PC DoT の source_id → name 解決ができ、aggregation 段階の party filter（名前マッチ）が
+        // 確実に PC 由来 status を除外できるようになる。
+        _partyIdToName = new Dictionary<uint, string>(party.Count);
+        foreach (var m in party)
+        {
+            if (m.ObjectId is { } id && id != 0 && !string.IsNullOrEmpty(m.Name))
+            {
+                _partyIdToName[id] = m.Name;
+            }
+        }
+
         Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
 
         var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.Read);
         _writer = new StreamWriter(stream, new UTF8Encoding(false))
         {
-            AutoFlush = true,
+            // フレーム毎の同期 flush を避けるため AutoFlush=false。WriteEvent で件数ごとに明示 flush する。
+            AutoFlush = false,
             NewLine = "\n",
         };
 
@@ -60,9 +83,14 @@ public sealed class RecordingSession : IDisposable
 
         try
         {
-            var line = EventSerializer.Serialize(ev, _startTime);
+            var line = EventSerializer.Serialize(ev, _startTime, _partyIdToName);
             _writer.WriteLine(line);
             _eventCount++;
+            if (++_sinceFlush >= FlushIntervalEvents)
+            {
+                _sinceFlush = 0;
+                _writer.Flush();
+            }
         }
         catch (Exception ex)
         {

@@ -21,17 +21,21 @@ public sealed class BossRelativePreset : ISafeZonePreset
         var angleDeg = ParamHelper.GetFloat(calc.Params, "angle") ?? 180f;
         var distance = ParamHelper.GetFloat(calc.Params, "distance") ?? 10f;
 
-        // ボスの向き（Rotation はラジアン、+Z 方向が rotation=0、CCW で正）
         var bossPos = new Vector3(ctx.Boss.Position.X, ctx.Boss.Position.Y, ctx.Boss.Position.Z);
-        var bossFacing = ctx.Boss.Rotation;
-
-        // ボス基準角を world 角に変換
-        var rad = bossFacing + angleDeg * MathF.PI / 180f;
-        // FFXIV：rotation=0 は +Z（南）方向。"前" は +Z、"右" は +X、… それを反映
-        var dx = MathF.Sin(rad) * distance;
-        var dz = MathF.Cos(rad) * distance;
-        var pos = bossPos + new Vector3(dx, 0, dz);
+        var pos = bossPos + ComputeOffset(ctx.Boss.Rotation, angleDeg, distance);
 
         return new SafeZoneResult(pos, DirectionInfo.Compute(ctx.SelfPosition, pos));
+    }
+
+    /// <summary>
+    /// ボス相対角からワールド オフセットを計算する純粋関数。
+    /// FFXIV: Rotation=0 は +Z（南）向き・+X=東。南を向くと右手は西(-X)なので、
+    /// 「正面=0 / 右=90 / 後=180 / 左=270」を満たすには bossFacing から angle を引く（時計回り）。
+    /// 以前は加算しており angle=90 がボスの「左」を指していた（安置が逆側になる重大バグ）。
+    /// </summary>
+    public static Vector3 ComputeOffset(float bossFacingRad, float angleDeg, float distance)
+    {
+        var rad = bossFacingRad - angleDeg * MathF.PI / 180f;
+        return new Vector3(MathF.Sin(rad) * distance, 0f, MathF.Cos(rad) * distance);
     }
 }

@@ -14,8 +14,11 @@ namespace FfxivEchoes.Events;
 /// </remarks>
 public sealed class InMemoryEventBus : IEventBus
 {
-    private readonly Dictionary<Type, List<Delegate>> _handlersByType = new();
-    private readonly List<Action<IGameEvent>> _allHandlers = new();
+    // 購読リストはコピーオンライト（不変配列を差し替え）にする。Publish は lock 内で配列の参照だけを
+    // 受け取り、列挙は lock 外で行う。これにより Publish ごとの ToArray アロケーションを無くし、
+    // raid-wide フレームで HpChanged/StatusGained が数十件同時 publish されても GC churn を生まない。
+    private readonly Dictionary<Type, Delegate[]> _handlersByType = new();
+    private Action<IGameEvent>[] _allHandlers = Array.Empty<Action<IGameEvent>>();
     private readonly object _gate = new();
     private readonly IPluginLog _log;
 
@@ -30,10 +33,11 @@ public sealed class InMemoryEventBus : IEventBus
         Action<IGameEvent>[] global;
         lock (_gate)
         {
-            typed = _handlersByType.TryGetValue(typeof(TEvent), out var list)
-                ? list.ToArray()
+            // 参照取得のみ（配列は不変なので lock 外で安全に列挙できる）。アロケーション無し。
+            typed = _handlersByType.TryGetValue(typeof(TEvent), out var arr)
+                ? arr
                 : Array.Empty<Delegate>();
-            global = _allHandlers.ToArray();
+            global = _allHandlers;
         }
 
         foreach (var d in typed)
@@ -53,21 +57,17 @@ public sealed class InMemoryEventBus : IEventBus
     {
         lock (_gate)
         {
-            if (!_handlersByType.TryGetValue(typeof(TEvent), out var list))
-            {
-                list = new List<Delegate>();
-                _handlersByType[typeof(TEvent)] = list;
-            }
-            list.Add(handler);
+            _handlersByType.TryGetValue(typeof(TEvent), out var arr);
+            _handlersByType[typeof(TEvent)] = AppendCopy(arr, handler);
         }
 
         return new Subscription(() =>
         {
             lock (_gate)
             {
-                if (_handlersByType.TryGetValue(typeof(TEvent), out var list))
+                if (_handlersByType.TryGetValue(typeof(TEvent), out var arr))
                 {
-                    list.Remove(handler);
+                    _handlersByType[typeof(TEvent)] = RemoveCopy(arr, handler);
                 }
             }
         });
@@ -77,15 +77,45 @@ public sealed class InMemoryEventBus : IEventBus
     {
         lock (_gate)
         {
-            _allHandlers.Add(handler);
+            _allHandlers = AppendCopy(_allHandlers, handler);
         }
         return new Subscription(() =>
         {
             lock (_gate)
             {
-                _allHandlers.Remove(handler);
+                _allHandlers = RemoveCopy(_allHandlers, handler);
             }
         });
+    }
+
+    // コピーオンライト用ヘルパ（呼び出し側は _gate を保持していること）。
+    private static T[] AppendCopy<T>(T[]? source, T item) where T : Delegate
+    {
+        if (source is null || source.Length == 0)
+        {
+            return new[] { item };
+        }
+        var next = new T[source.Length + 1];
+        Array.Copy(source, next, source.Length);
+        next[source.Length] = item;
+        return next;
+    }
+
+    private static T[] RemoveCopy<T>(T[] source, T item) where T : Delegate
+    {
+        var idx = Array.IndexOf(source, item);
+        if (idx < 0)
+        {
+            return source;
+        }
+        if (source.Length == 1)
+        {
+            return Array.Empty<T>();
+        }
+        var next = new T[source.Length - 1];
+        Array.Copy(source, 0, next, 0, idx);
+        Array.Copy(source, idx + 1, next, idx, source.Length - idx - 1);
+        return next;
     }
 
     private sealed class Subscription : IDisposable

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
+using FfxivEchoes.Diagnostics;
 using FfxivEchoes.Events;
 using LuminaAction = Lumina.Excel.Sheets.Action;
 
@@ -27,6 +28,9 @@ public sealed class CastCapture : IDisposable
 
     private readonly Dictionary<ulong, CastState> _states = new();
     private readonly Dictionary<uint, string> _actionNameCache = new();
+    // 毎フレームの new HashSet/List を避ける再利用バッファ（PERF-02）。
+    private readonly HashSet<ulong> _seen = new();
+    private readonly List<ulong> _toRemove = new();
 
     public CastCapture(
         IFramework framework, IObjectTable objectTable, IDataManager dataManager,
@@ -50,13 +54,38 @@ public sealed class CastCapture : IDisposable
 
     private void OnUpdate(IFramework _)
     {
-        var seen = new HashSet<ulong>();
+        try
+        {
+            OnUpdateCore();
+        }
+        catch (Exception ex)
+        {
+            FrameErrorThrottle.Report(_log, ex, "CastCapture.OnUpdate");
+        }
+    }
+
+    private void OnUpdateCore()
+    {
+        var seen = _seen;
+        seen.Clear();
 
         foreach (var obj in _objectTable)
         {
             if (obj is not IBattleNpc battleNpc)
             {
                 continue;
+            }
+
+            // PC のペット（クイーン / カーバンクル / ソルバハムート / 妖精 / *エギ 等）の
+            // cast を録画から除外する。HpCapture と同じパターン：owner が PlayerCharacter なら skip。
+            // ボスの召喚物（owner=boss）は通常 mechanic として価値があるので維持。
+            if (battleNpc.OwnerId != 0)
+            {
+                var owner = _objectTable.SearchById(battleNpc.OwnerId);
+                if (owner is Dalamud.Game.ClientState.Objects.SubKinds.IPlayerCharacter)
+                {
+                    continue;
+                }
             }
 
             seen.Add(battleNpc.GameObjectId);
@@ -66,7 +95,7 @@ public sealed class CastCapture : IDisposable
         // ObjectTable から消えたアクターの状態を片付ける（消失中にキャスト中だった場合は Cancel 扱い）
         if (_states.Count > seen.Count)
         {
-            var toRemove = new List<ulong>();
+            _toRemove.Clear();
             foreach (var (id, state) in _states)
             {
                 if (seen.Contains(id))
@@ -79,9 +108,9 @@ public sealed class CastCapture : IDisposable
                     _bus.Publish(new CastCanceledEvent(now, state.SourceId, state.SourceName,
                         state.CastActionId, state.CastActionName));
                 }
-                toRemove.Add(id);
+                _toRemove.Add(id);
             }
-            foreach (var id in toRemove)
+            foreach (var id in _toRemove)
             {
                 _states.Remove(id);
             }
@@ -95,8 +124,12 @@ public sealed class CastCapture : IDisposable
         var actionId = actor.CastActionId;
         var totalCast = actor.TotalCastTime;
         var currentCast = actor.CurrentCastTime;
-        var sourceId = (uint)actor.GameObjectId;
-        var sourceName = actor.Name.TextValue;
+        var sourceId = actor.EntityId;
+        // Name.TextValue は native→managed デコードで string を確保するため、状態生成 /
+        // イベント発行が必要なフレームでだけ取得する（idle のまま変化しない大多数のフレームでは
+        // 読まない）。in-fight の GC churn を削減。
+        string? nameCache = null;
+        string SrcName() => nameCache ??= actor.Name.TextValue;
 
         if (!_states.TryGetValue(key, out var prev))
         {
@@ -104,15 +137,19 @@ public sealed class CastCapture : IDisposable
             if (nowCasting)
             {
                 var name = ResolveActionName(actionId);
+                var target = ResolveTargetSnapshot(actor);
                 var ev = new CastStartedEvent(
-                    DateTimeOffset.UtcNow, sourceId, sourceName, actionId, name,
-                    totalCast, ResolveTargetId(actor));
+                    DateTimeOffset.UtcNow, sourceId, SrcName(), actionId, name,
+                    totalCast, target.EntityId, target.World,
+                    SourceWorld: actor.Position, SourceRotation: actor.Rotation);
                 _bus.Publish(ev);
-                _states[key] = CastState.Casting(sourceId, sourceName, actionId, name, totalCast, currentCast);
+                _states[key] = CastState.Casting(sourceId, SrcName(), actionId, name, totalCast, currentCast);
             }
             else
             {
-                _states[key] = CastState.Idle(sourceId, sourceName);
+                // 即時アクション（cast_time=0）の publish は ActionEffectCapture が担当する。
+                // ここでは状態だけ Idle にする。
+                _states[key] = CastState.Idle(sourceId, SrcName());
             }
             return;
         }
@@ -121,10 +158,12 @@ public sealed class CastCapture : IDisposable
         if (!prev.IsCasting && nowCasting)
         {
             var name = ResolveActionName(actionId);
+            var target = ResolveTargetSnapshot(actor);
             _bus.Publish(new CastStartedEvent(
-                DateTimeOffset.UtcNow, sourceId, sourceName, actionId, name,
-                totalCast, ResolveTargetId(actor)));
-            _states[key] = CastState.Casting(sourceId, sourceName, actionId, name, totalCast, currentCast);
+                DateTimeOffset.UtcNow, sourceId, SrcName(), actionId, name,
+                totalCast, target.EntityId, target.World,
+                SourceWorld: actor.Position, SourceRotation: actor.Rotation));
+            _states[key] = CastState.Casting(sourceId, SrcName(), actionId, name, totalCast, currentCast);
             return;
         }
 
@@ -143,7 +182,7 @@ public sealed class CastCapture : IDisposable
                     DateTimeOffset.UtcNow, prev.SourceId, prev.SourceName,
                     prev.CastActionId, prev.CastActionName));
             }
-            _states[key] = CastState.Idle(sourceId, sourceName);
+            _states[key] = CastState.Idle(sourceId, SrcName());
             return;
         }
 
@@ -154,10 +193,12 @@ public sealed class CastCapture : IDisposable
                 DateTimeOffset.UtcNow, prev.SourceId, prev.SourceName,
                 prev.CastActionId, prev.CastActionName));
             var name = ResolveActionName(actionId);
+            var target = ResolveTargetSnapshot(actor);
             _bus.Publish(new CastStartedEvent(
-                DateTimeOffset.UtcNow, sourceId, sourceName, actionId, name,
-                totalCast, ResolveTargetId(actor)));
-            _states[key] = CastState.Casting(sourceId, sourceName, actionId, name, totalCast, currentCast);
+                DateTimeOffset.UtcNow, sourceId, SrcName(), actionId, name,
+                totalCast, target.EntityId, target.World,
+                SourceWorld: actor.Position, SourceRotation: actor.Rotation));
+            _states[key] = CastState.Casting(sourceId, SrcName(), actionId, name, totalCast, currentCast);
             return;
         }
 
@@ -165,13 +206,24 @@ public sealed class CastCapture : IDisposable
         if (nowCasting)
         {
             _states[key] = prev with { LastCurrentCastTime = currentCast };
+            return;
         }
+
+        // 非キャスト中の状態維持。ActionEffectCapture がインスタント発動を別経路で publish する。
     }
 
-    private static uint? ResolveTargetId(IBattleNpc actor)
+    private (uint? EntityId, System.Numerics.Vector3? World) ResolveTargetSnapshot(IBattleNpc actor)
     {
         var target = actor.CastTargetObjectId;
-        return target == 0 ? null : (uint)target;
+        if (target == 0)
+        {
+            return (null, null);
+        }
+
+        var targetObject = _objectTable.SearchById(target);
+        return targetObject is null
+            ? (null, null)
+            : (targetObject.EntityId, targetObject.Position);
     }
 
     private string ResolveActionName(uint actionId)
@@ -203,6 +255,10 @@ public sealed class CastCapture : IDisposable
         _actionNameCache[actionId] = fallback;
         return fallback;
     }
+
+    // 旧 UpdateInstantAction / InstantActionState は撤去：
+    // インスタント / オートアタックの ActionUsedEvent 発行は ActionEffectCapture 単独に統一。
+    // ポーリング起源（CastCapture）の publish と並走させると同イベントが二重に流れるため。
 
     private readonly record struct CastState(
         bool IsCasting,

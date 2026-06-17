@@ -34,11 +34,19 @@ public sealed class FindActorByDistancePreset : ISafeZonePreset
             ? new Vector3(b.Position.X, b.Position.Y, b.Position.Z)
             : ctx.SelfPosition;
 
+        // 自分自身を探索対象から除外する。reference=self + select=nearest + filter=any（既定）で
+        // 距離0の自分が常に選ばれてしまう退行を防ぐ。
+        var selfId = _objectTable.LocalPlayer?.GameObjectId;
+
         IBattleChara? best = null;
         var bestDist = select == "nearest" ? float.MaxValue : float.MinValue;
         foreach (var obj in _objectTable)
         {
             if (obj is not IBattleChara chara)
+            {
+                continue;
+            }
+            if (selfId is { } selfGid && chara.GameObjectId == selfGid)
             {
                 continue;
             }

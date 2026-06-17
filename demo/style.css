@@ -332,6 +332,59 @@ button.primary:hover {
     animation: pulse 0.6s ease-in-out infinite;
 }
 
+/* === アリーナ図（ギミック発生中のみ表示） === */
+.arena-view {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: 200px;
+    pointer-events: none;
+    display: none;
+    z-index: 5;
+}
+
+.arena-view.active {
+    display: block;
+    animation: arena-pop 0.2s ease-out;
+}
+
+.arena-svg {
+    width: 100%;
+    aspect-ratio: 1;
+    display: block;
+    filter: drop-shadow(0 0 6px rgba(0,0,0,0.5));
+}
+
+.arena-callout {
+    margin-top: 6px;
+    background: rgba(0,0,0,0.78);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 4px;
+    padding: 5px 8px;
+    text-align: center;
+    text-shadow: 0 0 4px black;
+}
+
+.arena-callout .callout-text {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--accent-2);
+    line-height: 1.2;
+}
+
+.arena-callout .callout-cast {
+    font-size: 10px;
+    color: var(--muted);
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    margin-top: 2px;
+}
+
+@keyframes arena-pop {
+    from { opacity: 0; transform: scale(0.9); }
+    to { opacity: 1; transform: scale(1); }
+}
+
 /* === ライブタイムライン === */
 .timeline-panel {
     padding-bottom: 8px;
